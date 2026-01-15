@@ -269,9 +269,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Plus } from '@element-plus/icons-vue'
 import { adminApi, type SystemConfig, type User, type InviteCode } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 // 检查管理员权限
 if (!authStore.user?.is_admin) {
@@ -349,7 +351,9 @@ async function loadConfig() {
 async function saveConfig() {
   saving.value = true
   try {
-    await adminApi.updateConfig(config)
+    const updatedConfig = await adminApi.updateConfig(config)
+    // 更新 config store 中的配置
+    configStore.config = updatedConfig
     ElMessage.success('配置保存成功')
   } catch (error) {
     // 错误已在拦截器中处理
