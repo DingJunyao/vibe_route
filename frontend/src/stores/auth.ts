@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
 import type { User, LoginRequest, RegisterRequest } from '@/api/auth'
+import { hashPassword } from '@/utils/crypto'
 
 export const useAuthStore = defineStore('auth', () => {
   // State
@@ -14,14 +15,26 @@ export const useAuthStore = defineStore('auth', () => {
 
   // Actions
   async function login(credentials: LoginRequest) {
-    const response = await authApi.login(credentials)
+    // 加密密码后再传输
+    const hashedPassword = await hashPassword(credentials.password)
+    const response = await authApi.login({
+      username: credentials.username,
+      password: hashedPassword,
+    })
     token.value = response.access_token
     user.value = response.user
     localStorage.setItem('token', response.access_token)
   }
 
   async function register(data: RegisterRequest) {
-    const response = await authApi.register(data)
+    // 加密密码后再传输
+    const hashedPassword = await hashPassword(data.password)
+    const response = await authApi.register({
+      username: data.username,
+      email: data.email,
+      password: hashedPassword,
+      invite_code: data.invite_code,
+    })
     token.value = response.access_token
     user.value = response.user
     localStorage.setItem('token', response.access_token)
