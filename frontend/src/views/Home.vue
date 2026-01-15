@@ -119,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -141,6 +141,9 @@ import LeafletMap from '@/components/map/LeafletMap.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+let isMounted = true
 
 const stats = ref({
   total_tracks: 0,
@@ -216,53 +219,78 @@ function samplePoints(points: TrackPoint[], maxPoints: number = 500): TrackPoint
   return sampled
 }
 
-// 获取所有轨迹的点数据
+// 获取所有轨迹的点数据（限制并发数量，避免阻塞其他请求）
 async function fetchAllTracksPoints() {
   if (tracks.value.length === 0) return
 
   loadingTracks.value = true
 
   try {
-    // 并发获取所有轨迹的点数据
-    const promises = tracks.value.map(async (track) => {
-      try {
-        const response = await trackApi.getPoints(track.id, 'wgs84')
-        return { trackId: track.id, points: samplePoints(response.points) }
-      } catch (error) {
-        console.error(`Failed to load points for track ${track.id}:`, error)
-        return { trackId: track.id, points: [] }
+    // 限制并发数量为 3，避免占满 HTTP 连接池
+    const concurrency = 3
+    const results: { trackId: number; points: TrackPoint[] }[] = []
+
+    // 分批处理轨迹
+    for (let i = 0; i < tracks.value.length; i += concurrency) {
+      // 检查组件是否已卸载
+      if (!isMounted) break
+
+      const batch = tracks.value.slice(i, i + concurrency)
+      const batchPromises = batch.map(async (track) => {
+        try {
+          const response = await trackApi.getPoints(track.id, 'wgs84')
+          return { trackId: track.id, points: samplePoints(response.points) }
+        } catch (error) {
+          console.error(`Failed to load points for track ${track.id}:`, error)
+          return { trackId: track.id, points: [] }
+        }
+      })
+
+      const batchResults = await Promise.all(batchPromises)
+      results.push(...batchResults)
+
+      // 每批完成后更新一次状态，让地图逐步显示
+      if (isMounted) {
+        for (const result of batchResults) {
+          tracksPoints.value.set(result.trackId, result.points)
+        }
       }
-    })
-
-    const results = await Promise.all(promises)
-
-    // 存储结果
-    for (const result of results) {
-      tracksPoints.value.set(result.trackId, result.points)
     }
   } finally {
-    loadingTracks.value = false
+    // 只有在组件仍然挂载时才更新 loading 状态
+    if (isMounted) {
+      loadingTracks.value = false
+    }
   }
 }
 
-onMounted(async () => {
-  // 获取统计数据
-  try {
-    stats.value = await trackApi.getStats()
-  } catch (error) {
-    // 错误已在拦截器中处理
-  }
+onMounted(() => {
+  // 异步获取统计数据，不阻塞页面渲染
+  trackApi.getStats()
+    .then((data: typeof stats.value) => {
+      if (isMounted) stats.value = data
+    })
+    .catch(() => {
+      // 错误已在拦截器中处理
+    })
 
-  // 获取轨迹列表
-  try {
-    const response = await trackApi.getList({ page: 1, page_size: 100 })
-    tracks.value = response.items
+  // 异步获取轨迹列表，不阻塞页面渲染
+  trackApi.getList({ page: 1, page_size: 100 })
+    .then((response: { items: typeof tracks.value }) => {
+      if (isMounted) {
+        tracks.value = response.items
+        // 异步获取轨迹点数据
+        fetchAllTracksPoints()
+      }
+    })
+    .catch(() => {
+      // 错误已在拦截器中处理
+    })
+})
 
-    // 获取轨迹点数据
-    await fetchAllTracksPoints()
-  } catch (error) {
-    // 错误已在拦截器中处理
-  }
+// 组件卸载时设置标志，避免更新已卸载组件的状态
+onUnmounted(() => {
+  isMounted = false
 })
 </script>
 

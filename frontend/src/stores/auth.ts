@@ -42,6 +42,11 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.removeItem('token')
   }
 
+  // 初始化时如果有 token，自动获取用户信息
+  if (token.value && !user.value) {
+    fetchCurrentUser()
+  }
+
   return {
     token,
     user,
@@ -52,4 +57,5 @@ export const useAuthStore = defineStore('auth', () => {
     fetchCurrentUser,
     logout,
   }
-})
+}
+)
