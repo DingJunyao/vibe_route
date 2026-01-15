@@ -1,0 +1,59 @@
+# FastAPI 和服务器
+fastapi
+uvicorn[standard]
+python-multipart
+
+# 数据库
+sqlalchemy
+alembic
+
+# 数据库驱动 (支持多数据库)
+aiosqlite
+asyncmy
+asyncpg
+
+# 认证
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+
+# 任务队列
+celery
+redis
+
+# 验证
+pydantic
+pydantic-settings
+email-validator
+
+# HTTP 客户端
+httpx
+aiofiles
+
+# gpxutil 核心依赖
+gpxpy
+lxml
+pandas
+geopandas
+shapely
+
+# SVG 生成
+svgwrite
+svgpathtools @ https://github.com/bcwhite-code/svgpathtools/archive/refs/heads/master.zip
+fonttools
+
+# 图像处理
+pillow
+cairosvg
+imageio
+numpy
+
+# 其他工具
+tqdm
+pyyaml
+loguru
+
+# 测试
+pytest
+pytest-asyncio
+httpx

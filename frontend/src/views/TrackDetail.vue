@@ -1,0 +1,977 @@
+<template>
+  <div class="track-detail-container">
+    <el-header>
+      <div class="header-content">
+        <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
+        <h1>{{ track?.name || '轨迹详情' }}</h1>
+        <div class="header-actions">
+          <el-button link type="primary" @click="showEditDialog">
+            <el-icon><Edit /></el-icon>
+            编辑
+          </el-button>
+          <el-button link type="primary" @click="downloadDialogVisible = true">
+            <el-icon><Download /></el-icon>
+            下载 GPX
+          </el-button>
+        </div>
+      </div>
+    </el-header>
+
+    <el-main class="main" v-loading="loading">
+      <!-- 调试信息 -->
+      <el-alert v-if="!track" type="error" :closable="false" style="margin-bottom: 20px">
+        轨迹数据加载失败，请返回列表重试
+      </el-alert>
+
+      <template v-if="track">
+        <el-row :gutter="20">
+          <!-- 左侧：地图和统计 -->
+          <el-col :span="16">
+            <!-- 地图 -->
+            <el-card class="map-card" shadow="never">
+              <template v-if="trackWithPoints">
+                <!-- <div style="background: #e5e5e5; padding: 10px; font-size: 12px; color: #666;">
+                  调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
+                </div> -->
+                <div style="height: 500px; position: relative;">
+                  <LeafletMap
+                    :tracks="[trackWithPoints]"
+                    :highlight-track-id="track.id"
+                  />
+                </div>
+              </template>
+              <template v-else>
+                <div class="map-placeholder">
+                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0" class="debug-info">
+                    轨迹点数量: {{ points.length }}，
+                    有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
+                  </p>
+                  <el-button size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
+                </div>
+              </template>
+            </el-card>
+
+            <!-- 海拔和速度图表 -->
+            <el-card class="chart-card" shadow="never">
+              <template #header>
+                <span>海拔与速度变化</span>
+              </template>
+              <div ref="chartRef" class="chart"></div>
+            </el-card>
+          </el-col>
+
+          <!-- 右侧：轨迹点和信息 -->
+          <el-col :span="8">
+            <!-- 统计信息 -->
+            <el-card class="stats-card" shadow="never">
+              <template #header>
+                <span>轨迹统计</span>
+              </template>
+              <el-row :gutter="20">
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatDistance(track.distance) }}</div>
+                      <div class="stat-label">总里程</div>
+                    </div>
+                  </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatDuration(track.duration) }}</div>
+                      <div class="stat-label">总时长</div>
+                    </div>
+                  </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
+                      <div class="stat-label">总爬升</div>
+                    </div>
+                  </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
+                      <div class="stat-label">总下降</div>
+                    </div>
+                  </div>
+                </el-col>
+              </el-row>
+            </el-card>
+
+            <!-- 轨迹信息 -->
+            <el-card class="info-card" shadow="never">
+              <template #header>
+                <div class="card-header">
+                  <span>轨迹信息</span>
+                  <el-button
+                    v-if="!track.has_area_info || !track.has_road_info"
+                    type="primary"
+                    size="small"
+                    :loading="fillingGeocoding"
+                    :disabled="fillProgress.status === 'filling'"
+                    @click="handleFillGeocoding"
+                  >
+                    {{ fillProgress.status === 'filling' ? '填充中...' : '填充地理信息' }}
+                  </el-button>
+                </div>
+              </template>
+              <el-descriptions :column="1" border>
+                <el-descriptions-item label="文件名">
+                  {{ track.original_filename }}
+                </el-descriptions-item>
+                <el-descriptions-item label="坐标系">
+                  <el-tag size="small">{{ track.original_crs.toUpperCase() }}</el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="开始时间">
+                  {{ formatDateTime(track.start_time) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="结束时间">
+                  {{ formatDateTime(track.end_time) }}
+                </el-descriptions-item>
+                <el-descriptions-item label="备注">
+                  <span class="description-text">{{ track.description || '无' }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="填充进度">
+                  <div class="fill-progress-content">
+                    <div class="fill-status-tags">
+                      <el-tag v-if="track.has_area_info" type="success" size="small">区划</el-tag>
+                      <el-tag v-else type="info" size="small">区划未填充</el-tag>
+                      <el-tag v-if="track.has_road_info" type="success" size="small">道路</el-tag>
+                      <el-tag v-else type="info" size="small">道路未填充</el-tag>
+                    </div>
+                    <div v-if="fillProgress.status === 'filling'" class="fill-progress-bar">
+                      <el-progress
+                        :percentage="getFillProgressPercentage()"
+                        :show-text="true"
+                        :stroke-width="8"
+                      />
+                      <div class="fill-progress-text">
+                        {{ fillProgress.current }} / {{ fillProgress.total }}
+                      </div>
+                    </div>
+                    <div v-else-if="fillProgress.status === 'completed'" class="fill-status-text">
+                      <el-icon color="#67c23a"><SuccessFilled /></el-icon>
+                      填充完成
+                    </div>
+                    <div v-else-if="fillProgress.status === 'error'" class="fill-status-text">
+                      <el-icon color="#f56c6c"><CircleCloseFilled /></el-icon>
+                      填充失败
+                    </div>
+                  </div>
+                </el-descriptions-item>
+              </el-descriptions>
+            </el-card>
+
+            <!-- 经过的区域 -->
+            <el-card class="areas-card" shadow="never">
+              <template #header>
+                <span>经过区域</span>
+              </template>
+              <div v-if="areas.length > 0" class="areas-list">
+                <el-tag
+                  v-for="(area, index) in areas"
+                  :key="index"
+                  class="area-tag"
+                  size="small"
+                >
+                  {{ area }}
+                </el-tag>
+              </div>
+              <el-empty v-else description="暂无区域信息" :image-size="60" />
+            </el-card>
+
+            <!-- 轨迹点列表
+            <el-card class="points-card" shadow="never">
+              <template #header>
+                <span>轨迹点 ({{ points.length }})</span>
+              </template>
+              <el-scrollbar max-height="400">
+                <div class="points-list">
+                  <div
+                    v-for="(point, index) in points"
+                    :key="point.id"
+                    class="point-item"
+                    @click="highlightPoint(index)"
+                    :class="{ highlighted: highlightedPointIndex === index }"
+                  >
+                    <div class="point-header">
+                      <span class="point-index">#{{ point.point_index }}</span>
+                      <span class="point-time">{{ formatTime(point.time) }}</span>
+                    </div>
+                    <div class="point-coords">
+                      {{ point.latitude?.toFixed(6) }}, {{ point.longitude?.toFixed(6) }}
+                    </div>
+                    <div class="point-elevation" v-if="point.elevation">
+                      海拔: {{ point.elevation.toFixed(1) }}m
+                    </div>
+                    <div class="point-location" v-if="point.city || point.road_name">
+                      <el-tag v-if="point.city" size="mini">{{ point.city }}</el-tag>
+                      <el-tag v-if="point.road_name" size="mini" type="success">{{ point.road_name }}</el-tag>
+                    </div>
+                  </div>
+                </div>
+              </el-scrollbar>
+            </el-card> -->
+          </el-col>
+        </el-row>
+      </template>
+    </el-main>
+
+    <!-- 编辑对话框 -->
+    <el-dialog v-model="editDialogVisible" title="编辑轨迹" width="500px">
+      <el-form :model="editForm" label-width="80px">
+        <el-form-item label="名称">
+          <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
+        </el-form-item>
+        <el-form-item label="备注">
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            :rows="4"
+            placeholder="请输入备注信息"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 下载对话框 -->
+    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" width="400px">
+      <el-form label-width="100px">
+        <el-form-item label="坐标系">
+          <el-radio-group v-model="downloadCRS">
+            <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
+            <el-radio value="wgs84">WGS84</el-radio>
+            <el-radio value="gcj02">GCJ02 (火星)</el-radio>
+            <el-radio value="bd09">BD09 (百度)</el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="downloadDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="downloadTrack">下载</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import {
+  ArrowLeft,
+  Download,
+  Edit,
+  Odometer,
+  Clock,
+  Top,
+  Bottom,
+  SuccessFilled,
+  CircleCloseFilled,
+} from '@element-plus/icons-vue'
+import * as echarts from 'echarts'
+import { trackApi, type Track, type TrackPoint, type FillProgressResponse } from '@/api/track'
+import LeafletMap from '@/components/map/LeafletMap.vue'
+
+const route = useRoute()
+
+const loading = ref(true)
+const track = ref<Track | null>(null)
+const points = ref<TrackPoint[]>([])
+const trackId = ref<number>(parseInt(route.params.id as string))
+const highlightedPointIndex = ref<number>(-1)
+
+const chartRef = ref<HTMLElement>()
+const downloadDialogVisible = ref(false)
+const downloadCRS = ref('original')
+
+// 编辑相关
+const editDialogVisible = ref(false)
+const saving = ref(false)
+const editForm = ref({
+  name: '',
+  description: ''
+})
+
+// 填充地理信息相关
+const fillingGeocoding = ref(false)
+const fillProgress = ref<{
+  current: number
+  total: number
+  status: 'idle' | 'filling' | 'completed' | 'error'
+}>({ current: 0, total: 0, status: 'idle' })
+let fillProgressTimer: number | null = null
+
+// 组合轨迹数据用于地图展示
+const trackWithPoints = computed(() => {
+  if (!track.value || !points.value.length) return null
+
+  // 过滤出有有效坐标的点
+  const validPoints = points.value.filter(p =>
+    p.latitude_wgs84 != null &&
+    p.longitude_wgs84 != null &&
+    !isNaN(p.latitude_wgs84) &&
+    !isNaN(p.longitude_wgs84)
+  )
+
+  if (validPoints.length === 0) return null
+
+  return {
+    id: track.value.id,
+    points: validPoints.map(p => ({
+      latitude: p.latitude_wgs84,
+      longitude: p.longitude_wgs84,
+      latitude_wgs84: p.latitude_wgs84,
+      longitude_wgs84: p.longitude_wgs84,
+      latitude_gcj02: p.latitude_gcj02,
+      longitude_gcj02: p.longitude_gcj02,
+      latitude_bd09: p.latitude_bd09,
+      longitude_bd09: p.longitude_bd09,
+      elevation: p.elevation,
+      time: p.time,
+    })),
+  }
+})
+
+// 提取经过的区域
+const areas = computed(() => {
+  const uniqueAreas = new Set<string>()
+  for (const point of points.value) {
+    if (point.province) {
+      uniqueAreas.add(point.province)
+    }
+    if (point.city && point.city !== point.province) {
+      uniqueAreas.add(point.city)
+    }
+  }
+  return Array.from(uniqueAreas)
+})
+
+// 获取轨迹详情
+async function fetchTrackDetail() {
+  try {
+    track.value = await trackApi.getDetail(trackId.value)
+  } catch (error) {
+    // 错误已在拦截器中处理
+  }
+}
+
+// 获取轨迹点
+async function fetchTrackPoints() {
+  try {
+    const response = await trackApi.getPoints(trackId.value)
+    points.value = response.points
+  } catch (error) {
+    // 错误已在拦截器中处理
+  }
+}
+
+// 渲染海拔和速度合并图表
+function renderChart() {
+  if (!chartRef.value || !points.value.length) return
+
+  const chart = echarts.init(chartRef.value)
+
+  // 准备海拔数据
+  const elevationData = points.value
+    .filter(p => p.elevation !== null)
+    .map((p, index) => [index, p.elevation])
+
+  // 准备速度数据（转换为 km/h）
+  const speedData = points.value
+    .filter(p => p.speed !== null && p.speed !== undefined)
+    .map((p, index) => [index, (p.speed ?? 0) * 3.6])
+
+  // X 轴数据（使用时间标签）
+  const xAxisData = points.value.map((p, index) => {
+    if (p.time) {
+      const date = new Date(p.time)
+      return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+    }
+    return index.toString()
+  })
+
+  const option = {
+    grid: {
+      left: '70px',
+      right: '70px',
+      top: '50px',
+      bottom: '50px',
+    },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        let result = `时间: ${formatTime(points.value[params[0].dataIndex].time)}<br/>`
+        for (const param of params) {
+          if (param.seriesName === '海拔') {
+            result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} m<br/>`
+          } else if (param.seriesName === '速度') {
+            result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} km/h<br/>`
+          }
+        }
+        return result
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: xAxisData,
+      axisLabel: {
+        interval: Math.max(1, Math.floor(xAxisData.length / 10)),
+      },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: '海拔 (m)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+          padding: [0, 0, 0, 0],
+        },
+        axisLine: {
+          lineStyle: {
+            color: '#409eff',
+          },
+        },
+        splitLine: {
+          show: true,
+          lineStyle: {
+            color: '#e5e5e5',
+          },
+        },
+      },
+      {
+        type: 'value',
+        name: '速度 (km/h)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+          padding: [0, 0, 0, 0],
+        },
+        axisLine: {
+          lineStyle: {
+            color: '#67c23a',
+          },
+        },
+        splitLine: {
+          show: false,
+        },
+      },
+    ],
+    series: [
+      {
+        name: '海拔',
+        type: 'line',
+        yAxisIndex: 0,
+        data: elevationData.map(d => d[1]),
+        smooth: true,
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(64, 158, 255, 0.3)' },
+              { offset: 1, color: 'rgba(64, 158, 255, 0.05)' },
+            ],
+          },
+        },
+        lineStyle: {
+          color: '#409eff',
+          width: 2,
+        },
+      },
+      {
+        name: '速度',
+        type: 'line',
+        yAxisIndex: 1,
+        data: speedData.map(d => d[1]),
+        smooth: true,
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(103, 194, 58, 0.3)' },
+              { offset: 1, color: 'rgba(103, 194, 58, 0.05)' },
+            ],
+          },
+        },
+        lineStyle: {
+          color: '#67c23a',
+          width: 2,
+        },
+      },
+    ],
+    legend: {
+      data: ['海拔', '速度'],
+      top: 10,
+      right: 20,
+    },
+  }
+
+  chart.setOption(option)
+
+  // 响应式调整
+  const resizeObserver = new ResizeObserver(() => {
+    chart.resize()
+  })
+  resizeObserver.observe(chartRef.value)
+}
+
+// 填充地理信息
+async function handleFillGeocoding() {
+  try {
+    await trackApi.fillGeocoding(trackId.value)
+    ElMessage.success('开始填充地理信息')
+    fillingGeocoding.value = true
+    startPollingProgress()
+  } catch (error) {
+    // 错误已在拦截器中处理
+  }
+}
+
+// 开始轮询进度
+function startPollingProgress() {
+  if (fillProgressTimer) return
+
+  fillProgressTimer = window.setInterval(async () => {
+    try {
+      const response = await trackApi.getFillProgress(trackId.value)
+      fillProgress.value = response.progress
+
+      if (response.progress.status === 'completed') {
+        stopPollingProgress()
+        fillingGeocoding.value = false
+        ElMessage.success('地理信息填充完成')
+        // 重新加载轨迹数据
+        await fetchTrackDetail()
+        await fetchTrackPoints()
+        // 重新渲染区域列表
+        // areas 会自动更新
+      } else if (response.progress.status === 'error') {
+        stopPollingProgress()
+        fillingGeocoding.value = false
+        ElMessage.error('填充地理信息失败')
+      }
+    } catch (error) {
+      console.error('Failed to fetch fill progress:', error)
+    }
+  }, 2000)
+}
+
+// 停止轮询进度
+function stopPollingProgress() {
+  if (fillProgressTimer) {
+    clearInterval(fillProgressTimer)
+    fillProgressTimer = null
+  }
+}
+
+// 获取填充进度百分比
+function getFillProgressPercentage(): number {
+  if (fillProgress.value.total > 0) {
+    return Math.round((fillProgress.value.current / fillProgress.value.total) * 100)
+  }
+  return 0
+}
+
+// 检查并恢复填充进度轮询
+async function checkAndResumeFilling() {
+  try {
+    const response = await trackApi.getFillProgress(trackId.value)
+    fillProgress.value = response.progress
+
+    // 如果正在填充，启动轮询
+    if (response.progress.status === 'filling') {
+      fillingGeocoding.value = true
+      startPollingProgress()
+    }
+  } catch (error) {
+    // 忽略错误，可能是填充功能还未调用过
+  }
+}
+
+// 高亮点
+function highlightPoint(index: number) {
+  highlightedPointIndex.value = index
+  // TODO: 在地图上高亮该点
+}
+
+// 显示下载对话框
+function showDownloadDialog() {
+  downloadDialogVisible.value = true
+}
+
+// 显示编辑对话框
+function showEditDialog() {
+  if (track.value) {
+    editForm.value.name = track.value.name
+    editForm.value.description = track.value.description || ''
+  }
+  editDialogVisible.value = true
+}
+
+// 保存编辑
+async function saveEdit() {
+  if (!track.value) return
+
+  if (!editForm.value.name.trim()) {
+    ElMessage.warning('轨迹名称不能为空')
+    return
+  }
+
+  saving.value = true
+  try {
+    const updated = await trackApi.update(track.value.id, {
+      name: editForm.value.name.trim(),
+      description: editForm.value.description.trim() || undefined
+    })
+    track.value = updated
+    editDialogVisible.value = false
+    ElMessage.success('保存成功')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    saving.value = false
+  }
+}
+
+// 下载轨迹
+async function downloadTrack() {
+  try {
+    const url = trackApi.download(trackId.value, downloadCRS.value)
+    // 使用 fetch 下载，自动携带认证信息
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error('下载失败')
+    }
+
+    // 获取文件名
+    const contentDisposition = response.headers.get('Content-Disposition')
+    let filename = `track_${trackId.value}.gpx`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/)
+      if (match) filename = match[1]
+    }
+
+    // 创建 blob 并下载
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(blobUrl)
+
+    downloadDialogVisible.value = false
+    ElMessage.success('下载成功')
+  } catch (error) {
+    console.error('Download error:', error)
+    ElMessage.error('下载失败')
+  }
+}
+
+// 格式化函数
+function formatDistance(meters: number): string {
+  if (meters < 1000) return `${meters.toFixed(1)} m`
+  return `${(meters / 1000).toFixed(2)} km`
+}
+
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function formatElevation(meters: number): string {
+  return `${meters.toFixed(0)} m`
+}
+
+function formatDateTime(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+function formatTime(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+onMounted(async () => {
+  try {
+    await fetchTrackDetail()
+    await fetchTrackPoints()
+
+    // 调试信息
+    console.log('Track loaded:', track.value)
+    console.log('Points loaded:', points.value.length)
+    console.log('First point:', points.value[0])
+    console.log('trackWithPoints:', trackWithPoints.value)
+  } catch (error) {
+    console.error('Failed to load track data:', error)
+  } finally {
+    loading.value = false
+  }
+
+  // 检查是否有正在进行的填充操作
+  await checkAndResumeFilling()
+
+  // 等待 DOM 更新后渲染图表
+  nextTick(() => {
+    renderChart()
+  })
+})
+
+onUnmounted(() => {
+  stopPollingProgress()
+})
+</script>
+
+<style scoped>
+.track-detail-container {
+  height: 100%;
+  background: #f5f7fa;
+}
+
+.el-header {
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 20px;
+}
+
+.header-content h1 {
+  font-size: 20px;
+  margin: 0;
+  flex: 1;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.main {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 20px;
+  width: 100%;
+}
+
+.map-card {
+  margin-bottom: 20px;
+}
+
+.map-card :deep(.el-card__body) {
+  padding: 0;
+  height: 500px;
+}
+
+.map-placeholder {
+  height: 500px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #909399;
+  text-align: center;
+}
+
+.map-placeholder p {
+  margin: 8px 0;
+}
+
+.debug-info {
+  font-size: 12px;
+  color: #f56c6c;
+}
+
+.stats-card,
+.info-card,
+.areas-card,
+.points-card {
+  margin-bottom: 20px;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stat-icon {
+  font-size: 24px;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: bold;
+  color: #333;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #999;
+}
+
+.chart {
+  height: 220px;
+}
+
+.areas-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.area-tag {
+  margin: 0;
+}
+
+.points-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.point-item {
+  padding: 10px;
+  border: 1px solid #eee;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.point-item:hover {
+  background: #f5f7fa;
+}
+
+.point-item.highlighted {
+  background: #e6f7ff;
+  border-color: #409eff;
+}
+
+.point-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.point-index {
+  font-weight: bold;
+  color: #409eff;
+}
+
+.point-time {
+  font-size: 12px;
+  color: #999;
+}
+
+.point-coords {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 2px;
+}
+
+.point-elevation {
+  font-size: 12px;
+  color: #666;
+}
+
+.point-location {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.fill-progress-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.fill-status-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.fill-progress-bar {
+  margin-top: 4px;
+}
+
+.fill-progress-text {
+  font-size: 12px;
+  color: #909399;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.fill-status-text {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.description-text {
+  color: #606266;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+</style>

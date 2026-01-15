@@ -1,0 +1,86 @@
+"""
+轨迹相关模型
+"""
+from datetime import datetime
+from sqlalchemy import (
+    Boolean, Column, Integer, String, Float, Text, DateTime, ForeignKey, BigInteger,
+    Sequence,
+)
+from sqlalchemy.orm import relationship
+
+from app.core.database import Base
+from app.models.base import AuditMixin
+
+
+class Track(Base, AuditMixin):
+    """轨迹表"""
+
+    __tablename__ = "tracks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    original_filename = Column(String(255), nullable=False)
+    original_crs = Column(String(10), nullable=False)  # wgs84, gcj02, bd09
+
+    # 统计信息
+    distance = Column(Float, default=0)  # 长度（米）
+    duration = Column(Integer, default=0)  # 时长（秒）
+    elevation_gain = Column(Float, default=0)  # 爬升（米）
+    elevation_loss = Column(Float, default=0)  # 下降（米）
+
+    # 时间范围
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+
+    # 处理状态
+    has_area_info = Column(Boolean, default=False)
+    has_road_info = Column(Boolean, default=False)
+
+    # 关系
+    user = relationship("User", back_populates="tracks")
+    points = relationship("TrackPoint", back_populates="track", cascade="all, delete-orphan")
+
+    def __repr__(self):
+        return f"<Track(id={self.id}, name='{self.name}', user_id={self.user_id})>"
+
+
+class TrackPoint(Base, AuditMixin):
+    """轨迹点表"""
+
+    __tablename__ = "track_points"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    track_id = Column(Integer, ForeignKey("tracks.id"), nullable=False, index=True)
+    point_index = Column(Integer, nullable=False)  # 点序号
+
+    # 时间
+    time = Column(DateTime, nullable=True)
+
+    # 三种坐标系
+    latitude_wgs84 = Column(Float, nullable=False)
+    longitude_wgs84 = Column(Float, nullable=False)
+    latitude_gcj02 = Column(Float, nullable=True)
+    longitude_gcj02 = Column(Float, nullable=True)
+    latitude_bd09 = Column(Float, nullable=True)
+    longitude_bd09 = Column(Float, nullable=True)
+
+    # 数据
+    elevation = Column(Float, nullable=True)  # 海拔（米）
+    speed = Column(Float, nullable=True)  # 速度（m/s）
+
+    # 行政区划信息
+    province = Column(String(50), nullable=True)
+    city = Column(String(50), nullable=True)
+    district = Column(String(50), nullable=True)
+
+    # 道路信息
+    road_name = Column(String(200), nullable=True)
+    road_number = Column(String(50), nullable=True)
+
+    # 关系
+    track = relationship("Track", back_populates="points")
+
+    def __repr__(self):
+        return f"<TrackPoint(id={self.id}, track_id={self.track_id}, index={self.point_index})>"
