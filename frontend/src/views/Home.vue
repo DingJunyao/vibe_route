@@ -278,7 +278,12 @@ onMounted(() => {
   trackApi.getList({ page: 1, page_size: 100 })
     .then((response: { items: typeof tracks.value }) => {
       if (isMounted) {
-        tracks.value = response.items
+        // 按开始时间排序（从旧到新）
+        tracks.value = response.items.sort((a, b) => {
+          const timeA = a.start_time ? new Date(a.start_time).getTime() : 0
+          const timeB = b.start_time ? new Date(b.start_time).getTime() : 0
+          return timeA - timeB
+        })
         // 异步获取轨迹点数据
         fetchAllTracksPoints()
       }
