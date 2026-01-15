@@ -14,7 +14,7 @@
       <!-- 搜索和筛选 -->
       <el-card class="filter-card" shadow="never">
         <el-row :gutter="20">
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12">
             <el-input
               v-model="searchQuery"
               placeholder="搜索轨迹名称..."
@@ -23,7 +23,7 @@
               @input="handleSearch"
             />
           </el-col>
-          <el-col :span="12" style="text-align: right">
+          <el-col :xs="24" :sm="12" class="sort-col">
             <el-radio-group v-model="sortBy" @change="loadTracks">
               <el-radio-button value="created_at">最新</el-radio-button>
               <el-radio-button value="distance">距离</el-radio-button>
@@ -33,10 +33,11 @@
         </el-row>
       </el-card>
 
-      <!-- 轨迹列表 -->
+      <!-- PC端表格列表 -->
       <el-card v-loading="loading" class="list-card" shadow="never">
         <template v-if="tracks.length > 0">
-          <el-table :data="tracks" style="width: 100%" @row-click="viewTrack">
+          <!-- PC端表格 -->
+          <el-table :data="tracks" style="width: 100%" @row-click="viewTrack" class="pc-table">
             <el-table-column prop="name" label="轨迹名称" min-width="200">
               <template #default="{ row }">
                 <el-link :underline="false" @click.stop="viewTrack(row)">
@@ -88,6 +89,41 @@
               </template>
             </el-table-column>
           </el-table>
+
+          <!-- 移动端卡片列表 -->
+          <div class="mobile-card-list">
+            <div v-for="row in tracks" :key="row.id" class="track-card" @click="viewTrack(row)">
+              <div class="card-header">
+                <div class="track-name">{{ row.name }}</div>
+              </div>
+              <div class="card-body">
+                <div class="card-item">
+                  <span class="label">时间</span>
+                  <span class="value">{{ formatDateTime(row.start_time) }}</span>
+                </div>
+                <div class="card-item">
+                  <span class="label">里程</span>
+                  <span class="value">{{ formatDistance(row.distance) }}</span>
+                </div>
+                <div class="card-item">
+                  <span class="label">时长</span>
+                  <span class="value">{{ formatDuration(row.duration) }}</span>
+                </div>
+                <div v-if="row.elevation_gain > 0" class="card-item">
+                  <span class="label">爬升</span>
+                  <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
+                </div>
+              </div>
+              <div class="card-actions" @click.stop>
+                <el-button type="primary" size="small" @click="viewTrack(row)">
+                  查看
+                </el-button>
+                <el-button type="danger" size="small" @click="deleteTrack(row)">
+                  删除
+                </el-button>
+              </div>
+            </div>
+          </div>
 
           <!-- 分页 -->
           <div class="pagination">
@@ -257,6 +293,10 @@ onMounted(async () => {
   margin-bottom: 20px;
 }
 
+.sort-col {
+  text-align: right;
+}
+
 .list-card {
   min-height: 400px;
 }
@@ -297,5 +337,103 @@ onMounted(async () => {
   margin-top: 20px;
   display: flex;
   justify-content: center;
+}
+
+/* 移动端卡片列表 - 默认隐藏 */
+.mobile-card-list {
+  display: none;
+}
+
+.track-card {
+  background: white;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: box-shadow 0.3s;
+}
+
+.track-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+  margin-bottom: 12px;
+}
+
+.track-name {
+  font-size: 16px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.card-body {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+
+.card-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-item .label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.card-item .value {
+  font-size: 14px;
+  color: #606266;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #ebeef5;
+}
+
+.card-actions .el-button {
+  flex: 1;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .main {
+    padding: 10px;
+  }
+
+  .header-content h1 {
+    font-size: 16px;
+  }
+
+  .header-content .el-button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  .sort-col {
+    text-align: left;
+    margin-top: 10px;
+  }
+
+  /* 隐藏PC端表格 */
+  .pc-table {
+    display: none;
+  }
+
+  /* 显示移动端卡片 */
+  .mobile-card-list {
+    display: block;
+  }
+
+  .track-stats {
+    flex-wrap: wrap;
+  }
 }
 </style>

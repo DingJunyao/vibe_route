@@ -26,7 +26,7 @@
       <template v-if="track">
         <el-row :gutter="20">
           <!-- 左侧：地图和统计 -->
-          <el-col :span="16">
+          <el-col :xs="24" :md="16">
             <!-- 地图 -->
             <el-card class="map-card" shadow="never">
               <template v-if="trackWithPoints">
@@ -62,7 +62,7 @@
           </el-col>
 
           <!-- 右侧：轨迹点和信息 -->
-          <el-col :span="8">
+          <el-col :xs="24" :md="8">
             <!-- 统计信息 -->
             <el-card class="stats-card" shadow="never">
               <template #header>
@@ -973,5 +973,45 @@ onUnmounted(() => {
   color: #606266;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .header-content h1 {
+    font-size: 16px;
+  }
+
+  .header-actions .el-button {
+    font-size: 12px;
+  }
+
+  .header-actions .el-button span {
+    display: none;
+  }
+
+  .main {
+    padding: 10px;
+  }
+
+  .map-card :deep(.el-card__body),
+  .map-placeholder {
+    height: 300px;
+  }
+
+  .chart {
+    height: 200px;
+  }
+
+  .stat-icon {
+    font-size: 20px;
+  }
+
+  .stat-value {
+    font-size: 16px;
+  }
+
+  .stat-label {
+    font-size: 11px;
+  }
 }
 </style>

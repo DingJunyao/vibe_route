@@ -32,7 +32,7 @@
     <el-main class="main">
       <!-- 统计卡片 -->
       <el-row :gutter="20" class="stats-row">
-        <el-col :span="6">
+        <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
             <div class="stat-card">
               <div class="stat-icon" style="background: #409eff">
@@ -45,7 +45,7 @@
             </div>
           </el-card>
         </el-col>
-        <el-col :span="6">
+        <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
             <div class="stat-card">
               <div class="stat-icon" style="background: #67c23a">
@@ -58,7 +58,7 @@
             </div>
           </el-card>
         </el-col>
-        <el-col :span="6">
+        <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
             <div class="stat-card">
               <div class="stat-icon" style="background: #e6a23c">
@@ -71,7 +71,7 @@
             </div>
           </el-card>
         </el-col>
-        <el-col :span="6">
+        <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
             <div class="stat-card">
               <div class="stat-icon" style="background: #f56c6c">
@@ -394,5 +394,55 @@ onMounted(async () => {
 
 .map-loading .el-icon {
   font-size: 32px;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .main {
+    padding: 10px;
+  }
+
+  .header-left .logo {
+    font-size: 18px;
+  }
+
+  .stats-row :deep(.el-col) {
+    margin-bottom: 10px;
+  }
+
+  .stat-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .stat-icon :deep(.el-icon) {
+    font-size: 20px;
+  }
+
+  .stat-value {
+    font-size: 18px;
+  }
+
+  .stat-label {
+    font-size: 12px;
+  }
+
+  .map-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .map-actions {
+    width: 100%;
+  }
+
+  .map-actions .el-button {
+    flex: 1;
+  }
+
+  .map-card {
+    height: calc(100% - 180px);
+  }
 }
 </style>
