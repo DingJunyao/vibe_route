@@ -20,9 +20,9 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { useConfigStore, type MapProvider } from '@/stores/config'
 
 // 类型定义
-type MapProvider = 'osm' | 'amap' | 'baidu'
 type CRS = 'wgs84' | 'gcj02' | 'bd09'
 
 interface Point {
@@ -51,16 +51,20 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
+  defaultProvider?: MapProvider
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
+  defaultProvider: undefined,
 })
 
 const emit = defineEmits<{
   (e: 'point-click', point: Point, trackId: number): void
 }>()
+
+const configStore = useConfigStore()
 
 // 地图实例
 const mapContainer = ref<HTMLElement>()
@@ -68,8 +72,10 @@ const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
 
-// 当前底图提供商
-const currentProvider = ref<MapProvider>('osm')
+// 当前底图提供商 - 从配置或 prop 获取
+const currentProvider = ref<MapProvider>(
+  props.defaultProvider || configStore.getMapProvider()
+)
 
 // 底图配置
 const mapProviders = [
@@ -112,8 +118,8 @@ function initMap() {
 
   console.log('[LeafletMap] map created:', map.value)
 
-  // 添加默认底图
-  addTileLayer('osm')
+  // 添加默认底图（使用当前提供商）
+  addTileLayer(currentProvider.value)
 }
 
 // 添加底图
@@ -260,8 +266,18 @@ watch(() => props.highlightTrackId, () => {
 })
 
 // 生命周期
-onMounted(() => {
+onMounted(async () => {
   console.log('[LeafletMap] onMounted, props.tracks:', props.tracks)
+
+  // 等待配置加载完成（如果还没有加载）
+  if (!configStore.config) {
+    await configStore.fetchConfig()
+  }
+
+  // 更新当前提供商（从配置或 prop 获取）
+  currentProvider.value = props.defaultProvider || configStore.getMapProvider()
+  console.log('[LeafletMap] Using provider:', currentProvider.value)
+
   initMap()
   drawTracks()
 })
