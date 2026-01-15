@@ -90,7 +90,11 @@
       <el-card class="map-card" shadow="never">
         <template #header>
           <div class="map-header">
-            <span>所有轨迹</span>
+            <span v-if="!loadingTracks">所有轨迹</span>
+            <span v-else class="loading-title">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
+            </span>
             <div class="map-actions">
               <el-button size="small" @click="$router.push('/upload')">
                 <el-icon><Upload /></el-icon>
@@ -105,11 +109,7 @@
         </template>
         <div class="map-container">
           <LeafletMap :tracks="tracksWithPoints" />
-          <div v-if="loadingTracks" class="map-loading">
-            <el-icon class="is-loading"><Loading /></el-icon>
-            <span>加载轨迹中...</span>
-          </div>
-          <div v-else-if="tracksWithPoints.length === 0" class="map-empty">
+          <div v-if="tracksWithPoints.length === 0 && !loadingTracks" class="map-empty">
             <el-empty description="暂无轨迹数据" :image-size="80" />
           </div>
         </div>
@@ -155,6 +155,7 @@ const stats = ref({
 const tracks = ref<Track[]>([])
 const tracksPoints = ref<Map<number, TrackPoint[]>>(new Map())
 const loadingTracks = ref(false)
+const loadedTrackCount = ref(0)
 
 // 组合轨迹和点数据供地图组件使用
 const tracksWithPoints = computed(() => {
@@ -224,38 +225,57 @@ async function fetchAllTracksPoints() {
   if (tracks.value.length === 0) return
 
   loadingTracks.value = true
+  loadedTrackCount.value = 0
 
   try {
     // 限制并发数量为 3，避免占满 HTTP 连接池
     const concurrency = 3
-    const results: { trackId: number; points: TrackPoint[] }[] = []
+    let index = 0
+    const total = tracks.value.length
 
-    // 分批处理轨迹
-    for (let i = 0; i < tracks.value.length; i += concurrency) {
-      // 检查组件是否已卸载
-      if (!isMounted) break
+    // 使用递归函数来处理并发，每个请求完成后立即更新地图
+    async function fetchNext() {
+      // 检查组件是否已卸载或所有轨迹都已处理
+      if (!isMounted || index >= total) {
+        return
+      }
 
-      const batch = tracks.value.slice(i, i + concurrency)
-      const batchPromises = batch.map(async (track) => {
+      // 获取当前批次
+      const batchSize = Math.min(concurrency, total - index)
+      const batch = tracks.value.slice(index, index + batchSize)
+      index += batchSize
+
+      // 并发请求当前批次的轨迹点
+      const promises = batch.map(async (track) => {
         try {
           const response = await trackApi.getPoints(track.id, 'wgs84')
-          return { trackId: track.id, points: samplePoints(response.points) }
+          const points = samplePoints(response.points)
+
+          // 每个请求完成后立即更新地图
+          if (isMounted) {
+            tracksPoints.value.set(track.id, points)
+            loadedTrackCount.value++
+          }
+
+          return { success: true }
         } catch (error) {
           console.error(`Failed to load points for track ${track.id}:`, error)
-          return { trackId: track.id, points: [] }
+          if (isMounted) {
+            loadedTrackCount.value++
+          }
+          return { success: false }
         }
       })
 
-      const batchResults = await Promise.all(batchPromises)
-      results.push(...batchResults)
+       // 等待当前批次完成
+      await Promise.all(promises)
 
-      // 每批完成后更新一次状态，让地图逐步显示
-      if (isMounted) {
-        for (const result of batchResults) {
-          tracksPoints.value.set(result.trackId, result.points)
-        }
-      }
+      // 继续处理下一批
+      await fetchNext()
     }
+
+    // 开始获取
+    await fetchNext()
   } finally {
     // 只有在组件仍然挂载时才更新 loading 状态
     if (isMounted) {

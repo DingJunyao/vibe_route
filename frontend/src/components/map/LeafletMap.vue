@@ -12,6 +12,11 @@
           {{ provider.label }}
         </el-button>
       </el-button-group>
+      <el-button-group size="small" style="margin-left: 8px">
+        <el-button @click="toggleFullscreen">
+          <el-icon><FullScreen /></el-icon>
+        </el-button>
+      </el-button-group>
     </div>
   </div>
 </template>
@@ -21,6 +26,7 @@ import { ref, onMounted, onUnmounted, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useConfigStore, type MapProvider } from '@/stores/config'
+import { FullScreen } from '@element-plus/icons-vue'
 
 // 类型定义
 type CRS = 'wgs84' | 'gcj02' | 'bd09'
@@ -34,13 +40,13 @@ interface Point {
   longitude_gcj02?: number | null
   latitude_bd09?: number | null
   longitude_bd09?: number | null
-  elevation?: number
-  time?: string
-  province?: string
-  city?: string
-  district?: string
-  road_name?: string
-  road_number?: string
+  elevation?: number | null
+  time?: string | null
+  province?: string | null
+  city?: string | null
+  district?: string | null
+  road_name?: string | null
+  road_number?: string | null
 }
 
 interface Track {
@@ -120,6 +126,12 @@ function initMap() {
 
   // 添加默认底图（使用当前提供商）
   addTileLayer(currentProvider.value)
+
+  // 添加比例尺
+  L.control.scale({
+    position: 'bottomleft',
+    imperial: false, // 不使用英制单位
+  }).addTo(map.value as L.Map)
 }
 
 // 添加底图
@@ -137,7 +149,7 @@ function addTileLayer(provider: MapProvider) {
   L.tileLayer(tileUrls[provider], {
     maxZoom: 19,
     attribution: getAttribution(provider),
-  }).addTo(map.value!)
+  }).addTo(map.value as L.Map)
 }
 
 // 获取版权信息
@@ -157,6 +169,26 @@ function switchProvider(provider: MapProvider) {
 
   // 重新绘制轨迹（使用正确的坐标系）
   updateTracks()
+}
+
+// 切换全屏
+function toggleFullscreen() {
+  const container = document.querySelector('.leaflet-map-container') as HTMLElement
+  if (!document.fullscreenElement) {
+    container?.requestFullscreen()
+  } else {
+    document.exitFullscreen()
+  }
+}
+
+// 处理全屏变化，更新地图尺寸
+function handleFullscreenChange() {
+  // 延迟一点等待 DOM 更新完成
+  setTimeout(() => {
+    if (map.value) {
+      map.value.invalidateSize()
+    }
+  }, 100)
 }
 
 // 根据坐标系获取经纬度字段
@@ -227,7 +259,7 @@ function drawTracks() {
       // 轨迹点击事件
     })
 
-    polyline.addTo(map.value)
+    polyline.addTo(map.value as L.Map)
     polylineLayers.value.set(track.id, polyline)
   }
 
@@ -280,12 +312,17 @@ onMounted(async () => {
 
   initMap()
   drawTracks()
+
+  // 监听全屏变化，更新地图尺寸
+  document.addEventListener('fullscreenchange', handleFullscreenChange)
 })
 
 onUnmounted(() => {
   if (map.value) {
     map.value.remove()
   }
+  // 清理全屏事件监听器
+  document.removeEventListener('fullscreenchange', handleFullscreenChange)
 })
 </script>
 

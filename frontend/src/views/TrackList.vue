@@ -4,6 +4,8 @@
       <div class="header-content">
         <el-button @click="$router.push('/')" :icon="ArrowLeft">返回</el-button>
         <h1>我的轨迹</h1>
+      </div>
+      <div class="header-actions">
         <el-button type="primary" :icon="Plus" @click="$router.push('/upload')">
           上传轨迹
         </el-button>
@@ -273,13 +275,18 @@ onMounted(async () => {
 .header-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   width: 100%;
+  gap: 20px;
 }
 
 .header-content h1 {
   font-size: 20px;
   margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .main {
@@ -341,6 +348,14 @@ onMounted(async () => {
 
 /* 移动端卡片列表 - 默认隐藏 */
 .mobile-card-list {
+  display: none;
+}
+
+.header-actions .el-button {
+    font-size: 12px;
+  }
+
+.header-actions .el-button span {
   display: none;
 }
 
