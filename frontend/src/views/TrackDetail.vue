@@ -840,11 +840,16 @@ onUnmounted(() => {
 
 <style scoped>
 .track-detail-container {
-  height: 100%;
+  height: 100vh;
+  overflow-y: auto;
   background: #f5f7fa;
+  display: block;
 }
 
-.el-header {
+.track-detail-container > .el-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
@@ -853,6 +858,20 @@ onUnmounted(() => {
   padding: 0 20px;
   gap: 16px;
   flex-shrink: 0;
+}
+
+.track-detail-container > .el-main {
+  overflow: visible;
+}
+
+/* 限制地图相关元素的 z-index */
+.map-card {
+  position: relative;
+  z-index: 1;
+}
+
+:deep(.leaflet-map-container) {
+  z-index: 1;
 }
 
 .header-left {

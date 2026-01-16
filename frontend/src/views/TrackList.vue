@@ -324,11 +324,16 @@ onUnmounted(() => {
 
 <style scoped>
 .track-list-container {
-  height: 100%;
+  height: 100vh;
+  overflow-y: auto;
   background: #f5f7fa;
+  display: block;
 }
 
-.el-header {
+.track-list-container > .el-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
@@ -337,6 +342,10 @@ onUnmounted(() => {
   padding: 0 20px;
   flex-shrink: 0;
   gap: 16px;
+}
+
+.track-list-container > .el-main {
+  overflow: visible;
 }
 
 .header-left {
