@@ -1,14 +1,37 @@
 <template>
   <el-container class="track-list-container">
     <el-header>
-      <div class="header-content">
+      <div class="header-left">
         <el-button @click="$router.push('/')" :icon="ArrowLeft">返回</el-button>
         <h1>我的轨迹</h1>
       </div>
-      <div class="header-actions">
-        <el-button type="primary" :icon="Plus" @click="$router.push('/upload')">
+      <div class="header-right">
+        <el-button type="primary" :icon="Plus" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
+        <el-dropdown @command="handleCommand">
+          <span class="user-info">
+            <el-icon><User /></el-icon>
+            <span class="username">{{ authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="upload" v-if="isMobile">
+                <el-icon><Plus /></el-icon>
+                上传轨迹
+              </el-dropdown-item>
+              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
+                <el-icon><Setting /></el-icon>
+                后台管理
+              </el-dropdown-item>
+              <el-dropdown-item command="logout" divided>
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </el-header>
 
@@ -153,7 +176,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -163,10 +186,25 @@ import {
   Clock,
   Top,
   ArrowLeft,
+  User,
+  ArrowDown,
+  Setting,
+  SwitchButton,
 } from '@element-plus/icons-vue'
 import { trackApi, type Track } from '@/api/track'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
+
+// 响应式：判断是否为移动端
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 768)
+
+// 监听窗口大小变化
+function handleResize() {
+  screenWidth.value = window.innerWidth
+}
 
 const loading = ref(false)
 const tracks = ref<Track[]>([])
@@ -221,6 +259,24 @@ function deleteTrack(track: Track) {
   })
 }
 
+function handleCommand(command: string) {
+  if (command === 'logout') {
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }).then(() => {
+      authStore.logout()
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    })
+  } else if (command === 'admin') {
+    router.push('/admin')
+  } else if (command === 'upload') {
+    router.push('/upload')
+  }
+}
+
 function formatDistance(meters: number): string {
   if (meters < 1000) {
     return `${meters.toFixed(1)} m`
@@ -255,6 +311,14 @@ function formatDateTime(dateStr: string | null): string {
 
 onMounted(async () => {
   await loadTracks()
+
+  // 添加窗口大小监听
+  window.addEventListener('resize', handleResize)
+})
+
+// 组件卸载时移除监听器
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -268,25 +332,51 @@ onMounted(async () => {
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 0 20px;
+  flex-shrink: 0;
+  gap: 16px;
 }
 
-.header-content {
+.header-left {
   display: flex;
   align-items: center;
-  width: 100%;
-  gap: 20px;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
 }
 
-.header-content h1 {
+.header-left h1 {
   font-size: 20px;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.header-actions {
+.header-right {
   display: flex;
-  gap: 10px;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-info:hover {
+  background-color: #f5f7fa;
+}
+
+.user-info .username {
+  display: inline;
 }
 
 .main {
@@ -351,12 +441,56 @@ onMounted(async () => {
   display: none;
 }
 
-.header-actions .el-button {
-    font-size: 12px;
+.desktop-only {
+  display: inline-block;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .el-header {
+    flex-wrap: wrap;
+    padding: 10px;
   }
 
-.header-actions .el-button span {
-  display: none;
+  .header-left {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-left h1 {
+    font-size: 16px;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+
+  .user-info .username {
+    display: inline;
+  }
+
+  .main {
+    padding: 10px;
+  }
+
+  .sort-col {
+    text-align: left;
+    margin-top: 10px;
+  }
+
+  /* 隐藏PC端表格 */
+  .pc-table {
+    display: none;
+  }
+
+  /* 显示移动端卡片 */
+  .mobile-card-list {
+    display: block;
+  }
+
+  .track-stats {
+    flex-wrap: wrap;
+  }
 }
 
 .track-card {
@@ -415,40 +549,5 @@ onMounted(async () => {
 
 .card-actions .el-button {
   flex: 1;
-}
-
-/* 移动端响应式 */
-@media (max-width: 768px) {
-  .main {
-    padding: 10px;
-  }
-
-  .header-content h1 {
-    font-size: 16px;
-  }
-
-  .header-content .el-button {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-
-  .sort-col {
-    text-align: left;
-    margin-top: 10px;
-  }
-
-  /* 隐藏PC端表格 */
-  .pc-table {
-    display: none;
-  }
-
-  /* 显示移动端卡片 */
-  .mobile-card-list {
-    display: block;
-  }
-
-  .track-stats {
-    flex-wrap: wrap;
-  }
 }
 </style>

@@ -1,19 +1,48 @@
 <template>
   <div class="track-detail-container">
     <el-header>
-      <div class="header-content">
+      <div class="header-left">
         <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
         <h1>{{ track?.name || '轨迹详情' }}</h1>
+      </div>
+      <div class="header-right">
         <div class="header-actions">
-          <el-button link type="primary" @click="showEditDialog">
+          <el-button link type="primary" @click="showEditDialog" class="desktop-only">
             <el-icon><Edit /></el-icon>
             编辑
           </el-button>
-          <el-button link type="primary" @click="downloadDialogVisible = true">
+          <el-button link type="primary" @click="downloadDialogVisible = true" class="desktop-only">
             <el-icon><Download /></el-icon>
             下载 GPX
           </el-button>
         </div>
+        <el-dropdown @command="handleCommand">
+          <span class="user-info">
+            <el-icon><User /></el-icon>
+            <span class="username">{{ authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="edit" v-if="isMobile">
+                <el-icon><Edit /></el-icon>
+                编辑
+              </el-dropdown-item>
+              <el-dropdown-item command="download" v-if="isMobile">
+                <el-icon><Download /></el-icon>
+                下载 GPX
+              </el-dropdown-item>
+              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
+                <el-icon><Setting /></el-icon>
+                后台管理
+              </el-dropdown-item>
+              <el-dropdown-item command="logout" divided>
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </el-header>
 
@@ -271,7 +300,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft,
   Download,
@@ -282,12 +312,28 @@ import {
   Bottom,
   SuccessFilled,
   CircleCloseFilled,
+  User,
+  ArrowDown,
+  Setting,
+  SwitchButton,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse } from '@/api/track'
 import LeafletMap from '@/components/map/LeafletMap.vue'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const router = useRouter()
+const authStore = useAuthStore()
+
+// 响应式：判断是否为移动端
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 768)
+
+// 监听窗口大小变化
+function handleResize() {
+  screenWidth.value = window.innerWidth
+}
 
 const loading = ref(true)
 const track = ref<Track | null>(null)
@@ -360,6 +406,27 @@ const areas = computed(() => {
   }
   return Array.from(uniqueAreas)
 })
+
+// 处理用户下拉菜单命令
+function handleCommand(command: string) {
+  if (command === 'logout') {
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }).then(() => {
+      authStore.logout()
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    })
+  } else if (command === 'admin') {
+    router.push('/admin')
+  } else if (command === 'edit') {
+    showEditDialog()
+  } else if (command === 'download') {
+    downloadDialogVisible.value = true
+  }
+}
 
 // 获取轨迹详情
 async function fetchTrackDetail() {
@@ -759,10 +826,15 @@ onMounted(async () => {
   nextTick(() => {
     renderChart()
   })
+
+  // 添加窗口大小监听
+  window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
   stopPollingProgress()
+  // 移除窗口大小监听器
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -776,26 +848,60 @@ onUnmounted(() => {
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 0 20px;
+  gap: 16px;
+  flex-shrink: 0;
 }
 
-.header-content {
+.header-left {
   display: flex;
   align-items: center;
-  width: 100%;
-  gap: 20px;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
 }
 
-.header-content h1 {
+.header-left h1 {
   font-size: 20px;
   margin: 0;
-  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .header-actions {
   display: flex;
   gap: 10px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-info:hover {
+  background-color: #f5f7fa;
+}
+
+.user-info .username {
+  display: inline;
+}
+
+.desktop-only {
+  display: inline-block;
 }
 
 .main {
@@ -977,16 +1083,26 @@ onUnmounted(() => {
 
 /* 移动端响应式 */
 @media (max-width: 768px) {
-  .header-content h1 {
+  .el-header {
+    flex-wrap: wrap;
+    padding: 10px;
+  }
+
+  .header-left {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-left h1 {
     font-size: 16px;
   }
 
-  .header-actions .el-button {
-    font-size: 12px;
+  .desktop-only {
+    display: none !important;
   }
 
-  .header-actions .el-button span {
-    display: none;
+  .user-info .username {
+    display: inline;
   }
 
   .main {

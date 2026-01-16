@@ -4,16 +4,28 @@
     <el-header class="header">
       <div class="header-left">
         <h1 class="logo">Vibe Route</h1>
+        <el-button @click="$router.push('/tracks')" :icon="List" class="desktop-only">轨迹列表</el-button>
       </div>
       <div class="header-right">
+        <el-button type="primary" :icon="Upload" @click="$router.push('/upload')" class="desktop-only">
+          上传轨迹
+        </el-button>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
             <el-icon><User /></el-icon>
-            {{ authStore.user?.username }}
+            <span class="username">{{ authStore.user?.username }}</span>
             <el-icon class="el-icon--right"><arrow-down /></el-icon>
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="tracks" v-if="isMobile">
+                <el-icon><List /></el-icon>
+                轨迹列表
+              </el-dropdown-item>
+              <el-dropdown-item command="upload" v-if="isMobile">
+                <el-icon><Upload /></el-icon>
+                上传轨迹
+              </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -33,8 +45,8 @@
       <!-- 统计卡片 -->
       <el-row :gutter="20" class="stats-row">
         <el-col :xs="12" :sm="6">
-          <el-card shadow="hover">
-            <div class="stat-card">
+          <el-card shadow="hover" class="stat-card" @click="$router.push('/tracks')">
+            <div class="stat-card-content">
               <div class="stat-icon" style="background: #409eff">
                 <el-icon :size="24"><Location /></el-icon>
               </div>
@@ -47,7 +59,7 @@
         </el-col>
         <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
-            <div class="stat-card">
+            <div class="stat-card-content">
               <div class="stat-icon" style="background: #67c23a">
                 <el-icon :size="24"><Odometer /></el-icon>
               </div>
@@ -60,7 +72,7 @@
         </el-col>
         <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
-            <div class="stat-card">
+            <div class="stat-card-content">
               <div class="stat-icon" style="background: #e6a23c">
                 <el-icon :size="24"><Clock /></el-icon>
               </div>
@@ -73,7 +85,7 @@
         </el-col>
         <el-col :xs="12" :sm="6">
           <el-card shadow="hover">
-            <div class="stat-card">
+            <div class="stat-card-content">
               <div class="stat-icon" style="background: #f56c6c">
                 <el-icon :size="24"><Top /></el-icon>
               </div>
@@ -95,16 +107,6 @@
               <el-icon class="is-loading"><Loading /></el-icon>
               正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
             </span>
-            <div class="map-actions">
-              <el-button size="small" @click="$router.push('/upload')">
-                <el-icon><Upload /></el-icon>
-                上传轨迹
-              </el-button>
-              <el-button size="small" @click="$router.push('/tracks')">
-                <el-icon><List /></el-icon>
-                轨迹列表
-              </el-button>
-            </div>
           </div>
         </template>
         <div class="map-container">
@@ -119,7 +121,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -142,8 +144,17 @@ import LeafletMap from '@/components/map/LeafletMap.vue'
 const router = useRouter()
 const authStore = useAuthStore()
 
+// 响应式：判断是否为移动端
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 768)
+
 // 标记组件是否已挂载，用于避免卸载后更新状态
 let isMounted = true
+
+// 监听窗口大小变化
+function handleResize() {
+  screenWidth.value = window.innerWidth
+}
 
 const stats = ref({
   total_tracks: 0,
@@ -178,6 +189,10 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'tracks') {
+    router.push('/tracks')
+  } else if (command === 'upload') {
+    router.push('/upload')
   }
 }
 
@@ -311,11 +326,16 @@ onMounted(() => {
     .catch(() => {
       // 错误已在拦截器中处理
     })
+
+  // 添加窗口大小监听
+  window.addEventListener('resize', handleResize)
 })
 
 // 组件卸载时设置标志，避免更新已卸载组件的状态
 onUnmounted(() => {
   isMounted = false
+  // 移除窗口大小监听器
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
@@ -335,12 +355,25 @@ onUnmounted(() => {
   align-items: center;
   padding: 0 20px;
   flex-shrink: 0;
+  gap: 16px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .header-left .logo {
   margin: 0;
   font-size: 24px;
   color: #409eff;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .user-info {
@@ -357,6 +390,47 @@ onUnmounted(() => {
   background-color: #f5f7fa;
 }
 
+.user-info .username {
+  display: inline;
+}
+
+.mobile-only {
+  display: none;
+}
+
+:deep(.mobile-only) {
+  display: none !important;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .header {
+    flex-wrap: wrap;
+    padding: 10px;
+  }
+
+  .header-left {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-left .logo {
+    font-size: 18px;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+
+  .user-info .username {
+    display: inline;
+  }
+
+  .mobile-only {
+    display: block !important;
+  }
+}
+
 .main {
   padding: 20px;
   max-width: 1400px;
@@ -371,6 +445,15 @@ onUnmounted(() => {
 }
 
 .stat-card {
+  cursor: pointer;
+  transition: box-shadow 0.3s;
+}
+
+.stat-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.stat-card-content {
   display: flex;
   align-items: center;
   gap: 15px;
@@ -421,18 +504,12 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.map-actions {
-  display: flex;
-  gap: 10px;
-}
-
 .map-container {
   width: 100%;
   height: 100%;
   position: relative;
 }
 
-.map-loading,
 .map-empty {
   position: absolute;
   top: 50%;
@@ -445,18 +522,39 @@ onUnmounted(() => {
   color: #909399;
 }
 
-.map-loading .el-icon {
-  font-size: 32px;
+.loading-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #909399;
 }
 
 /* 移动端响应式 */
 @media (max-width: 768px) {
-  .main {
+  .header {
+    flex-wrap: wrap;
     padding: 10px;
+  }
+
+  .header-left {
+    flex: 1;
+    min-width: 0;
   }
 
   .header-left .logo {
     font-size: 18px;
+  }
+
+  .desktop-only {
+    display: none;
+  }
+
+  .user-info .username {
+    display: inline;
+  }
+
+  .main {
+    padding: 10px;
   }
 
   .stats-row :deep(.el-col) {
@@ -484,18 +582,6 @@ onUnmounted(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
-  }
-
-  .map-actions {
-    width: 100%;
-  }
-
-  .map-actions .el-button {
-    flex: 1;
-  }
-
-  .map-card {
-    height: calc(100% - 180px);
   }
 }
 </style>
