@@ -2,7 +2,7 @@
 配置相关的 Pydantic schemas
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal, Dict
 from pydantic import BaseModel, Field
 
 
@@ -11,6 +11,24 @@ class MapProvider(str):
     OSM = "osm"
     AMAP = "amap"
     BAIDU = "baidu"
+
+
+# 坐标系类型
+CRSType = Literal["wgs84", "gcj02", "bd09"]
+
+
+class MapLayerConfig(BaseModel):
+    """地图底图配置"""
+    id: str = Field(..., description="地图唯一标识")
+    name: str = Field(..., description="地图显示名称")
+    url: str = Field(..., description="瓦片 URL 模板，支持 {x}, {y}, {z}, {s} 占位符")
+    crs: CRSType = Field(..., description="坐标系类型")
+    attribution: str = Field(default="", description="版权信息")
+    max_zoom: int = Field(default=19, description="最大缩放级别")
+    min_zoom: int = Field(default=1, description="最小缩放级别")
+    enabled: bool = Field(default=True, description="是否启用")
+    order: int = Field(default=0, description="显示顺序")
+    subdomains: Optional[str | List[str]] = Field(default=None, description="子域名列表，如 'abc' 或 ['0','1','2']")
 
 
 class GeocodingProvider(str):
@@ -28,6 +46,7 @@ class ConfigResponse(BaseModel):
     default_map_provider: str
     geocoding_provider: str
     geocoding_config: dict
+    map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True
@@ -40,6 +59,7 @@ class ConfigUpdate(BaseModel):
     default_map_provider: Optional[str] = None
     geocoding_provider: Optional[str] = None
     geocoding_config: Optional[dict] = None
+    map_layers: Optional[Dict[str, Dict]] = None
 
 
 class InviteCodeCreate(BaseModel):

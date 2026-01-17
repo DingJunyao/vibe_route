@@ -4,12 +4,12 @@
     <div class="map-controls">
       <el-button-group size="small">
         <el-button
-          v-for="provider in mapProviders"
-          :key="provider.value"
-          :type="currentProvider === provider.value ? 'primary' : ''"
-          @click="switchProvider(provider.value)"
+          v-for="layer in mapLayers"
+          :key="layer.id"
+          :type="currentLayerId === layer.id ? 'primary' : ''"
+          @click="switchLayer(layer.id)"
         >
-          {{ provider.label }}
+          {{ layer.name }}
         </el-button>
       </el-button-group>
       <el-button-group size="small" style="margin-left: 8px">
@@ -25,12 +25,11 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { useConfigStore, type MapProvider } from '@/stores/config'
+import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
+import type { MapLayerConfig, CRSType } from '@/api/admin'
 
 // 类型定义
-type CRS = 'wgs84' | 'gcj02' | 'bd09'
-
 interface Point {
   latitude?: number
   longitude?: number
@@ -57,13 +56,13 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
-  defaultProvider?: MapProvider
+  defaultLayerId?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
-  defaultProvider: undefined,
+  defaultLayerId: undefined,
 })
 
 const emit = defineEmits<{
@@ -78,33 +77,34 @@ const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
 
-// 当前底图提供商 - 从配置或 prop 获取
-const currentProvider = ref<MapProvider>(
-  props.defaultProvider || configStore.getMapProvider()
+// 当前底图层 ID
+const currentLayerId = ref<string>(
+  props.defaultLayerId || configStore.getMapProvider()
 )
 
-// 底图配置
-const mapProviders = [
-  { value: 'osm' as MapProvider, label: 'OSM' },
-  { value: 'amap' as MapProvider, label: '高德' },
-  { value: 'baidu' as MapProvider, label: '百度' },
-]
+// 当前地图层配置
+const currentLayerConfig = ref<MapLayerConfig | undefined>(undefined)
 
-// 底图 URL
-const tileUrls = {
-  osm: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-  amap: 'https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-  baidu: 'https://online1.map.bdimg.com/tile/?qt=tile&x={x}&y={y}&z={z}&styles=pl',
+// 可用的地图层列表
+const mapLayers = ref<MapLayerConfig[]>([])
+
+// 初始化地图层列表
+function initMapLayers() {
+  mapLayers.value = configStore.getMapLayers()
+  // 如果当前层不在列表中，使用第一个或默认
+  const defaultId = props.defaultLayerId || configStore.getMapProvider()
+  const exists = mapLayers.value.find((l: MapLayerConfig) => l.id === defaultId)
+  if (exists) {
+    currentLayerId.value = defaultId
+  } else if (mapLayers.value.length > 0) {
+    currentLayerId.value = mapLayers.value[0].id
+  }
+  updateCurrentLayerConfig()
 }
 
-// 根据底图提供商获取对应的坐标系
-function getCRSForProvider(provider: MapProvider): CRS {
-  const crsMap: Record<MapProvider, CRS> = {
-    osm: 'wgs84',
-    amap: 'gcj02',
-    baidu: 'bd09',
-  }
-  return crsMap[provider]
+// 更新当前地图层配置
+function updateCurrentLayerConfig() {
+  currentLayerConfig.value = configStore.getMapLayerById(currentLayerId.value)
 }
 
 // 初始化地图
@@ -125,7 +125,7 @@ function initMap() {
   console.log('[LeafletMap] map created:', map.value)
 
   // 添加默认底图（使用当前提供商）
-  addTileLayer(currentProvider.value)
+  addTileLayer(currentLayerId.value)
 
   // 添加比例尺
   L.control.scale({
@@ -135,37 +135,36 @@ function initMap() {
 }
 
 // 添加底图
-function addTileLayer(provider: MapProvider) {
+function addTileLayer(layerId: string) {
   if (!map.value) return
 
+  const layerConfig = configStore.getMapLayerById(layerId)
+  if (!layerConfig) {
+    console.error('[LeafletMap] Layer not found:', layerId)
+    return
+  }
+
   // 移除现有底图
-  map.value.eachLayer((layer) => {
+  map.value.eachLayer((layer: L.Layer) => {
     if (layer instanceof L.TileLayer) {
       map.value!.removeLayer(layer)
     }
   })
 
   // 添加新底图
-  L.tileLayer(tileUrls[provider], {
-    maxZoom: 19,
-    attribution: getAttribution(provider),
+  L.tileLayer(layerConfig.url, {
+    maxZoom: layerConfig.max_zoom,
+    minZoom: layerConfig.min_zoom,
+    attribution: layerConfig.attribution,
+    subdomains: layerConfig.subdomains || undefined,
   }).addTo(map.value as L.Map)
 }
 
-// 获取版权信息
-function getAttribution(provider: MapProvider): string {
-  const attributions = {
-    osm: '&copy; OpenStreetMap contributors',
-    amap: '&copy; 高德地图',
-    baidu: '&copy; 百度地图',
-  }
-  return attributions[provider]
-}
-
 // 切换底图
-function switchProvider(provider: MapProvider) {
-  currentProvider.value = provider
-  addTileLayer(provider)
+function switchLayer(layerId: string) {
+  currentLayerId.value = layerId
+  updateCurrentLayerConfig()
+  addTileLayer(layerId)
 
   // 重新绘制轨迹（使用正确的坐标系）
   updateTracks()
@@ -192,23 +191,34 @@ function handleFullscreenChange() {
 }
 
 // 根据坐标系获取经纬度字段
-function getCoords(point: Point, crs: CRS): [number, number] {
+function getCoordsByCRS(point: Point, crs: CRSType): [number, number] | null {
   if (crs === 'wgs84') {
-    return [point.latitude, point.longitude]
+    const lat = point.latitude_wgs84 ?? point.latitude
+    const lng = point.longitude_wgs84 ?? point.longitude
+    if (lat !== undefined && lng !== undefined) {
+      return [lat, lng]
+    }
   } else if (crs === 'gcj02') {
-    // 需要后端提供 gcj02 坐标，这里暂时假设有对应的字段
-    return [point.latitude || 0, point.longitude || 0]
+    const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
+    const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
+    if (lat !== undefined && lng !== undefined) {
+      return [lat, lng]
+    }
   } else if (crs === 'bd09') {
-    return [point.latitude || 0, point.longitude || 0]
+    const lat = point.latitude_bd09 ?? point.latitude_wgs84 ?? point.latitude
+    const lng = point.longitude_bd09 ?? point.longitude_wgs84 ?? point.longitude
+    if (lat !== undefined && lng !== undefined) {
+      return [lat, lng]
+    }
   }
-  return [point.latitude, point.longitude]
+  return null
 }
 
 // 绘制轨迹
 function drawTracks() {
   if (!map.value || !props.tracks.length) return
 
-  const crs = getCRSForProvider(currentProvider.value)
+  const crs = currentLayerConfig.value?.crs || 'wgs84'
 
   // 清除现有轨迹
   clearTracks()
@@ -221,22 +231,12 @@ function drawTracks() {
     const latLngs: L.LatLngExpression[] = []
 
     for (const point of track.points) {
-      let lat: number | undefined, lng: number | undefined
+      const coords = getCoordsByCRS(point, crs)
+      if (!coords) continue
 
-      // 根据底图选择对应的坐标
-      if (currentProvider.value === 'osm') {
-        lat = (point as any).latitude_wgs84 ?? point.latitude
-        lng = (point as any).longitude_wgs84 ?? point.longitude
-      } else if (currentProvider.value === 'amap') {
-        lat = (point as any).latitude_gcj02 ?? (point as any).latitude_wgs84 ?? point.latitude
-        lng = (point as any).longitude_gcj02 ?? (point as any).longitude_wgs84 ?? point.longitude
-      } else {
-        lat = (point as any).latitude_bd09 ?? (point as any).latitude_wgs84 ?? point.latitude
-        lng = (point as any).longitude_bd09 ?? (point as any).longitude_wgs84 ?? point.longitude
-      }
-
+      const [lat, lng] = coords
       // 跳过无效坐标
-      if (lat === undefined || lng === undefined || isNaN(lat) || isNaN(lng)) {
+      if (isNaN(lat) || isNaN(lng)) {
         continue
       }
 
@@ -265,7 +265,6 @@ function drawTracks() {
 
   // 自动适应视图
   if (bounds.isValid()) {
-    const mapSize = map.value.getSize()
     map.value.fitBounds(bounds, { padding: [0, 0] })
   }
 }
@@ -306,9 +305,15 @@ onMounted(async () => {
     await configStore.fetchConfig()
   }
 
-  // 更新当前提供商（从配置或 prop 获取）
-  currentProvider.value = props.defaultProvider || configStore.getMapProvider()
-  console.log('[LeafletMap] Using provider:', currentProvider.value)
+  // 初始化地图层列表
+  initMapLayers()
+
+  // 更新当前层（从 prop 或配置获取）
+  const defaultId = props.defaultLayerId || configStore.getMapProvider()
+  const exists = mapLayers.value.find((l: MapLayerConfig) => l.id === defaultId)
+  currentLayerId.value = exists ? defaultId : (mapLayers.value[0]?.id || 'osm')
+  updateCurrentLayerConfig()
+  console.log('[LeafletMap] Using layer:', currentLayerId.value, currentLayerConfig.value)
 
   initMap()
   drawTracks()

@@ -1,5 +1,22 @@
 import http from './request'
 
+// 坐标系类型
+export type CRSType = 'wgs84' | 'gcj02' | 'bd09'
+
+// 地图底图配置
+export interface MapLayerConfig {
+  id: string
+  name: string
+  url: string
+  crs: CRSType
+  attribution: string
+  max_zoom: number
+  min_zoom: number
+  enabled: boolean
+  order: number
+  subdomains?: string | string[]
+}
+
 // 系统配置相关接口
 export interface SystemConfig {
   registration_enabled: boolean
@@ -21,6 +38,7 @@ export interface SystemConfig {
       api_key: string
     }
   }
+  map_layers: Record<string, MapLayerConfig>
 }
 
 export interface ConfigUpdateData {
@@ -43,6 +61,7 @@ export interface ConfigUpdateData {
       api_key: string
     }
   }
+  map_layers?: Record<string, Partial<MapLayerConfig>>
 }
 
 // 用户相关接口

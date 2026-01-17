@@ -109,6 +109,7 @@ async def get_config(
         default_map_provider=configs.get("default_map_provider", "osm"),
         geocoding_provider=configs.get("geocoding_provider", "nominatim"),
         geocoding_config=configs.get("geocoding_config", {}),
+        map_layers=configs.get("map_layers", {}),
     )
 
 
@@ -129,6 +130,7 @@ async def update_config(
         default_map_provider=configs.get("default_map_provider", "osm"),
         geocoding_provider=configs.get("geocoding_provider", "nominatim"),
         geocoding_config=configs.get("geocoding_config", {}),
+        map_layers=configs.get("map_layers", {}),
     )
 
 

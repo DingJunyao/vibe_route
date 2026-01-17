@@ -29,14 +29,52 @@
 
                 <!-- 地图设置 -->
                 <div class="form-section">
-                  <div class="section-title">地图设置</div>
-                  <el-form-item label="默认地图">
-                    <el-radio-group v-model="config.default_map_provider">
-                      <el-radio value="osm">OpenStreetMap</el-radio>
-                      <el-radio value="amap">高德地图</el-radio>
-                      <el-radio value="baidu">百度地图</el-radio>
-                    </el-radio-group>
-                  </el-form-item>
+                  <div class="section-title">
+                    地图设置
+                    <span class="section-tip">选择单选按钮设为默认地图，使用开关启用/禁用地图，拖拽调整显示顺序</span>
+                  </div>
+                  <draggable
+                    v-model="allMapLayers"
+                    item-key="id"
+                    handle=".drag-handle"
+                    @end="onDragEnd"
+                  >
+                    <template #item="{ element: layer }">
+                      <div
+                        class="map-layer-item"
+                        :class="{ 'is-default': layer.id === config.default_map_provider }"
+                      >
+                        <el-icon class="drag-handle">
+                          <Rank />
+                        </el-icon>
+                        <el-radio
+                          :model-value="config.default_map_provider"
+                          :value="layer.id"
+                          @change="config.default_map_provider = layer.id"
+                          :disabled="!layer.enabled"
+                        >
+                          <span class="layer-name">{{ layer.name }}</span>
+                          <span class="layer-id">({{ layer.id }})</span>
+                        </el-radio>
+                        <el-switch
+                          v-model="layer.enabled"
+                          @change="onMapLayerToggle(layer)"
+                          :disabled="layer.id === config.default_map_provider && layer.enabled"
+                        />
+                        <span class="layer-status">
+                          <template v-if="layer.id === config.default_map_provider">
+                            <el-tag size="small" type="success">默认</el-tag>
+                          </template>
+                          <template v-else-if="layer.enabled">
+                            <el-tag size="small" type="info">已启用</el-tag>
+                          </template>
+                          <template v-else>
+                            <el-tag size="small" type="warning">已禁用</el-tag>
+                          </template>
+                        </span>
+                      </div>
+                    </template>
+                  </draggable>
                 </div>
 
                 <!-- 地理编码设置 -->
@@ -263,11 +301,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus } from '@element-plus/icons-vue'
-import { adminApi, type SystemConfig, type User, type InviteCode } from '@/api/admin'
+import { ArrowLeft, Plus, Rank } from '@element-plus/icons-vue'
+import draggable from 'vuedraggable'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 
@@ -300,7 +339,11 @@ const config = reactive<SystemConfig>({
     amap: { api_key: '' },
     baidu: { api_key: '' },
   },
+  map_layers: {},
 })
+
+// 所有地图层列表（按固定顺序）
+const allMapLayers = ref<MapLayerConfig[]>([])
 
 // 用户列表
 const users = ref<User[]>([])
@@ -340,6 +383,8 @@ async function loadConfig() {
     const data = await adminApi.getConfig()
     Object.assign(config, data)
     initGeocodingConfig()
+    // 初始化地图层列表（按固定顺序）
+    initMapLayers()
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -347,11 +392,51 @@ async function loadConfig() {
   }
 }
 
+// 初始化地图层列表
+function initMapLayers() {
+  if (!config.map_layers) {
+    config.map_layers = {}
+  }
+  // 按 order 字段排序
+  allMapLayers.value = Object.values(config.map_layers).sort((a: unknown, b: unknown) => (a as MapLayerConfig).order - (b as MapLayerConfig).order)
+}
+
+// 拖拽结束后的处理
+function onDragEnd() {
+  // 更新所有地图层的 order 值
+  allMapLayers.value.forEach((layer: MapLayerConfig, index: number) => {
+    layer.order = index
+  })
+}
+
+// 地图层切换事件
+function onMapLayerToggle(layer: MapLayerConfig) {
+  if (!layer.enabled) {
+    // 如果禁用的是当前默认地图，需要切换默认地图
+    if (layer.id === config.default_map_provider) {
+      // 找到第一个启用的地图作为默认
+      const firstEnabled = allMapLayers.value.find((l: MapLayerConfig) => l.enabled && l.id !== layer.id)
+      if (firstEnabled) {
+        config.default_map_provider = firstEnabled.id
+      } else {
+        // 如果没有其他启用的地图，不允许禁用
+        layer.enabled = true
+        ElMessage.warning('至少需要保留一个启用的地图')
+      }
+    }
+  }
+}
+
 // 保存系统配置
 async function saveConfig() {
   saving.value = true
   try {
-    const updatedConfig = await adminApi.updateConfig(config)
+    // 确保 map_layers 被正确保存
+    const updateData: Partial<SystemConfig> = {
+      ...config,
+      map_layers: config.map_layers,
+    }
+    const updatedConfig = await adminApi.updateConfig(updateData)
     // 更新 config store 中的配置
     configStore.config = updatedConfig
     ElMessage.success('配置保存成功')
@@ -555,6 +640,15 @@ onMounted(async () => {
   color: #303133;
   margin-bottom: 20px;
   padding-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-tip {
+  font-size: 12px;
+  color: #909399;
+  font-weight: normal;
 }
 
 .form-tip {
@@ -568,6 +662,88 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+}
+
+.map-layers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map-layer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  transition: background-color 0.2s;
+  cursor: grab;
+}
+
+.map-layer-item:active {
+  cursor: grabbing;
+}
+
+.map-layer-item:hover {
+  background: #ecf5ff;
+}
+
+.map-layer-item.is-default {
+  background: #f0f9ff;
+  border: 1px solid #b3d8ff;
+}
+
+.map-layer-item.drag-over {
+  border: 2px dashed #409eff;
+  background: #ecf5ff;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: #909399;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* vuedraggable 拖拽时的样式 */
+.map-layers-list :deep(.sortable-ghost) {
+  opacity: 0.5;
+  background: #ecf5ff;
+}
+
+.map-layers-list :deep(.sortable-drag) {
+  opacity: 0.8;
+}
+
+.map-layer-item :deep(.el-radio) {
+  margin: 0;
+  flex: 1;
+}
+
+.map-layer-item :deep(.el-radio__label) {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.layer-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #303133;
+}
+
+.layer-id {
+  font-size: 12px;
+  color: #909399;
+}
+
+.layer-status {
+  margin-left: auto;
 }
 
 /* 移动端响应式 */

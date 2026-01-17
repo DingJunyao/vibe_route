@@ -1,8 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { adminApi, type SystemConfig } from '@/api/admin'
-
-export type MapProvider = 'osm' | 'amap' | 'baidu'
+import { adminApi, type SystemConfig, type MapLayerConfig } from '@/api/admin'
 
 export const useConfigStore = defineStore('config', () => {
   // State
@@ -40,12 +38,26 @@ export const useConfigStore = defineStore('config', () => {
     return fetchPromise
   }
 
-  function getMapProvider(): MapProvider {
-    const provider = config.value?.default_map_provider || 'osm'
-    if (provider === 'osm' || provider === 'amap' || provider === 'baidu') {
-      return provider as MapProvider
-    }
-    return 'osm'
+  function getMapProvider(): string {
+    return config.value?.default_map_provider || 'osm'
+  }
+
+  // 获取所有已启用的地图层配置
+  function getMapLayers(): MapLayerConfig[] {
+    if (!config.value?.map_layers) return []
+    return Object.values(config.value.map_layers)
+      .filter(layer => layer.enabled)
+      .sort((a, b) => a.order - b.order)
+  }
+
+  // 根据 ID 获取地图层配置（包括未启用的）
+  function getMapLayerById(id: string): MapLayerConfig | undefined {
+    return config.value?.map_layers?.[id]
+  }
+
+  // 检查地图层是否启用
+  function isMapLayerEnabled(id: string): boolean {
+    return config.value?.map_layers?.[id]?.enabled ?? false
   }
 
   // 初始化时获取配置（不等待，让组件自己等待）
@@ -56,5 +68,8 @@ export const useConfigStore = defineStore('config', () => {
     loading,
     fetchConfig,
     getMapProvider,
+    getMapLayers,
+    getMapLayerById,
+    isMapLayerEnabled,
   }
 })
