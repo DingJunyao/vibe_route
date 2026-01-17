@@ -453,18 +453,34 @@ function renderChart() {
 
   const chart = echarts.init(chartRef.value)
 
+  // 判断是否为移动端
+  const isMobile = window.innerWidth <= 768
+
+  // 移动端数据采样
+  let sampledPoints = points.value
+  let sampledElevationData: number[][] = []
+  let sampledSpeedData: number[][] = []
+  let sampledXAxisData: string[] = []
+
+  // if (isMobile && points.value.length > 100) {
+  //   // 移动端使用采样：目标约 50 个点
+  //   const targetPoints = 50
+  //   const step = Math.ceil(points.value.length / targetPoints)
+  //   sampledPoints = points.value.filter((_p: any, index: number) => index % step === 0)
+  // }
+
   // 准备海拔数据
-  const elevationData = points.value
-    .filter(p => p.elevation !== null)
-    .map((p, index) => [index, p.elevation])
+  sampledElevationData = sampledPoints
+    .filter((p: any) => p.elevation !== null)
+    .map((p: any, index: number) => [index, p.elevation])
 
   // 准备速度数据（转换为 km/h）
-  const speedData = points.value
-    .filter(p => p.speed !== null && p.speed !== undefined)
-    .map((p, index) => [index, (p.speed ?? 0) * 3.6])
+  sampledSpeedData = sampledPoints
+    .filter((p: any) => p.speed !== null && p.speed !== undefined)
+    .map((p: any, index: number) => [index, (p.speed ?? 0) * 3.6])
 
   // X 轴数据（使用时间标签）
-  const xAxisData = points.value.map((p, index) => {
+  sampledXAxisData = sampledPoints.map((p: any, index: number) => {
     if (p.time) {
       const date = new Date(p.time)
       return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
@@ -474,15 +490,15 @@ function renderChart() {
 
   const option = {
     grid: {
-      left: '70px',
-      right: '70px',
-      top: '50px',
-      bottom: '50px',
+      left: isMobile ? '30px' : '70px',
+      right: isMobile ? '30px' : '70px',
+      top: isMobile ? '30px' : '50px',
+      bottom: isMobile ? '30px' : '50px',
     },
     tooltip: {
       trigger: 'axis',
       formatter: (params: any) => {
-        let result = `时间: ${formatTime(points.value[params[0].dataIndex].time)}<br/>`
+        let result = `时间: ${formatTime(sampledPoints[params[0].dataIndex].time)}<br/>`
         for (const param of params) {
           if (param.seriesName === '海拔') {
             result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} m<br/>`
@@ -495,9 +511,14 @@ function renderChart() {
     },
     xAxis: {
       type: 'category',
-      data: xAxisData,
+      data: sampledXAxisData,
       axisLabel: {
-        interval: Math.max(1, Math.floor(xAxisData.length / 10)),
+        interval: isMobile ? 'auto' : Math.max(1, Math.floor(sampledXAxisData.length / 10)),
+        fontSize: isMobile ? 9 : 12,
+        rotate: isMobile ? 45 : 0,
+      },
+      axisTick: {
+        alignWithLabel: true,
       },
     },
     yAxis: [
@@ -505,9 +526,10 @@ function renderChart() {
         type: 'value',
         name: '海拔 (m)',
         nameLocation: 'middle',
-        nameGap: 40,
+        nameGap: isMobile ? 20 : 40,
         nameTextStyle: {
           padding: [0, 0, 0, 0],
+          fontSize: isMobile ? 10 : 12,
         },
         axisLine: {
           lineStyle: {
@@ -520,14 +542,19 @@ function renderChart() {
             color: '#e5e5e5',
           },
         },
+        splitNumber: isMobile ? 4 : 5,
+        axisLabel: {
+          fontSize: isMobile ? 9 : 12,
+        },
       },
       {
         type: 'value',
         name: '速度 (km/h)',
         nameLocation: 'middle',
-        nameGap: 40,
+        nameGap: isMobile ? 20 : 40,
         nameTextStyle: {
           padding: [0, 0, 0, 0],
+          fontSize: isMobile ? 10 : 12,
         },
         axisLine: {
           lineStyle: {
@@ -537,6 +564,10 @@ function renderChart() {
         splitLine: {
           show: false,
         },
+        splitNumber: isMobile ? 4 : 5,
+        axisLabel: {
+          fontSize: isMobile ? 9 : 12,
+        },
       },
     ],
     series: [
@@ -544,9 +575,11 @@ function renderChart() {
         name: '海拔',
         type: 'line',
         yAxisIndex: 0,
-        data: elevationData.map(d => d[1]),
-        smooth: true,
-        areaStyle: {
+        data: sampledElevationData.map(d => d[1]),
+        smooth: !isMobile, // 移动端不使用平滑
+        sampling: null,
+        symbol: 'none',
+        areaStyle: isMobile ? undefined : {
           color: {
             type: 'linear',
             x: 0,
@@ -568,9 +601,11 @@ function renderChart() {
         name: '速度',
         type: 'line',
         yAxisIndex: 1,
-        data: speedData.map(d => d[1]),
-        smooth: true,
-        areaStyle: {
+        data: sampledSpeedData.map(d => d[1]),
+        smooth: true, 
+        sampling: null,
+        symbol: 'none',
+        areaStyle: isMobile ? undefined : {
           color: {
             type: 'linear',
             x: 0,
@@ -591,8 +626,11 @@ function renderChart() {
     ],
     legend: {
       data: ['海拔', '速度'],
-      top: 10,
+      top: isMobile ? 5 : 10,
       right: 20,
+      textStyle: {
+        fontSize: isMobile ? 10 : 12,
+      },
     },
   }
 

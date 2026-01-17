@@ -22,7 +22,7 @@ class MapLayerConfig(BaseModel):
     """地图底图配置"""
     id: str = Field(..., description="地图唯一标识")
     name: str = Field(..., description="地图显示名称")
-    url: str = Field(..., description="瓦片 URL 模板，支持 {x}, {y}, {z}, {s}, {ak}, {tk} 占位符")
+    url: Optional[str] = Field(None, description="瓦片 URL 模板，支持 {x}, {y}, {z}, {s}, {ak}, {tk} 占位符")
     crs: CRSType = Field(..., description="坐标系类型")
     attribution: str = Field(default="", description="版权信息")
     max_zoom: int = Field(default=19, description="最大缩放级别")

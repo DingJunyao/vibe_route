@@ -559,4 +559,16 @@ onUnmounted(() => {
 .card-actions .el-button {
   flex: 1;
 }
+
+/* 防止移动端拖动卡片 */
+.mobile-card-list {
+  touch-action: pan-y pinch-zoom;
+}
+
+.track-card {
+  touch-action: pan-y pinch-zoom;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
 </style>

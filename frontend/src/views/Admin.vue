@@ -56,6 +56,15 @@
                           <span class="layer-name">{{ layer.name }}</span>
                           <span class="layer-id">({{ layer.id }})</span>
                         </el-radio>
+                        <!-- 天地图 tk 输入框 -->
+                        <el-input
+                          v-if="layer.id === 'tianditu'"
+                          v-model="layer.tk"
+                          placeholder="请输入天地图 tk"
+                          size="small"
+                          style="width: 200px"
+                          clearable
+                        />
                         <el-switch
                           v-model="layer.enabled"
                           @change="onMapLayerToggle(layer)"
@@ -744,6 +753,17 @@ onMounted(async () => {
 
 .layer-status {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.map-layer-item :deep(.el-input) {
+  margin-left: 8px;
+}
+
+.map-layer-item :deep(.el-input__wrapper) {
+  width: 200px;
 }
 
 /* 移动端响应式 */

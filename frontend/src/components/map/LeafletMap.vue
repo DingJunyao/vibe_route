@@ -2,7 +2,8 @@
   <div class="leaflet-map-container">
     <div ref="mapContainer" class="map"></div>
     <div class="map-controls">
-      <el-button-group size="small">
+      <!-- 桌面端：按钮组 -->
+      <el-button-group size="small" class="desktop-layer-selector">
         <el-button
           v-for="layer in mapLayers"
           :key="layer.id"
@@ -12,7 +13,21 @@
           {{ layer.name }}
         </el-button>
       </el-button-group>
-      <el-button-group size="small" style="margin-left: 8px">
+      <!-- 移动端：下拉选择器 -->
+      <el-select
+        v-model="currentLayerId"
+        size="small"
+        class="mobile-layer-selector"
+        @change="switchLayer"
+      >
+        <el-option
+          v-for="layer in mapLayers"
+          :key="layer.id"
+          :label="layer.name"
+          :value="layer.id"
+        />
+      </el-select>
+      <el-button-group size="small" class="fullscreen-btn">
         <el-button @click="toggleFullscreen">
           <el-icon><FullScreen /></el-icon>
         </el-button>
@@ -173,19 +188,6 @@ function addTileLayer(layerId: string) {
     }
   })
 
-  // 替换 URL 中的占位符（支持 tk 和 ak）
-  let url = layerConfig.url
-  if (layerConfig.tk) {
-    url = url.replace('{tk}', layerConfig.tk)
-  } else {
-    url = url.replace(/[?&]tk={tk}&?/, '').replace(/[?&]$/, '')
-  }
-  if (layerConfig.ak) {
-    url = url.replace('{ak}', layerConfig.ak)
-  } else {
-    url = url.replace(/[?&]ak={ak}&?/, '').replace(/[?&]$/, '')
-  }
-
   // 添加新底图
   // 使用 leaflet.chinatmsproviders 提供的中国地图瓦片
   if (layerConfig.crs === 'bd09') {
@@ -195,15 +197,16 @@ function addTileLayer(layerId: string) {
       chinaProvider('Baidu.Normal.Map', {
         maxZoom: layerConfig.max_zoom,
         minZoom: layerConfig.min_zoom,
+        attribution: layerConfig.attribution,
       }).addTo(map.value)
-    } else {
-      // 降级方案：使用标准 TileLayer
+    } else if (layerConfig.url) {
+      // 降级方案：使用配置的 URL
       L.tileLayer(layerConfig.url, {
         maxZoom: layerConfig.max_zoom,
         minZoom: layerConfig.min_zoom,
         attribution: layerConfig.attribution,
         subdomains: layerConfig.subdomains || undefined,
-      }).addTo(map.value)
+      }).addTo(map.value as L.Map)
     }
   } else if (layerConfig.crs === 'gcj02') {
     // 高德地图和天地图都使用 GCJ02 坐标系
@@ -217,6 +220,7 @@ function addTileLayer(layerId: string) {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
           key: tk,
+          attribution: layerConfig.attribution,
         }).addTo(map.value)
         chinaProvider('TianDiTu.Normal.Annotion', {
           maxZoom: layerConfig.max_zoom,
@@ -228,24 +232,28 @@ function addTileLayer(layerId: string) {
         chinaProvider('GaoDe.Normal.Map', {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
         }).addTo(map.value)
       }
-    } else {
+    } else if (layerConfig.url) {
+      // 降级方案：使用配置的 URL
       L.tileLayer(layerConfig.url, {
         maxZoom: layerConfig.max_zoom,
         minZoom: layerConfig.min_zoom,
         attribution: layerConfig.attribution,
         subdomains: layerConfig.subdomains || undefined,
-      }).addTo(map.value)
+      }).addTo(map.value as L.Map)
     }
   } else {
-    // OSM 或其他 WGS84 地图
-    L.tileLayer(layerConfig.url, {
-      maxZoom: layerConfig.max_zoom,
-      minZoom: layerConfig.min_zoom,
-      attribution: layerConfig.attribution,
-      subdomains: layerConfig.subdomains || undefined,
-    }).addTo(map.value)
+    // OSM 或其他 WGS84 地图，使用配置的 URL
+    if (layerConfig.url) {
+      L.tileLayer(layerConfig.url, {
+        maxZoom: layerConfig.max_zoom,
+        minZoom: layerConfig.min_zoom,
+        attribution: layerConfig.attribution,
+        subdomains: layerConfig.subdomains || undefined,
+      }).addTo(map.value as L.Map)
+    }
   }
 }
 
@@ -329,7 +337,8 @@ function handleFullscreenChange() {
 }
 
 // 根据坐标系获取经纬度字段
-function getCoordsByCRS(point: Point, crs: CRSType): [number, number] | null {
+// 注意：天地图使用 chinaProvider 时，瓦片数据已经是 GCJ02 偏移过的，所以应该传入 WGS84 坐标
+function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, number] | null {
   if (crs === 'wgs84') {
     const lat = point.latitude_wgs84 ?? point.latitude
     const lng = point.longitude_wgs84 ?? point.longitude
@@ -337,10 +346,20 @@ function getCoordsByCRS(point: Point, crs: CRSType): [number, number] | null {
       return [lat, lng]
     }
   } else if (crs === 'gcj02') {
-    const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
-    const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
-    if (lat !== undefined && lng !== undefined) {
-      return [lat, lng]
+    // 天地图使用 chinaProvider，瓦片数据已经是 GCJ02 的，所以传入 WGS84 坐标
+    if (mapId === 'tianditu') {
+      const lat = point.latitude_wgs84 ?? point.latitude
+      const lng = point.longitude_wgs84 ?? point.longitude
+      if (lat !== undefined && lng !== undefined) {
+        return [lat, lng]
+      }
+    } else {
+      // 其他 GCJ02 地图（如高德）使用 GCJ02 坐标
+      const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
+      const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
+      if (lat !== undefined && lng !== undefined) {
+        return [lat, lng]
+      }
     }
   } else if (crs === 'bd09') {
     const lat = point.latitude_bd09 ?? point.latitude_wgs84 ?? point.latitude
@@ -357,6 +376,7 @@ function drawTracks() {
   if (!map.value || !props.tracks.length) return
 
   const crs = currentLayerConfig.value?.crs || 'wgs84'
+  const mapId = currentLayerConfig.value?.id
 
   // 清除现有轨迹
   clearTracks()
@@ -369,7 +389,7 @@ function drawTracks() {
     const latLngs: L.LatLngExpression[] = []
 
     for (const point of track.points) {
-      const coords = getCoordsByCRS(point, crs)
+      const coords = getCoordsByCRS(point, crs, mapId)
       if (!coords) continue
 
       const [lat, lng] = coords
@@ -486,6 +506,35 @@ onUnmounted(() => {
   top: 10px;
   right: 10px;
   z-index: 1000;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 桌面端：显示按钮组 */
+.desktop-layer-selector {
+  display: flex;
+}
+
+/* 移动端：显示下拉选择器，隐藏按钮组 */
+.mobile-layer-selector {
+  display: none;
+  width: 100px;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .desktop-layer-selector {
+    display: none;
+  }
+
+  .mobile-layer-selector {
+    display: block;
+  }
+
+  .fullscreen-btn {
+    flex-shrink: 0;
+  }
 }
 
 :deep(.leaflet-container) {

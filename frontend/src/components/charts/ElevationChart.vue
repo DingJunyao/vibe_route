@@ -46,22 +46,43 @@ function initChart() {
 function updateChart() {
   if (!chart || !props.data || props.data.length === 0) return
 
+  // 判断是否为移动端
+  const isMobile = window.innerWidth <= 768
+
+  // 移动端数据采样：数据点过多时进行降采样
+  let sampledData = props.data
+  let highlightOffset = 0
+
+  console.log('isMobile', isMobile)
+  if (isMobile && props.data.length > 80) {
+    // 移动端使用更激进的采样：目标约 40-50 个点
+    const targetPoints = 45
+    const step = Math.ceil(props.data.length / targetPoints)
+    sampledData = props.data.filter((_p: DataPoint, index: number) => index % step === 0)
+
+    // 计算高亮索引的偏移量
+    if (props.highlightIndex !== null) {
+      highlightOffset = Math.floor(props.highlightIndex / step)
+    }
+  }
+
   // 提取数据
-  const distances = props.data.map((p) => p.distance)
-  const elevations = props.data.map((p) => p.elevation)
-  const speeds = props.data.map((p) => p.speed)
+  const elevations = sampledData.map((p: DataPoint) => p.elevation)
+  const speeds = sampledData.map((p: DataPoint) => p.speed)
 
   // 计算最小和最大海拔
-  const minElevation = Math.min(...elevations.filter((e) => e !== null))
-  const maxElevation = Math.max(...elevations.filter((e) => e !== null))
+  const validElevations = elevations.filter((e: number | null) => e !== null)
+  const minElevation = Math.min(...validElevations)
+  const maxElevation = Math.max(...validElevations)
 
   // 构建图表配置
   const option: EChartsOption = {
     grid: {
-      left: '50px',
-      right: '50px',
-      top: '30px',
-      bottom: '30px',
+      left: isMobile ? '30px' : '50px',
+      right: isMobile ? '15px' : '50px',
+      top: '15px',
+      bottom: isMobile ? '20px' : '30px',
+      containLabel: false,
     },
     tooltip: {
       trigger: 'axis',
@@ -70,7 +91,7 @@ function updateChart() {
       },
       formatter: (params: any) => {
         if (!Array.isArray(params)) return ''
-        const point = props.data[params[0].dataIndex]
+        const point = sampledData[params[0].dataIndex]
         let html = `<strong>点 ${point.index}</strong><br/>`
         if (point.time) {
           html += `时间: ${point.time}<br/>`
@@ -88,16 +109,15 @@ function updateChart() {
       },
     },
     xAxis: {
-      type: 'category',
-      data: props.data.map((p) => p.index),
-      axisLine: { show: false },
-      axisTick: { show: false },
-      axisLabel: { show: false },
+      type: 'value',
+      min: 0,
+      max: sampledData.length - 1,
+      show: false, // 完全隐藏 x 轴
     },
     yAxis: [
       {
         type: 'value',
-        name: '海拔 (m)',
+        name: isMobile ? 'm' : '海拔 (m)',
         scale: true,
         splitLine: {
           lineStyle: {
@@ -106,9 +126,11 @@ function updateChart() {
         },
         axisLabel: {
           formatter: '{value}',
+          fontSize: isMobile ? 9 : 12,
         },
         min: (minElevation - 50).toFixed(0),
         max: (maxElevation + 50).toFixed(0),
+        splitNumber: isMobile ? 3 : 5,
       },
     ],
     series: [
@@ -116,13 +138,14 @@ function updateChart() {
         name: '海拔',
         type: 'line',
         data: elevations,
-        smooth: true,
+        smooth: !isMobile,
+        sampling: isMobile ? 'lttb' : null, // 移动端使用 LTTB 降采样算法
         symbol: 'none',
         lineStyle: {
           color: '#3b82f6',
-          width: 2,
+          width: isMobile ? 1 : 2,
         },
-        areaStyle: {
+        areaStyle: isMobile ? undefined : {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: 'rgba(59, 130, 246, 0.3)' },
             { offset: 1, color: 'rgba(59, 130, 246, 0.05)' },
@@ -131,9 +154,10 @@ function updateChart() {
         markPoint: props.highlightIndex !== null
           ? [
               {
-                coord: [props.highlightIndex, elevations[props.highlightIndex]],
+                xAxis: highlightOffset,
+                yAxis: elevations[highlightOffset],
                 symbol: 'circle',
-                symbolSize: 10,
+                symbolSize: 8,
                 itemStyle: {
                   color: '#ef4444',
                 },
@@ -142,19 +166,29 @@ function updateChart() {
           : undefined,
       },
     ],
-    dataZoom: [
-      {
-        type: 'inside',
-        start: 0,
-        end: 100,
-      },
-      {
-        start: 0,
-        end: 100,
-        height: 20,
-        bottom: 0,
-      },
-    ],
+    dataZoom: isMobile
+      ? [
+          {
+            type: 'inside',
+            start: 0,
+            end: 100,
+            zoomOnMouseWheel: true,
+            moveOnMouseMove: true,
+          },
+        ]
+      : [
+          {
+            type: 'inside',
+            start: 0,
+            end: 100,
+          },
+          {
+            start: 0,
+            end: 100,
+            height: 20,
+            bottom: 0,
+          },
+        ],
   }
 
   // 如果显示速度，添加第二个 Y 轴
@@ -163,23 +197,26 @@ function updateChart() {
       option.yAxis![0],
       {
         type: 'value',
-        name: '速度 (km/h)',
+        name: isMobile ? 'km/h' : '速度 (km/h)',
         position: 'right',
         splitLine: { show: false },
         axisLabel: {
           formatter: '{value}',
+          fontSize: isMobile ? 9 : 12,
         },
+        splitNumber: isMobile ? 3 : 5,
       },
     ]
     option.series!.push({
       name: '速度',
       type: 'line',
-      data: speeds.map((s) => (s !== null ? s * 3.6 : null)), // 转换为 km/h
-      smooth: true,
+      data: speeds.map((s) => (s !== null ? s * 3.6 : null)),
+      smooth: !isMobile,
+      sampling: isMobile ? 'lttb' : null,
       symbol: 'none',
       lineStyle: {
         color: '#10b981',
-        width: 2,
+        width: isMobile ? 1 : 2,
       },
     })
   }
