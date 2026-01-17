@@ -65,6 +65,12 @@ class ConfigUpdate(BaseModel):
     map_layers: Optional[Dict[str, Dict]] = None
 
 
+class PublicConfigResponse(BaseModel):
+    """公开配置响应 schema（普通用户可访问）"""
+    default_map_provider: str
+    map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
+
+
 class InviteCodeCreate(BaseModel):
     """邀请码创建 schema"""
     code: Optional[str] = None  # 不提供则自动生成

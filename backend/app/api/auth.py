@@ -9,6 +9,7 @@ from app.core.deps import get_current_user
 from app.core.security import create_access_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse, TokenResponse
+from app.schemas.config import PublicConfigResponse
 from app.services.user_service import user_service
 from app.services.config_service import config_service
 
@@ -137,3 +138,18 @@ async def logout():
     实际上只需要客户端删除 token 即可，这里主要用于记录日志等
     """
     return {"message": "登出成功"}
+
+
+@router.get("/config", response_model=PublicConfigResponse)
+async def get_public_config(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取公开配置（任何用户可访问，包括未登录用户）
+    只返回地图相关配置，不返回管理相关配置
+    """
+    configs = await config_service.get_all_configs(db)
+    return PublicConfigResponse(
+        default_map_provider=configs.get("default_map_provider", "osm"),
+        map_layers=configs.get("map_layers", {}),
+    )

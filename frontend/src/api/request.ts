@@ -37,13 +37,20 @@ request.interceptors.response.use(
   (error) => {
     if (error.response) {
       const { status, data } = error.response
+      const isLoginPage = window.location.pathname === '/login'
 
       switch (status) {
         case 401:
-          ElMessage.error('未授权，请重新登录')
-          // 清除 token 并跳转到登录页
-          localStorage.removeItem('token')
-          window.location.href = '/login'
+          // 使用后端返回的具体错误信息
+          ElMessage.error(data.detail || '未授权，请重新登录')
+          // 如果不在登录页，清除 token 并跳转到登录页
+          if (!isLoginPage) {
+            localStorage.removeItem('token')
+            window.location.href = '/login'
+          } else {
+            // 在登录页时只清除 token
+            localStorage.removeItem('token')
+          }
           break
         case 403:
           ElMessage.error(data.detail || '没有权限访问此资源')

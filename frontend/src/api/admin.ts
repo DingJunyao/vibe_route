@@ -72,6 +72,7 @@ export interface User {
   username: string
   email?: string
   is_admin: boolean
+  is_active: boolean
   is_valid: boolean
   created_at: string
   updated_at: string
@@ -112,7 +113,7 @@ export const adminApi = {
   },
 
   // 更新用户
-  updateUser(userId: number, data: { is_admin?: boolean; is_valid?: boolean }): Promise<User> {
+  updateUser(userId: number, data: { is_admin?: boolean; is_active?: boolean }): Promise<User> {
     return http.put(`/admin/users/${userId}`, data)
   },
 

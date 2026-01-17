@@ -158,8 +158,8 @@
                 </el-table-column>
                 <el-table-column label="状态" width="100">
                   <template #default="{ row }">
-                    <el-tag :type="row.is_valid ? 'success' : 'info'" size="small">
-                      {{ row.is_valid ? '正常' : '已禁用' }}
+                    <el-tag :type="row.is_active ? 'success' : 'info'" size="small">
+                      {{ row.is_active ? '正常' : '已禁用' }}
                     </el-tag>
                   </template>
                 </el-table-column>
@@ -189,11 +189,11 @@
                       已是管理员
                     </el-button>
                     <el-button
-                      v-if="row.is_valid"
+                      v-if="row.is_active"
                       type="warning"
                       size="small"
                       text
-                      @click="toggleUserValid(row)"
+                      @click="toggleUserActive(row)"
                     >
                       禁用
                     </el-button>
@@ -202,7 +202,7 @@
                       type="success"
                       size="small"
                       text
-                      @click="toggleUserValid(row)"
+                      @click="toggleUserActive(row)"
                     >
                       启用
                     </el-button>
@@ -447,7 +447,7 @@ async function saveConfig() {
     }
     const updatedConfig = await adminApi.updateConfig(updateData)
     // 更新 config store 中的配置
-    configStore.config = updatedConfig
+    configStore.adminConfig = updatedConfig
     ElMessage.success('配置保存成功')
   } catch (error) {
     // 错误已在拦截器中处理
@@ -485,13 +485,13 @@ async function toggleUserAdmin(user: User) {
 }
 
 // 切换用户启用状态
-async function toggleUserValid(user: User) {
-  const action = user.is_valid ? '禁用' : '启用'
+async function toggleUserActive(user: User) {
+  const action = user.is_active ? '禁用' : '启用'
   try {
     await ElMessageBox.confirm(`确定要${action}用户 "${user.username}" 吗？`, '确认操作', {
       type: 'warning',
     })
-    await adminApi.updateUser(user.id, { is_valid: !user.is_valid })
+    await adminApi.updateUser(user.id, { is_active: !user.is_active })
     ElMessage.success('操作成功')
     await loadUsers()
   } catch (error) {

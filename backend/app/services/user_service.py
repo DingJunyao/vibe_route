@@ -43,7 +43,35 @@ class UserService:
         is_admin: bool = False,
         created_by: int = None,
     ) -> User:
-        """创建用户"""
+        """创建用户，如果用户名或邮箱已被软删除用户占用，则复用该记录"""
+        # 检查是否有已删除的用户使用相同的用户名或邮箱
+        result = await db.execute(
+            select(User).where(
+                and_(
+                    (User.username == username) | (User.email == email),
+                    User.is_valid == False
+                )
+            )
+        )
+        deleted_user = result.scalar_one_or_none()
+
+        if deleted_user:
+            # 复用已删除的用户记录
+            deleted_user.username = username
+            deleted_user.email = email
+            deleted_user.hashed_password = get_password_hash(password)
+            deleted_user.is_admin = is_admin
+            deleted_user.is_active = True
+            deleted_user.is_valid = True
+            deleted_user.created_by = created_by
+            deleted_user.updated_by = created_by
+            deleted_user.created_at = datetime.now(timezone.utc)
+            deleted_user.updated_at = datetime.now(timezone.utc)
+            await db.commit()
+            await db.refresh(deleted_user)
+            return deleted_user
+
+        # 创建新用户
         user = User(
             username=username,
             email=email,

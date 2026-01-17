@@ -30,7 +30,7 @@
                 <el-icon><Setting /></el-icon>
                 后台管理
               </el-dropdown-item>
-              <el-dropdown-item command="logout" divided>
+              <el-dropdown-item command="logout">
                 <el-icon><SwitchButton /></el-icon>
                 退出登录
               </el-dropdown-item>

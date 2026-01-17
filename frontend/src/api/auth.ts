@@ -1,4 +1,5 @@
 import { http } from './request'
+import type { MapLayerConfig } from './admin'
 
 // 类型定义
 export interface User {
@@ -28,6 +29,12 @@ export interface AuthResponse {
   user: User
 }
 
+// 公开配置（普通用户可访问）
+export interface PublicConfig {
+  default_map_provider: string
+  map_layers: Record<string, MapLayerConfig>
+}
+
 // API 方法
 export const authApi = {
   // 登录
@@ -48,5 +55,10 @@ export const authApi = {
   // 登出
   logout(): Promise<{ message: string }> {
     return http.post('/auth/logout')
+  },
+
+  // 获取公开配置（地图配置）
+  getPublicConfig(): Promise<PublicConfig> {
+    return http.get('/auth/config')
   },
 }
