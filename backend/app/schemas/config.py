@@ -21,7 +21,7 @@ class MapLayerConfig(BaseModel):
     """地图底图配置"""
     id: str = Field(..., description="地图唯一标识")
     name: str = Field(..., description="地图显示名称")
-    url: str = Field(..., description="瓦片 URL 模板，支持 {x}, {y}, {z}, {s} 占位符")
+    url: str = Field(..., description="瓦片 URL 模板，支持 {x}, {y}, {z}, {s}, {ak} 占位符")
     crs: CRSType = Field(..., description="坐标系类型")
     attribution: str = Field(default="", description="版权信息")
     max_zoom: int = Field(default=19, description="最大缩放级别")
@@ -29,6 +29,7 @@ class MapLayerConfig(BaseModel):
     enabled: bool = Field(default=True, description="是否启用")
     order: int = Field(default=0, description="显示顺序")
     subdomains: Optional[str | List[str]] = Field(default=None, description="子域名列表，如 'abc' 或 ['0','1','2']")
+    ak: Optional[str] = Field(default="", description="百度地图 AK")
 
 
 class GeocodingProvider(str):

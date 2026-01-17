@@ -25,6 +25,8 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import 'proj4leaflet'
+import 'leaflet.chinatmsproviders'
 import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
 import type { MapLayerConfig, CRSType } from '@/api/admin'
@@ -85,6 +87,9 @@ const currentLayerId = ref<string>(
 // 当前地图层配置
 const currentLayerConfig = ref<MapLayerConfig | undefined>(undefined)
 
+// 当前使用的 CRS
+const currentCRS = ref<L.CRS>(L.CRS.EPSG3857)
+
 // 可用的地图层列表
 const mapLayers = ref<MapLayerConfig[]>([])
 
@@ -107,6 +112,16 @@ function updateCurrentLayerConfig() {
   currentLayerConfig.value = configStore.getMapLayerById(currentLayerId.value)
 }
 
+// 根据坐标系类型获取 CRS
+// leaflet.chinatmsproviders 会注册 L.CRS.Baidu
+function getCRS(crsType: CRSType): L.CRS {
+  if (crsType === 'bd09') {
+    // leaflet.chinatmsproviders 提供的百度 CRS
+    return (L.CRS as any).Baidu || L.CRS.EPSG3857
+  }
+  return L.CRS.EPSG3857
+}
+
 // 初始化地图
 function initMap() {
   console.log('[LeafletMap] initMap, mapContainer:', mapContainer.value)
@@ -115,14 +130,20 @@ function initMap() {
     return
   }
 
+  // 获取当前层配置
+  const layerConfig = currentLayerConfig.value
+  const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
+  currentCRS.value = crs
+
   // 创建地图
   map.value = L.map(mapContainer.value, {
     center: [39.9, 116.4],
     zoom: 10,
     zoomControl: true,
+    crs: crs,
   })
 
-  console.log('[LeafletMap] map created:', map.value)
+  console.log('[LeafletMap] map created with CRS:', crs, layerConfig)
 
   // 添加默认底图（使用当前提供商）
   addTileLayer(currentLayerId.value)
@@ -152,22 +173,109 @@ function addTileLayer(layerId: string) {
   })
 
   // 添加新底图
-  L.tileLayer(layerConfig.url, {
-    maxZoom: layerConfig.max_zoom,
-    minZoom: layerConfig.min_zoom,
-    attribution: layerConfig.attribution,
-    subdomains: layerConfig.subdomains || undefined,
-  }).addTo(map.value as L.Map)
+  // 使用 leaflet.chinatmsproviders 提供的中国地图瓦片
+  if (layerConfig.crs === 'bd09') {
+    // 百度地图
+    const chinaProvider = (L.tileLayer as any).chinaProvider
+    if (chinaProvider) {
+      chinaProvider('Baidu.Normal.Map', {
+        maxZoom: layerConfig.max_zoom,
+        minZoom: layerConfig.min_zoom,
+      }).addTo(map.value)
+    } else {
+      // 降级方案：使用标准 TileLayer
+      L.tileLayer(layerConfig.url, {
+        maxZoom: layerConfig.max_zoom,
+        minZoom: layerConfig.min_zoom,
+        attribution: layerConfig.attribution,
+        subdomains: layerConfig.subdomains || undefined,
+      }).addTo(map.value)
+    }
+  } else if (layerConfig.crs === 'gcj02') {
+    // 高德地图 - 使用 GaoDe 而不是 Gaode
+    const chinaProvider = (L.tileLayer as any).chinaProvider
+    if (chinaProvider) {
+      chinaProvider('GaoDe.Normal.Map', {
+        maxZoom: layerConfig.max_zoom,
+        minZoom: layerConfig.min_zoom,
+      }).addTo(map.value)
+    } else {
+      L.tileLayer(layerConfig.url, {
+        maxZoom: layerConfig.max_zoom,
+        minZoom: layerConfig.min_zoom,
+        attribution: layerConfig.attribution,
+        subdomains: layerConfig.subdomains || undefined,
+      }).addTo(map.value)
+    }
+  } else {
+    // OSM 或其他 WGS84 地图
+    let url = layerConfig.url
+    L.tileLayer(url, {
+      maxZoom: layerConfig.max_zoom,
+      minZoom: layerConfig.min_zoom,
+      attribution: layerConfig.attribution,
+      subdomains: layerConfig.subdomains || undefined,
+    }).addTo(map.value)
+  }
 }
 
 // 切换底图
 function switchLayer(layerId: string) {
+  const newLayerConfig = configStore.getMapLayerById(layerId)
+  if (!newLayerConfig) return
+
+  // 检查 CRS 是否需要改变
+  const newCRS = getCRS(newLayerConfig.crs)
+  const needsRecreate = currentLayerConfig.value?.crs !== newLayerConfig.crs
+
   currentLayerId.value = layerId
   updateCurrentLayerConfig()
-  addTileLayer(layerId)
+
+  if (needsRecreate) {
+    // CRS 不同，需要重新创建地图
+    currentCRS.value = newCRS
+    recreateMap()
+  } else {
+    // CRS 相同，只需要切换瓦片层
+    addTileLayer(layerId)
+  }
 
   // 重新绘制轨迹（使用正确的坐标系）
   updateTracks()
+}
+
+// 重新创建地图（用于切换 CRS）
+function recreateMap() {
+  if (!mapContainer.value) return
+
+  // 移除旧地图
+  if (map.value) {
+    map.value.remove()
+  }
+
+  // 获取当前视图状态
+  const layerConfig = currentLayerConfig.value
+  const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
+
+  // 创建新地图
+  map.value = L.map(mapContainer.value, {
+    center: [39.9, 116.4],
+    zoom: 10,
+    zoomControl: true,
+    crs: crs,
+  })
+
+  // 添加底图
+  addTileLayer(currentLayerId.value)
+
+  // 添加比例尺
+  L.control.scale({
+    position: 'bottomleft',
+    imperial: false,
+  }).addTo(map.value as L.Map)
+
+  // 重新绘制轨迹
+  drawTracks()
 }
 
 // 切换全屏

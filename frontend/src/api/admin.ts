@@ -15,6 +15,7 @@ export interface MapLayerConfig {
   enabled: boolean
   order: number
   subdomains?: string | string[]
+  ak?: string
 }
 
 // 系统配置相关接口

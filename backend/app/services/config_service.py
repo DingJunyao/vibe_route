@@ -64,14 +64,15 @@ class ConfigService:
             "baidu": {
                 "id": "baidu",
                 "name": "百度地图",
-                "url": "https://online{s}.map.bdimg.com/tile/?qt=tile&x={x}&y={y}&z={z}&styles=pl",
+                "url": "https://apimaponline{s}.bdimg.com/tile/?qt=vtile&v=three&ak={ak}&x={x}&y={y}&z={z}&styles=pl&scaler=2&udt=20211014&from=mapvthree",
                 "crs": "bd09",
                 "attribution": "&copy; 百度地图",
                 "max_zoom": 19,
-                "min_zoom": 1,
+                "min_zoom": 3,
                 "enabled": True,
                 "order": 2,
-                "subdomains": ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+                "subdomains": ["0", "1", "2", "3"],
+                "ak": "",
             },
         },
     }
