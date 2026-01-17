@@ -74,6 +74,19 @@ class ConfigService:
                 "subdomains": ["0", "1", "2", "3"],
                 "ak": "",
             },
+            "tianditu": {
+                "id": "tianditu",
+                "name": "天地图",
+                "url": "https://t{s}.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk={tk}",
+                "crs": "gcj02",  # 天地图使用 GCJ02 坐标系
+                "attribution": "&copy; 天地图",
+                "max_zoom": 18,
+                "min_zoom": 1,
+                "enabled": True,
+                "order": 3,
+                "subdomains": ["0", "1", "2", "3", "4", "5", "6", "7"],
+                "tk": "",  # 天地图 tk 需要在天地图官网申请
+            },
         },
     }
 

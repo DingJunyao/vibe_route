@@ -15,7 +15,8 @@ export interface MapLayerConfig {
   enabled: boolean
   order: number
   subdomains?: string | string[]
-  ak?: string
+  ak?: string  // 百度地图 AK
+  tk?: string  // 天地图 tk
 }
 
 // 系统配置相关接口

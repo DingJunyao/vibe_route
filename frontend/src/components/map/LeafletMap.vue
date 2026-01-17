@@ -116,9 +116,10 @@ function updateCurrentLayerConfig() {
 // leaflet.chinatmsproviders 会注册 L.CRS.Baidu
 function getCRS(crsType: CRSType): L.CRS {
   if (crsType === 'bd09') {
-    // leaflet.chinatmsproviders 提供的百度 CRS
+    // 百度地图使用专门的 CRS
     return (L.CRS as any).Baidu || L.CRS.EPSG3857
   }
+  // 天地图和高德地图都使用 GCJ02，但天地图不需要特殊的 CRS
   return L.CRS.EPSG3857
 }
 
@@ -172,6 +173,19 @@ function addTileLayer(layerId: string) {
     }
   })
 
+  // 替换 URL 中的占位符（支持 tk 和 ak）
+  let url = layerConfig.url
+  if (layerConfig.tk) {
+    url = url.replace('{tk}', layerConfig.tk)
+  } else {
+    url = url.replace(/[?&]tk={tk}&?/, '').replace(/[?&]$/, '')
+  }
+  if (layerConfig.ak) {
+    url = url.replace('{ak}', layerConfig.ak)
+  } else {
+    url = url.replace(/[?&]ak={ak}&?/, '').replace(/[?&]$/, '')
+  }
+
   // 添加新底图
   // 使用 leaflet.chinatmsproviders 提供的中国地图瓦片
   if (layerConfig.crs === 'bd09') {
@@ -192,13 +206,30 @@ function addTileLayer(layerId: string) {
       }).addTo(map.value)
     }
   } else if (layerConfig.crs === 'gcj02') {
-    // 高德地图 - 使用 GaoDe 而不是 Gaode
+    // 高德地图和天地图都使用 GCJ02 坐标系
     const chinaProvider = (L.tileLayer as any).chinaProvider
     if (chinaProvider) {
-      chinaProvider('GaoDe.Normal.Map', {
-        maxZoom: layerConfig.max_zoom,
-        minZoom: layerConfig.min_zoom,
-      }).addTo(map.value)
+      // 根据地图 ID 使用不同的 provider
+      if (layerConfig.id === 'tianditu') {
+        // 天地图需要同时添加底图层和标注层
+        const tk = layerConfig.tk || ''
+        chinaProvider('TianDiTu.Normal.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+        }).addTo(map.value)
+        chinaProvider('TianDiTu.Normal.Annotion', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+        }).addTo(map.value)
+      } else {
+        // 高德地图
+        chinaProvider('GaoDe.Normal.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+        }).addTo(map.value)
+      }
     } else {
       L.tileLayer(layerConfig.url, {
         maxZoom: layerConfig.max_zoom,
@@ -209,8 +240,7 @@ function addTileLayer(layerId: string) {
     }
   } else {
     // OSM 或其他 WGS84 地图
-    let url = layerConfig.url
-    L.tileLayer(url, {
+    L.tileLayer(layerConfig.url, {
       maxZoom: layerConfig.max_zoom,
       minZoom: layerConfig.min_zoom,
       attribution: layerConfig.attribution,
