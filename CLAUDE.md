@@ -79,14 +79,32 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 hashed_password = pwd_context.hash(sha256_password_from_frontend)
 ```
 
+### 公开配置 vs 管理员配置
+
+系统有两套配置 API，根据用户权限区分：
+
+- **公开配置** (`GET /api/auth/config`)：任何用户可访问，只返回地图相关配置（`default_map_provider`, `map_layers`）
+- **管理员配置** (`GET /api/admin/config`)：需要管理员权限，返回完整配置（包括注册开关、邀请码配置等）
+
+前端 [`config.ts`](frontend/src/stores/config.ts) store 会根据用户权限自动选择合适的 API。
+
 ### 多坐标系支持
 
 轨迹点存储三种坐标系（[`track.py:62-67`](backend/app/models/track.py)）：
 - **WGS84**: 国际标准坐标系（GPS 原始坐标）
-- **GCJ02**: 中国火星坐标系（高德、腾讯地图）
+- **GCJ02**: 中国火星坐标系（高德、腾讯地图、天地图）
 - **BD09**: 百度坐标系
 
 地图组件（[`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue)）根据选择的底图自动使用对应坐标。
+
+### 用户状态字段
+
+用户模型有两个易混淆的状态字段：
+
+- **`is_valid`**: 软删除标记，用于逻辑删除用户。查询用户时会过滤 `is_valid = False` 的记录
+- **`is_active`**: 账户启用状态，控制用户能否登录。被禁用的用户无法登录但数据仍保留
+
+用户创建时会复用已删除（`is_valid = False`）用户的用户名或邮箱记录，而非创建新记录。
 
 ### 数据库模型
 
@@ -96,6 +114,8 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 - [`TrackPoint`](backend/app/models/track.py): 轨迹点表，存储三种坐标和地理编码信息
 - [`Task`](backend/app/models/task.py): 异步任务（信息覆盖层生成等）
 - [`Config`](backend/app/models/config.py): 系统配置（邀请码、地图提供商等）
+
+所有模型继承 [`AuditMixin`](backend/app/models/base.py)，包含 `created_at`, `updated_at`, `created_by`, `updated_by`, `is_valid` 字段。
 
 ### 路由守卫
 
@@ -108,7 +128,8 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 
 [`request.ts`](frontend/src/api/request.ts) 配置：
 - 自动添加 `Authorization: Bearer {token}` 头
-- 401 响应自动清除 token 并跳转登录页
+- 401 响应使用后端返回的具体错误信息（如"用户名或密码错误"）
+- 如果不在登录页，401 会清除 token 并跳转登录页
 - 统一错误处理和消息提示
 
 ### gpxutil 集成
@@ -124,6 +145,7 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 - 移动端断点：`screenWidth <= 768px`
 - 桌面端隐藏类：`.desktop-only`
 - 移动端使用卡片列表替代表格
+- viewport 配置禁止页面缩放：`maximum-scale=1.0, user-scalable=no`
 
 ## File Structure Highlights
 
@@ -136,6 +158,7 @@ backend/
 │   │   ├── deps.py       # 依赖注入（get_current_user, get_current_admin_user）
 │   │   └── security.py   # JWT 和密码哈希
 │   ├── models/           # SQLAlchemy 模型
+│   ├── schemas/          # Pydantic schemas
 │   ├── services/         # 业务逻辑层
 │   └── gpxutil_wrapper/  # gpxutil 集成
 
@@ -157,7 +180,7 @@ frontend/
 1. 在 [`backend/app/api/`](backend/app/api/) 创建路由文件
 2. 使用依赖注入获取当前用户：`current_user: User = Depends(get_current_user)`
 3. 管理员端点使用：`current_user: User = Depends(get_current_admin_user)`
-4. 在 [`main.py:48-53`](backend/app/main.py) 注册路由
+4. 在 [`main.py:49-53`](backend/app/main.py) 注册路由
 
 ### 添加新的前端页面
 
@@ -176,7 +199,10 @@ frontend/
 ## Important Notes
 
 1. **密码处理**: 修改登录/注册相关代码时，确保前端使用 `hashPassword()` 加密
-2. **CORS**: 开发环境后端配置允许所有来源 (`CORS_ORIGINS = ["*"]`)
-3. **网络访问**: Vite 配置使用 `host: '0.0.0.0'` 支持局域网访问
-4. **地图 z-index**: 导航栏 `z-index: 1000`，地图容器 `z-index: 1`
-5. **首用户管理员**: [`config.py:81`](backend/app/core/config.py) 配置 `FIRST_USER_IS_ADMIN = True`
+2. **用户复用**: 用户创建时会复用已删除用户的用户名/邮箱，避免数据库唯一约束冲突
+3. **配置 API**: 普通用户使用 `/auth/config`，管理员使用 `/admin/config`
+4. **CORS**: 开发环境后端配置允许所有来源 (`CORS_ORIGINS = ["*"]`)
+5. **网络访问**: Vite 配置使用 `host: '0.0.0.0'` 支持局域网访问
+6. **地图 z-index**: 导航栏 `z-index: 1000`，地图容器 `z-index: 1`
+7. **首用户管理员**: [`config.py:81`](backend/app/core/config.py) 配置 `FIRST_USER_IS_ADMIN = True`
+8. **移动端 viewport**: `maximum-scale=1.0, user-scalable=no` 防止页面缩放
