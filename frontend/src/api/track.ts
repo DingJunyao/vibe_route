@@ -34,11 +34,16 @@ export interface TrackPoint {
   longitude_bd09: number | null
   elevation: number | null
   speed: number | null
+  bearing: number | null  // 方位角（度），范围 [0, 360)
   province: string | null
   city: string | null
   district: string | null
   road_name: string | null
   road_number: string | null
+  province_en: string | null
+  city_en: string | null
+  district_en: string | null
+  road_name_en: string | null
 }
 
 export interface TrackListResponse {

@@ -15,6 +15,18 @@
             <el-icon><Download /></el-icon>
             下载 GPX
           </el-button>
+          <el-button
+            link
+            type="primary"
+            @click="handleFillGeocoding"
+            class="desktop-only"
+            :loading="fillingGeocoding"
+            :disabled="fillProgress.status === 'filling'"
+            v-if="!track?.has_area_info || !track?.has_road_info"
+          >
+            <el-icon><LocationFilled /></el-icon>
+            填充地理信息
+          </el-button>
         </div>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
@@ -31,6 +43,14 @@
               <el-dropdown-item command="download" v-if="isMobile">
                 <el-icon><Download /></el-icon>
                 下载 GPX
+              </el-dropdown-item>
+              <el-dropdown-item
+                command="fill"
+                v-if="isMobile && (!track?.has_area_info || !track?.has_road_info)"
+                :disabled="fillProgress.status === 'filling'"
+              >
+                <el-icon><LocationFilled /></el-icon>
+                {{ fillProgress.status === 'filling' ? '填充中...' : '填充地理信息' }}
               </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
@@ -140,19 +160,7 @@
             <!-- 轨迹信息 -->
             <el-card class="info-card" shadow="never">
               <template #header>
-                <div class="card-header">
-                  <span>轨迹信息</span>
-                  <el-button
-                    v-if="!track.has_area_info || !track.has_road_info"
-                    type="primary"
-                    size="small"
-                    :loading="fillingGeocoding"
-                    :disabled="fillProgress.status === 'filling'"
-                    @click="handleFillGeocoding"
-                  >
-                    {{ fillProgress.status === 'filling' ? '填充中...' : '填充地理信息' }}
-                  </el-button>
-                </div>
+                <span>轨迹信息</span>
               </template>
               <el-descriptions :column="1" border>
                 <el-descriptions-item label="文件名">
@@ -314,6 +322,7 @@ import {
   ArrowDown,
   Setting,
   SwitchButton,
+  LocationFilled,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse } from '@/api/track'
@@ -423,6 +432,8 @@ function handleCommand(command: string) {
     showEditDialog()
   } else if (command === 'download') {
     downloadDialogVisible.value = true
+  } else if (command === 'fill') {
+    handleFillGeocoding()
   }
 }
 

@@ -165,6 +165,44 @@ class TrackService:
 
         return round(speed, 2)
 
+    def _calculate_bearing(self, lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[float]:
+        """
+        计算从点1到点2的方位角（度）
+
+        Args:
+            lat1, lon1: 第一个点的纬度和经度（度）
+            lat2, lon2: 第二个点的纬度和经度（度）
+
+        Returns:
+            方位角（度），范围 [0, 360)，如果两点重合则返回 None
+        """
+        from math import radians, degrees, atan2, sin, cos, pi
+
+        # 转换为弧度
+        lat1_rad = radians(lat1)
+        lon1_rad = radians(lon1)
+        lat2_rad = radians(lat2)
+        lon2_rad = radians(lon2)
+
+        dlon = lon2_rad - lon1_rad
+
+        # 计算方位角
+        x = sin(dlon) * cos(lat2_rad)
+        y = cos(lat1_rad) * sin(lat2_rad) - sin(lat1_rad) * cos(lat2_rad) * cos(dlon)
+
+        bearing = atan2(x, y)
+        bearing_deg = degrees(bearing)
+
+        # 转换到 [0, 360) 范围
+        if bearing_deg < 0:
+            bearing_deg += 360
+
+        # 检查两点是否重合（方位角无意义）
+        if abs(lat1 - lat2) < 1e-9 and abs(lon1 - lon2) < 1e-9:
+            return None
+
+        return round(bearing_deg, 2)
+
     async def create_from_gpx(
         self,
         db: AsyncSession,
@@ -273,6 +311,14 @@ class TrackService:
                 # 计算速度
                 speed = self._calculate_speed(point.time, prev_point_data['time'], distance_from_prev)
 
+                # 计算方位角
+                bearing = self._calculate_bearing(
+                    prev_point_data['latitude_wgs84'],
+                    prev_point_data['longitude_wgs84'],
+                    all_coords['wgs84'][1],
+                    all_coords['wgs84'][0]
+                )
+
             point_data = {
                 'point_index': idx,
                 'time': point.time,
@@ -284,6 +330,7 @@ class TrackService:
                 'longitude_bd09': all_coords['bd09'][0],
                 'elevation': point.elevation,
                 'speed': speed,
+                'bearing': bearing if idx > 0 else None,  # 第一个点没有方位角
             }
             points_data.append(point_data)
             prev_point_data = point_data
@@ -330,11 +377,16 @@ class TrackService:
                 "longitude_bd09": point_data["longitude_bd09"],
                 "elevation": point_data["elevation"],
                 "speed": point_data["speed"],
+                "bearing": point_data["bearing"],
                 "province": None,
                 "city": None,
                 "district": None,
+                "province_en": None,
+                "city_en": None,
+                "district_en": None,
                 "road_name": None,
                 "road_number": None,
+                "road_name_en": None,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
@@ -435,6 +487,11 @@ class TrackService:
                         point.district = info.get('area', '')
                         point.road_name = info.get('road_name', '')
                         point.road_number = info.get('road_num', '')
+                        # 英文字段
+                        point.province_en = info.get('province_en', '')
+                        point.city_en = info.get('city_en', '')
+                        point.district_en = info.get('area_en', '')
+                        point.road_name_en = info.get('road_name_en', '')
 
                         # 更新审计字段
                         point.updated_by = user_id
@@ -557,6 +614,137 @@ class TrackService:
             .order_by(TrackPoint.point_index)
         )
         return list(result.scalars().all())
+
+    async def update_bearings_for_track(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> dict:
+        """
+        为指定轨迹的所有点计算并更新方位角
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+
+        Returns:
+            更新结果 {"updated": 更新的点数, "total": 总点数}
+        """
+        # 检查权限
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        # 获取所有轨迹点，按 point_index 排序
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            return {"updated": 0, "total": 0}
+
+        updated_count = 0
+        prev_point = None
+
+        for point in points:
+            # 第一个点没有方位角
+            if prev_point is None:
+                point.bearing = None
+            else:
+                # 计算从前一个点到当前点的方位角
+                bearing = self._calculate_bearing(
+                    prev_point.latitude_wgs84,
+                    prev_point.longitude_wgs84,
+                    point.latitude_wgs84,
+                    point.longitude_wgs84
+                )
+                point.bearing = bearing
+                updated_count += 1
+
+            point.updated_by = user_id
+            prev_point = point
+
+        await db.commit()
+
+        logger.info(f"Updated bearings for track {track_id}: {updated_count}/{len(points)} points")
+
+        return {"updated": updated_count, "total": len(points)}
+
+    async def update_bearings_for_all_tracks(
+        self,
+        db: AsyncSession,
+    ) -> dict:
+        """
+        为所有现有轨迹计算并更新方位角
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            更新结果 {"updated_tracks": 更新的轨迹数, "updated_points": 更新的点数, "total_tracks": 总轨迹数}
+        """
+        # 获取所有有效轨迹
+        result = await db.execute(
+            select(Track).where(Track.is_valid == True)
+        )
+        tracks = list(result.scalars().all())
+
+        updated_tracks = 0
+        updated_points = 0
+
+        for track in tracks:
+            try:
+                # 获取轨迹的所有点
+                points_result = await db.execute(
+                    select(TrackPoint)
+                    .where(and_(TrackPoint.track_id == track.id, TrackPoint.is_valid == True))
+                    .order_by(TrackPoint.point_index)
+                )
+                points = list(points_result.scalars().all())
+
+                if not points:
+                    continue
+
+                prev_point = None
+                for point in points:
+                    if prev_point is None:
+                        point.bearing = None
+                    else:
+                        bearing = self._calculate_bearing(
+                            prev_point.latitude_wgs84,
+                            prev_point.longitude_wgs84,
+                            point.latitude_wgs84,
+                            point.longitude_wgs84
+                        )
+                        point.bearing = bearing
+                        updated_points += 1
+
+                    point.updated_by = track.user_id
+                    prev_point = point
+
+                updated_tracks += 1
+
+                # 每处理一个轨迹提交一次
+                await db.commit()
+
+                logger.info(f"Updated bearings for track {track.id} ({track.name})")
+
+            except Exception as e:
+                logger.error(f"Error updating bearings for track {track.id}: {e}")
+                await db.rollback()
+
+        logger.info(f"Bearing update completed: {updated_tracks} tracks, {updated_points} points")
+
+        return {
+            "updated_tracks": updated_tracks,
+            "updated_points": updated_points,
+            "total_tracks": len(tracks)
+        }
 
 
 track_service = TrackService()

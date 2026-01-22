@@ -209,7 +209,7 @@ function addTileLayer(layerId: string) {
       }).addTo(map.value as L.Map)
     }
   } else if (layerConfig.crs === 'gcj02') {
-    // 高德地图和天地图都使用 GCJ02 坐标系
+    // 高德地图、腾讯地图、智图和天地图都使用 GCJ02 坐标系
     const chinaProvider = (L.tileLayer as any).chinaProvider
     if (chinaProvider) {
       // 根据地图 ID 使用不同的 provider
@@ -226,6 +226,95 @@ function addTileLayer(layerId: string) {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
           key: tk,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'tencent') {
+        // 腾讯地图（矢量）
+        chinaProvider('Tencent.Normal.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'google') {
+        // Google 地图
+        chinaProvider('Google.Normal.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'amap_satellite') {
+        // 高德卫星图 + 注记
+        chinaProvider('GaoDe.Satellite.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+        chinaProvider('GaoDe.Satellite.Annot', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'baidu_satellite') {
+        // 百度卫星图 + 注记
+        chinaProvider('Baidu.Satellite.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+        chinaProvider('Baidu.Satellite.Annot', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'google_satellite') {
+        // Google 卫星图 + 注记
+        chinaProvider('Google.Satellite.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+        chinaProvider('Google.Satellite.Annot', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'tencent_satellite') {
+        // 腾讯卫星图
+        chinaProvider('Tencent.Satellite.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'tianditu_satellite') {
+        // 天地图卫星 + 注记
+        const tk = layerConfig.tk || ''
+        chinaProvider('TianDiTu.Satellite.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+        chinaProvider('TianDiTu.Satellite.Annot', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'tianditu_terrain') {
+        // 天地图地形 + 注记
+        const tk = layerConfig.tk || ''
+        chinaProvider('TianDiTu.Terrain.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+          attribution: layerConfig.attribution,
+        }).addTo(map.value)
+        chinaProvider('TianDiTu.Terrain.Annot', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          key: tk,
+        }).addTo(map.value)
+      } else if (layerConfig.id === 'tencent_terrain') {
+        // 腾讯地形图
+        chinaProvider('Tencent.Terrain.Map', {
+          maxZoom: layerConfig.max_zoom,
+          minZoom: layerConfig.min_zoom,
+          attribution: layerConfig.attribution,
         }).addTo(map.value)
       } else {
         // 高德地图

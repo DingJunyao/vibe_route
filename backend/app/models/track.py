@@ -69,15 +69,20 @@ class TrackPoint(Base, AuditMixin):
     # 数据
     elevation = Column(Float, nullable=True)  # 海拔（米）
     speed = Column(Float, nullable=True)  # 速度（m/s）
+    bearing = Column(Float, nullable=True)  # 方位角（度），范围 [0, 360)
 
     # 行政区划信息
     province = Column(String(50), nullable=True)
     city = Column(String(50), nullable=True)
     district = Column(String(50), nullable=True)
+    province_en = Column(String(100), nullable=True)
+    city_en = Column(String(100), nullable=True)
+    district_en = Column(String(100), nullable=True)
 
     # 道路信息
     road_name = Column(String(200), nullable=True)
     road_number = Column(String(50), nullable=True)
+    road_name_en = Column(String(200), nullable=True)
 
     # 关系
     track = relationship("Track", back_populates="points")

@@ -302,10 +302,15 @@ async def get_track_points(
             "longitude_bd09": point.longitude_bd09,
             "elevation": point.elevation,
             "speed": point.speed,
+            "bearing": point.bearing,
             "province": point.province,
             "city": point.city,
             "district": point.district,
+            "province_en": point.province_en,
+            "city_en": point.city_en,
+            "district_en": point.district_en,
             "road_name": point.road_name,
+            "road_name_en": point.road_name_en,
             "road_number": point.road_number,
         }
         result.append(point_data)

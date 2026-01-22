@@ -45,7 +45,7 @@ class ConfigService:
                 "max_zoom": 19,
                 "min_zoom": 1,
                 "enabled": True,
-                "order": 2,
+                "order": 5,
                 "subdomains": "abc",
             },
             "amap": {
@@ -59,6 +59,26 @@ class ConfigService:
                 "order": 0,
                 "subdomains": ["1", "2", "3", "4"],
             },
+            "tencent": {
+                "id": "tencent",
+                "name": "腾讯地图",
+                "crs": "gcj02",
+                "attribution": "&copy; 腾讯地图",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": True,
+                "order": 1,
+            },
+            "google": {
+                "id": "google",
+                "name": "Google地图",
+                "crs": "gcj02",
+                "attribution": "&copy; Google",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": True,
+                "order": 3,
+            },
             "baidu": {
                 "id": "baidu",
                 "name": "百度地图",
@@ -67,7 +87,7 @@ class ConfigService:
                 "max_zoom": 19,
                 "min_zoom": 1,
                 "enabled": True,
-                "order": 1,
+                "order": 2,
                 "subdomains": ["0", "1", "2", "3"],
             },
             "tianditu": {
@@ -78,7 +98,93 @@ class ConfigService:
                 "max_zoom": 18,
                 "min_zoom": 1,
                 "enabled": True,
-                "order": 3,
+                "order": 4,
+            },
+            # 卫星图
+            "amap_satellite": {
+                "id": "amap_satellite",
+                "name": "高德卫星图",
+                "crs": "gcj02",
+                "attribution": "&copy; 高德地图",
+                "max_zoom": 18,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 6,
+                "type": "satellite",
+                "with_annot": True,
+            },
+            "baidu_satellite": {
+                "id": "baidu_satellite",
+                "name": "百度卫星图",
+                "crs": "bd09",
+                "attribution": "&copy; 百度地图",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 7,
+                "type": "satellite",
+                "with_annot": True,
+            },
+            "google_satellite": {
+                "id": "google_satellite",
+                "name": "Google卫星图",
+                "crs": "gcj02",
+                "attribution": "&copy; Google",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 8,
+                "type": "satellite",
+                "with_annot": True,
+            },
+            "tencent_satellite": {
+                "id": "tencent_satellite",
+                "name": "腾讯卫星图",
+                "crs": "gcj02",
+                "attribution": "&copy; 腾讯地图",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 9,
+                "type": "satellite",
+                "with_annot": False,
+            },
+            "tianditu_satellite": {
+                "id": "tianditu_satellite",
+                "name": "天地图卫星",
+                "crs": "gcj02",
+                "attribution": "&copy; 天地图",
+                "max_zoom": 18,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 10,
+                "type": "satellite",
+                "with_annot": True,
+            },
+            # 地形图
+            "tianditu_terrain": {
+                "id": "tianditu_terrain",
+                "name": "天地图地形",
+                "crs": "gcj02",
+                "attribution": "&copy; 天地图",
+                "max_zoom": 18,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 11,
+                "type": "terrain",
+                "with_annot": True,
+            },
+            "tencent_terrain": {
+                "id": "tencent_terrain",
+                "name": "腾讯地形图",
+                "crs": "gcj02",
+                "attribution": "&copy; 腾讯地图",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": False,
+                "order": 12,
+                "type": "terrain",
+                "with_annot": False,
             },
         },
     }
@@ -169,6 +275,7 @@ class ConfigService:
         获取所有配置
 
         使用智能解析来读取配置值
+        对于 map_layers 和 geocoding_config，会与默认配置进行深度合并
         """
         configs = self.DEFAULT_CONFIGS.copy()
 
@@ -181,7 +288,27 @@ class ConfigService:
                 configs[config.key] = None
             else:
                 try:
-                    configs[config.key] = json.loads(raw_value)
+                    parsed_value = json.loads(raw_value)
+                    # 对 map_layers 进行深度合并，确保新的地图层能被添加
+                    if config.key == 'map_layers' and isinstance(parsed_value, dict):
+                        # 保留数据库中的配置，但添加默认配置中新增的地图层
+                        for layer_id, layer_config in self.DEFAULT_CONFIGS['map_layers'].items():
+                            if layer_id not in parsed_value:
+                                parsed_value[layer_id] = layer_config
+                        configs[config.key] = parsed_value
+                    elif config.key == 'geocoding_config' and isinstance(parsed_value, dict):
+                        # 对 geocoding_config 也进行深度合并
+                        for provider, provider_config in self.DEFAULT_CONFIGS['geocoding_config'].items():
+                            if provider not in parsed_value:
+                                parsed_value[provider] = provider_config
+                            else:
+                                # 合并每个 provider 的配置
+                                for key, value in provider_config.items():
+                                    if key not in parsed_value[provider]:
+                                        parsed_value[provider][key] = value
+                        configs[config.key] = parsed_value
+                    else:
+                        configs[config.key] = parsed_value
                 except json.JSONDecodeError:
                     # 不是 JSON 格式，尝试解析为简单类型
                     if raw_value.lower() == 'true':

@@ -24,12 +24,11 @@ class GeocodingService:
 
 
 class NominatimGeocoding(GeocodingService):
-    """Nominatim 地理编码服务"""
+    """Nominatim 地理编码服务（自建）"""
 
     def __init__(self, config: dict):
         super().__init__(config)
-        self.url = config.get('url', 'https://nominatim.openstreetmap.org')
-        self.email = config.get('email')
+        self.url = config.get('url', 'http://localhost:8080')
 
     async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
         """获取点的地理信息"""
@@ -49,13 +48,6 @@ class NominatimGeocoding(GeocodingService):
         }
 
         try:
-            # 构建请求头
-            headers = {
-                'User-Agent': 'VibeRoute/1.0'  # Nominatim 要求提供标识
-            }
-            if self.email:
-                headers['User-Agent'] = f'VibeRoute/1.0 ({self.email})'
-
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # 中文请求
                 params = {
@@ -68,12 +60,12 @@ class NominatimGeocoding(GeocodingService):
                     'accept-language': 'zh-CN'
                 }
 
-                response = await client.get(f"{self.url}/reverse", params=params, headers=headers)
+                response = await client.get(f"{self.url}/reverse", params=params)
                 rev = response.json()
 
                 # 英文请求
                 params['accept-language'] = 'en'
-                response_en = await client.get(f"{self.url}/reverse", params=params, headers=headers)
+                response_en = await client.get(f"{self.url}/reverse", params=params)
                 rev_en = response_en.json()
 
                 if 'features' not in rev or not rev['features']:
@@ -118,7 +110,7 @@ class AmapGeocoding(GeocodingService):
     def __init__(self, config: dict):
         super().__init__(config)
         self.api_key = config.get('api_key', '')
-        self.freq = config.get('freq', 50)  # 每秒请求数
+        self.freq = config.get('freq', 3)  # 默认每秒 3 次请求
 
     async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
         """获取点的地理信息"""
@@ -203,7 +195,7 @@ class BaiduGeocoding(GeocodingService):
     def __init__(self, config: dict):
         super().__init__(config)
         self.api_key = config.get('api_key', '')
-        self.freq = config.get('freq', 50)
+        self.freq = config.get('freq', 3)  # 默认每秒 3 次请求
         self.get_en_result = config.get('get_en_result', False)
 
     async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
@@ -236,12 +228,14 @@ class BaiduGeocoding(GeocodingService):
                 await asyncio.sleep(1 / self.freq)
 
             async with httpx.AsyncClient(timeout=10.0) as client:
+                # 中文请求
                 params = {
                     'coordtype': 'bd09ll',
                     'output': 'json',
                     'ak': self.api_key,
                     'location': f'{bd_lat},{bd_lon}',
                     'extensions_poi': 0,
+                    'language_code': 'zh-CN',
                 }
 
                 response = await client.get(
@@ -261,6 +255,23 @@ class BaiduGeocoding(GeocodingService):
                     # 获取道路编号
                     if address.get('street_number'):
                         result['road_num'] = address['street_number']
+
+                    # 如果启用了英文结果，再请求一次英文版本
+                    if self.get_en_result:
+                        params['language_code'] = 'en'
+                        response_en = await client.get(
+                            'https://api.map.baidu.com/reverse_geocoding/v3/',
+                            params=params
+                        )
+                        resp_en = response_en.json()
+
+                        if resp_en.get('status') == 0:
+                            address_en = resp_en.get('result', {}).get('addressComponent', {})
+                            result['province_en'] = address_en.get('province', '')
+                            result['city_en'] = address_en.get('city', '')
+                            result['area_en'] = address_en.get('district', '')
+                            result['town_en'] = address_en.get('town', '')
+                            result['road_name_en'] = address_en.get('street', '')
                 else:
                     result['memo'] = resp.get('message', 'Unknown error')
 

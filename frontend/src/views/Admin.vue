@@ -102,9 +102,7 @@
                   <template v-if="config.geocoding_provider === 'nominatim'">
                     <el-form-item label="Nominatim URL">
                       <el-input v-model="config.geocoding_config.nominatim.url" placeholder="http://localhost:8080" />
-                    </el-form-item>
-                    <el-form-item label="Email">
-                      <el-input v-model="config.geocoding_config.nominatim.email" placeholder="用于 Nominatim 请求头" />
+                      <span class="form-hint">自建 Nominatim 服务的地址</span>
                     </el-form-item>
                   </template>
 
@@ -120,12 +118,24 @@
                     <el-form-item label="API Key">
                       <el-input v-model="config.geocoding_config.amap.api_key" placeholder="请输入高德地图 API Key" />
                     </el-form-item>
+                    <el-form-item label="并发频率">
+                      <el-input-number v-model="config.geocoding_config.amap.freq" :min="1" :max="50" controls-position="right" />
+                      <span class="form-hint">每秒请求数，建议值为 3</span>
+                    </el-form-item>
                   </template>
 
                   <!-- 百度地图配置 -->
                   <template v-if="config.geocoding_provider === 'baidu'">
                     <el-form-item label="API Key">
                       <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="请输入百度地图 API Key" />
+                    </el-form-item>
+                    <el-form-item label="并发频率">
+                      <el-input-number v-model="config.geocoding_config.baidu.freq" :min="1" :max="50" controls-position="right" />
+                      <span class="form-hint">每秒请求数，建议值为 3</span>
+                    </el-form-item>
+                    <el-form-item label="获取英文信息">
+                      <el-switch v-model="config.geocoding_config.baidu.get_en_result" />
+                      <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
                     </el-form-item>
                   </template>
                 </div>
@@ -372,16 +382,16 @@ function initGeocodingConfig() {
     config.geocoding_config = {}
   }
   if (!config.geocoding_config.nominatim) {
-    config.geocoding_config.nominatim = { url: '', email: '' }
+    config.geocoding_config.nominatim = { url: 'http://localhost:8080' }
   }
   if (!config.geocoding_config.gdf) {
     config.geocoding_config.gdf = { data_path: '' }
   }
   if (!config.geocoding_config.amap) {
-    config.geocoding_config.amap = { api_key: '' }
+    config.geocoding_config.amap = { api_key: '', freq: 3 }
   }
   if (!config.geocoding_config.baidu) {
-    config.geocoding_config.baidu = { api_key: '' }
+    config.geocoding_config.baidu = { api_key: '', freq: 3, get_en_result: false }
   }
 }
 
