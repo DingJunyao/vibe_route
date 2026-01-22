@@ -408,7 +408,7 @@ function drawTracks() {
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
     const polyline = L.polyline(latLngs, {
-      color: isHighlighted ? '#ff0000' : '#3b82f6',
+      color: '#ff0000',
       weight: isHighlighted ? 5 : 3,
       opacity: 0.8,
     })

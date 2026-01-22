@@ -172,12 +172,6 @@
                 </el-descriptions-item>
                 <el-descriptions-item label="填充进度">
                   <div class="fill-progress-content">
-                    <div class="fill-status-tags">
-                      <el-tag v-if="track.has_area_info" type="success" size="small">区划</el-tag>
-                      <el-tag v-else type="info" size="small">区划未填充</el-tag>
-                      <el-tag v-if="track.has_road_info" type="success" size="small">道路</el-tag>
-                      <el-tag v-else type="info" size="small">道路未填充</el-tag>
-                    </div>
                     <div v-if="fillProgress.status === 'filling'" class="fill-progress-bar">
                       <el-progress
                         :percentage="getFillProgressPercentage()"
@@ -190,11 +184,15 @@
                     </div>
                     <div v-else-if="fillProgress.status === 'completed'" class="fill-status-text">
                       <el-icon color="#67c23a"><SuccessFilled /></el-icon>
-                      填充完成
+                      已填充
                     </div>
                     <div v-else-if="fillProgress.status === 'error'" class="fill-status-text">
                       <el-icon color="#f56c6c"><CircleCloseFilled /></el-icon>
                       填充失败
+                    </div>
+                    <div v-else class="fill-status-text">
+                      <el-tag v-if="track.has_area_info && track.has_road_info" type="success" size="small">已填充</el-tag>
+                      <el-tag v-else type="info" size="small">未填充</el-tag>
                     </div>
                   </div>
                 </el-descriptions-item>
@@ -968,7 +966,8 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.map-card {
+.map-card,
+.chart-card {
   margin-bottom: 20px;
 }
 
@@ -1008,6 +1007,14 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   width: 100%;
+}
+
+.stats-card :deep(.el-row) {
+  --el-row-gutter: 20px;
+}
+
+.stats-card :deep(.el-col) {
+  margin-bottom: 16px;
 }
 
 .stat-item {
@@ -1106,12 +1113,6 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 8px;
   width: 100%;
-}
-
-.fill-status-tags {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
 }
 
 .fill-progress-bar {

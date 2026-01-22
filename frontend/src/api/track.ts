@@ -99,7 +99,13 @@ export const trackApi = {
   },
 
   // 获取轨迹列表
-  getList(params?: { page?: number; page_size?: number }): Promise<TrackListResponse> {
+  getList(params?: {
+    page?: number
+    page_size?: number
+    search?: string
+    sort_by?: string
+    sort_order?: string
+  }): Promise<TrackListResponse> {
     return http.get('/tracks', { params })
   },
 

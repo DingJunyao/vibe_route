@@ -561,9 +561,21 @@ onUnmounted(() => {
     margin-bottom: 10px;
   }
 
+  .stats-row :deep(.el-card) {
+    height: 100%;
+  }
+
+  .stats-row :deep(.el-card__body) {
+    min-height: 80px;
+    display: flex;
+    align-items: center;
+    padding: 12px;
+  }
+
   .stat-icon {
     width: 40px;
     height: 40px;
+    flex-shrink: 0;
   }
 
   .stat-icon :deep(.el-icon) {
@@ -572,10 +584,12 @@ onUnmounted(() => {
 
   .stat-value {
     font-size: 18px;
+    white-space: nowrap;
   }
 
   .stat-label {
     font-size: 12px;
+    white-space: nowrap;
   }
 
   .map-header {

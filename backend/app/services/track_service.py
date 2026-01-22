@@ -27,6 +27,19 @@ class TrackService:
         # 存储当前正在填充的轨迹进度
         self._filling_progress = {}  # {track_id: {"current": 10, "total": 100, "status": "filling"}}
 
+        # 追踪后台任务
+        self._background_tasks = set()  # type: set[asyncio.Task]
+
+    async def cancel_all_tasks(self):
+        """取消所有后台任务"""
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        # 等待任务取消
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+        self._background_tasks.clear()
+
     async def _get_geocoding_service(self, db: AsyncSession):
         """获取地理编码服务实例"""
         from app.services.config_service import config_service
@@ -69,21 +82,56 @@ class TrackService:
         user_id: int,
         skip: int = 0,
         limit: int = 20,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "desc",
     ) -> tuple[List[Track], int]:
-        """获取用户的轨迹列表"""
+        """
+        获取用户的轨迹列表
+
+        Args:
+            db: 数据库会话
+            user_id: 用户ID
+            skip: 跳过记录数
+            limit: 返回记录数
+            search: 搜索轨迹名称（模糊匹配）
+            sort_by: 排序字段 (start_time, distance, duration)
+            sort_order: 排序方向 (asc=正序, desc=倒序)
+
+        Returns:
+            (轨迹列表, 总数)
+        """
+        # 构建基础查询条件
+        conditions = [Track.user_id == user_id, Track.is_valid == True]
+
+        # 添加搜索条件
+        if search:
+            conditions.append(Track.name.ilike(f"%{search}%"))
+
         # 获取总数
         count_result = await db.execute(
-            select(func.count(Track.id)).where(
-                and_(Track.user_id == user_id, Track.is_valid == True)
-            )
+            select(func.count(Track.id)).where(and_(*conditions))
         )
         total = count_result.scalar() or 0
+
+        # 确定排序字段和方向
+        sort_field = Track.start_time  # 默认按轨迹开始时间排序
+        if sort_by == "distance":
+            sort_field = Track.distance
+        elif sort_by == "duration":
+            sort_field = Track.duration
+
+        # 排序方向
+        if sort_order == "asc":
+            order_by_clause = sort_field.asc()
+        else:
+            order_by_clause = sort_field.desc()
 
         # 获取列表
         result = await db.execute(
             select(Track)
-            .where(and_(Track.user_id == user_id, Track.is_valid == True))
-            .order_by(Track.created_at.desc())
+            .where(and_(*conditions))
+            .order_by(order_by_clause)
             .offset(skip)
             .limit(limit)
         )
@@ -309,9 +357,11 @@ class TrackService:
 
         # 异步填充地理信息（如果启用）
         if fill_geocoding:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 self.fill_geocoding_info(db, track_obj.id, user.id)
             )
+            task.add_done_callback(self._background_tasks.discard)
+            self._background_tasks.add(task)
 
         return track_obj
 

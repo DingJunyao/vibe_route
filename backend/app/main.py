@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
     await init_db()
 
     # 初始化默认配置
-    from app.core.database import async_session_maker
+    from app.core.database import async_session_maker, engine
     from app.services.config_service import config_service
     async with async_session_maker() as db:
         await config_service.init_default_configs(db)
@@ -25,7 +25,12 @@ async def lifespan(app: FastAPI):
     yield
 
     # 关闭时的清理工作
-    pass
+    # 取消所有后台任务
+    from app.services.track_service import track_service
+    await track_service.cancel_all_tasks()
+
+    # 关闭数据库引擎和连接池
+    await engine.dispose()
 
 
 # 创建 FastAPI 应用

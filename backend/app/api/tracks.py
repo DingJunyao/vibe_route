@@ -106,14 +106,29 @@ async def upload_track(
 async def get_tracks(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None, description="搜索轨迹名称"),
+    sort_by: Optional[str] = Query(None, description="排序字段: start_time, distance, duration"),
+    sort_order: Optional[str] = Query("desc", description="排序方向: asc, desc"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
     获取当前用户的轨迹列表
+
+    - search: 搜索轨迹名称（模糊匹配）
+    - sort_by: 排序字段 (start_time, distance, duration)，默认为 start_time
+    - sort_order: 排序方向 (asc=正序, desc=倒序)，默认为 desc
     """
     skip = (page - 1) * page_size
-    tracks, total = await track_service.get_list(db, current_user.id, skip, page_size)
+    tracks, total = await track_service.get_list(
+        db,
+        current_user.id,
+        skip,
+        page_size,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
 
     return TrackListResponse(
         total=total,

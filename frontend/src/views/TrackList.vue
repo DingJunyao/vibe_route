@@ -45,15 +45,23 @@
               placeholder="搜索轨迹名称..."
               :prefix-icon="Search"
               clearable
-              @input="handleSearch"
+              @input="handleSearchInput"
             />
           </el-col>
           <el-col :xs="24" :sm="12" class="sort-col">
-            <el-radio-group v-model="sortBy" @change="loadTracks">
-              <el-radio-button value="created_at">最新</el-radio-button>
-              <el-radio-button value="distance">距离</el-radio-button>
-              <el-radio-button value="duration">时长</el-radio-button>
-            </el-radio-group>
+            <div class="sort-buttons">
+              <el-button
+                v-for="item in sortOptions"
+                :key="item.value"
+                :type="sortBy === item.value ? 'primary' : ''"
+                @click="handleSortClick(item.value)"
+              >
+                {{ item.label }}
+                <el-icon v-if="sortBy === item.value" class="sort-icon">
+                  <component :is="sortOrder === 'desc' ? SortDown : SortUp" />
+                </el-icon>
+              </el-button>
+            </div>
           </el-col>
         </el-row>
       </el-card>
@@ -120,12 +128,9 @@
             <div v-for="row in tracks" :key="row.id" class="track-card" @click="viewTrack(row)">
               <div class="card-header">
                 <div class="track-name">{{ row.name }}</div>
+                <div class="track-time">{{ formatDateTime(row.start_time) }}</div>
               </div>
               <div class="card-body">
-                <div class="card-item">
-                  <span class="label">时间</span>
-                  <span class="value">{{ formatDateTime(row.start_time) }}</span>
-                </div>
                 <div class="card-item">
                   <span class="label">里程</span>
                   <span class="value">{{ formatDistance(row.distance) }}</span>
@@ -133,10 +138,6 @@
                 <div class="card-item">
                   <span class="label">时长</span>
                   <span class="value">{{ formatDuration(row.duration) }}</span>
-                </div>
-                <div v-if="row.elevation_gain > 0" class="card-item">
-                  <span class="label">爬升</span>
-                  <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
                 </div>
               </div>
               <div class="card-actions" @click.stop>
@@ -157,7 +158,7 @@
               v-model:page-size="pageSize"
               :page-sizes="[10, 20, 50, 100]"
               :total="total"
-              layout="total, sizes, prev, pager, next, jumper"
+              :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
               @current-change="loadTracks"
               @size-change="loadTracks"
             />
@@ -190,6 +191,8 @@ import {
   ArrowDown,
   Setting,
   SwitchButton,
+  SortUp,
+  SortDown,
 } from '@element-plus/icons-vue'
 import { trackApi, type Track } from '@/api/track'
 import { useAuthStore } from '@/stores/auth'
@@ -212,14 +215,32 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const searchQuery = ref('')
-const sortBy = ref('created_at')
+const sortBy = ref('start_time')
+const sortOrder = ref<'asc' | 'desc'>('asc')  // 初始为正序图标，表示从新到旧
+
+// 排序选项
+const sortOptions = [
+  { label: '最新', value: 'start_time' },
+  { label: '距离', value: 'distance' },
+  { label: '时长', value: 'duration' },
+]
 
 async function loadTracks() {
   loading.value = true
   try {
+    // 对于 start_time 字段，反转排序方向以符合用户习惯
+    // start_time: 正序图标(asc)表示从新到旧，倒序图标(desc)表示从旧到新
+    let actualSortOrder = sortOrder.value
+    if (sortBy.value === 'start_time') {
+      actualSortOrder = sortOrder.value === 'asc' ? 'desc' : 'asc'
+    }
+
     const response = await trackApi.getList({
       page: currentPage.value,
       page_size: pageSize.value,
+      search: searchQuery.value || undefined,
+      sort_by: sortBy.value,
+      sort_order: actualSortOrder,
     })
     tracks.value = response.items
     total.value = response.total
@@ -230,9 +251,31 @@ async function loadTracks() {
   }
 }
 
-function handleSearch() {
-  // TODO: 实现搜索功能
-  // 目前只是在前端过滤
+// 搜索输入防抖
+let searchTimeout: ReturnType<typeof setTimeout> | null = null
+function handleSearchInput() {
+  if (searchTimeout) {
+    clearTimeout(searchTimeout)
+  }
+  searchTimeout = setTimeout(() => {
+    currentPage.value = 1  // 搜索时重置到第一页
+    loadTracks()
+  }, 500)
+}
+
+// 点击排序按钮
+function handleSortClick(value: string) {
+  if (sortBy.value === value) {
+    // 点击当前排序字段，切换排序方向
+    sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    // 切换到新的排序字段
+    sortBy.value = value
+    // 对于"最新"，使用 asc（正序图标，表示从新到旧）
+    // 对于"距离"和"时长"，使用 desc（倒序，表示从大到小）
+    sortOrder.value = value === 'start_time' ? 'asc' : 'desc'
+  }
+  loadTracks()
 }
 
 function viewTrack(track: Track) {
@@ -400,7 +443,23 @@ onUnmounted(() => {
 }
 
 .sort-col {
-  text-align: right;
+  display: flex;
+  align-items: center;
+}
+
+.sort-buttons {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+
+.sort-buttons .el-button {
+  flex: 1;
+}
+
+.sort-icon {
+  margin-left: 4px;
+  font-size: 14px;
 }
 
 .list-card {
@@ -518,12 +577,26 @@ onUnmounted(() => {
 
 .card-header {
   margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
 }
 
 .track-name {
   font-size: 16px;
   font-weight: 500;
   color: #303133;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-card .track-time {
+  font-size: 12px;
+  color: #909399;
+  white-space: nowrap;
 }
 
 .card-body {
