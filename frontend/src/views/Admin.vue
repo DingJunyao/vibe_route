@@ -85,6 +85,17 @@
                             show-password
                           />
                         </div>
+                        <!-- 腾讯地图 API Key 输入框 -->
+                        <div v-if="layer.id === 'tencent'" class="tencent-inputs">
+                          <el-input
+                            v-model="layer.api_key"
+                            placeholder="API Key（必填）"
+                            size="small"
+                            style="width: 200px"
+                            clearable
+                            show-password
+                          />
+                        </div>
                         <!-- 百度地图 API Key 输入框 -->
                         <div v-if="layer.id === 'baidu'" class="baidu-inputs">
                           <el-input
@@ -486,9 +497,8 @@ async function saveConfig() {
       ...config,
       map_layers: config.map_layers,
     }
-    const updatedConfig = await adminApi.updateConfig(updateData)
-    // 更新 config store 中的配置
-    configStore.adminConfig = updatedConfig
+    // 使用 configStore 的 updateConfig 方法，确保 publicConfig 也被更新
+    await configStore.updateConfig(updateData)
     ElMessage.success('配置保存成功')
   } catch (error) {
     // 错误已在拦截器中处理
@@ -809,6 +819,13 @@ onMounted(async () => {
 
 /* 高德地图输入框组 */
 .amap-inputs {
+  display: flex;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+/* 腾讯地图输入框组 */
+.tencent-inputs {
   display: flex;
   gap: 6px;
   margin-left: 8px;

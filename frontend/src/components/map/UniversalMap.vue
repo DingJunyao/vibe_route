@@ -1,8 +1,15 @@
 <template>
   <div class="universal-map-container">
+    <!-- 腾讯地图引擎 -->
+    <TencentMap
+      v-if="useTencentEngine"
+      ref="tencentRef"
+      :tracks="tracks"
+      :highlight-track-id="highlightTrackId"
+    />
     <!-- 高德地图引擎 -->
     <AMap
-      v-if="useAMapEngine"
+      v-else-if="useAMapEngine"
       ref="amapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
@@ -66,6 +73,7 @@ import { FullScreen } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
 import BMap from './BMap.vue'
+import TencentMap from './TencentMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 
 interface Point {
@@ -101,6 +109,7 @@ const props = withDefaults(defineProps<Props>(), {
 const configStore = useConfigStore()
 const amapRef = ref()
 const bmapRef = ref()
+const tencentRef = ref()
 const leafletRef = ref()
 
 // 当前选择的地图层 ID
@@ -129,6 +138,15 @@ const useBMapEngine = computed(() => {
   const baiduConfig = configStore.getMapLayerById('baidu')
   const apiKey = baiduConfig?.api_key || baiduConfig?.ak
   return !!apiKey // 只有配置了 API key 或 ak 才使用 BMap 引擎
+})
+
+// 判断是否使用腾讯地图引擎
+// 只有当选中腾讯地图且配置了 API key 时才使用 TencentMap 引擎，否则使用 Leaflet 引擎
+const useTencentEngine = computed(() => {
+  const layerId = currentLayerId.value
+  if (layerId !== 'tencent' && !layerId.startsWith('tencent')) return false
+  const tencentConfig = configStore.getMapLayerById('tencent')
+  return !!(tencentConfig?.api_key) // 只有配置了 API key 才使用 TencentMap 引擎
 })
 
 // 切换地图层

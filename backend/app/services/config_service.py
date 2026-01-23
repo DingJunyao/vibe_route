@@ -59,6 +59,7 @@ class ConfigService:
                 "min_zoom": 1,
                 "enabled": True,
                 "order": 1,
+                "api_key": "",
             },
             "baidu": {
                 "id": "baidu",

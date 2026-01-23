@@ -12,14 +12,14 @@ export const useConfigStore = defineStore('config', () => {
   let fetchPromise: Promise<PublicConfig | SystemConfig | null> | null = null
 
   // Actions
-  async function fetchConfig(): Promise<PublicConfig | SystemConfig | null> {
+  async function fetchConfig(forceRefresh = false): Promise<PublicConfig | SystemConfig | null> {
     // 如果正在加载，返回现有的 Promise
     if (loading.value && fetchPromise) {
       return fetchPromise
     }
 
-    // 如果已经加载过，直接返回
-    if (publicConfig.value) {
+    // 如果已经加载过且不是强制刷新，直接返回
+    if (!forceRefresh && publicConfig.value) {
       return publicConfig.value
     }
 
@@ -66,6 +66,11 @@ export const useConfigStore = defineStore('config', () => {
     }
 
     return fetchPromise
+  }
+
+  // 强制刷新配置（用于配置更新后）
+  async function refreshConfig(): Promise<void> {
+    await fetchConfig(true)
   }
 
   function getMapProvider(): string {
@@ -116,6 +121,7 @@ export const useConfigStore = defineStore('config', () => {
     adminConfig,
     loading,
     fetchConfig,
+    refreshConfig,
     getMapProvider,
     getMapLayers,
     getMapLayerById,

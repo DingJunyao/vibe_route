@@ -52,6 +52,7 @@ declare module 'vue' {
     LeafletMap: typeof import('./components/map/LeafletMap.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    TencentMap: typeof import('./components/map/TencentMap.vue')['default']
     UniversalMap: typeof import('./components/map/UniversalMap.vue')['default']
   }
   export interface ComponentCustomProperties {
