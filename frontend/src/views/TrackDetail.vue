@@ -1025,7 +1025,8 @@ onUnmounted(() => {
 }
 
 .stats-card :deep(.el-col) {
-  margin-bottom: 16px;
+  margin-top: 8px;
+  margin-bottom: 8px;
 }
 
 .stat-item {

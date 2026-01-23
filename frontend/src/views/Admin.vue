@@ -64,6 +64,7 @@
                           size="small"
                           style="width: 200px"
                           clearable
+                          show-password
                         />
                         <el-switch
                           v-model="layer.enabled"
@@ -116,7 +117,7 @@
                   <!-- 高德地图配置 -->
                   <template v-if="config.geocoding_provider === 'amap'">
                     <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.amap.api_key" placeholder="请输入高德地图 API Key" />
+                      <el-input v-model="config.geocoding_config.amap.api_key" placeholder="请输入高德地图 API Key" show-password />
                     </el-form-item>
                     <el-form-item label="并发频率">
                       <el-input-number v-model="config.geocoding_config.amap.freq" :min="1" :max="50" controls-position="right" />
@@ -127,7 +128,7 @@
                   <!-- 百度地图配置 -->
                   <template v-if="config.geocoding_provider === 'baidu'">
                     <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="请输入百度地图 API Key" />
+                      <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="请输入百度地图 API Key" show-password />
                     </el-form-item>
                     <el-form-item label="并发频率">
                       <el-input-number v-model="config.geocoding_config.baidu.freq" :min="1" :max="50" controls-position="right" />
