@@ -7,6 +7,13 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
     />
+    <!-- 百度地图引擎 -->
+    <BMap
+      v-else-if="useBMapEngine"
+      ref="bmapRef"
+      :tracks="tracks"
+      :highlight-track-id="highlightTrackId"
+    />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
       v-else
@@ -58,6 +65,7 @@ import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
+import BMap from './BMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 
 interface Point {
@@ -92,6 +100,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const configStore = useConfigStore()
 const amapRef = ref()
+const bmapRef = ref()
 const leafletRef = ref()
 
 // 当前选择的地图层 ID
@@ -110,6 +119,16 @@ const useAMapEngine = computed(() => {
   if (layerId !== 'amap' && !layerId.startsWith('amap')) return false
   const amapConfig = configStore.getMapLayerById('amap')
   return !!(amapConfig?.api_key) // 只有配置了 API key 才使用 AMap 引擎
+})
+
+// 判断是否使用百度地图引擎
+// 只有当选中百度地图且配置了 API key 时才使用 BMap 引擎，否则使用 Leaflet 引擎
+const useBMapEngine = computed(() => {
+  const layerId = currentLayerId.value
+  if (layerId !== 'baidu' && !layerId.startsWith('baidu')) return false
+  const baiduConfig = configStore.getMapLayerById('baidu')
+  const apiKey = baiduConfig?.api_key || baiduConfig?.ak
+  return !!apiKey // 只有配置了 API key 或 ak 才使用 BMap 引擎
 })
 
 // 切换地图层

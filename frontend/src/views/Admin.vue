@@ -85,6 +85,17 @@
                             show-password
                           />
                         </div>
+                        <!-- 百度地图 API Key 输入框 -->
+                        <div v-if="layer.id === 'baidu'" class="baidu-inputs">
+                          <el-input
+                            v-model="layer.api_key"
+                            placeholder="API Key（必填）"
+                            size="small"
+                            style="width: 200px"
+                            clearable
+                            show-password
+                          />
+                        </div>
                         <el-switch
                           v-model="layer.enabled"
                           @change="onMapLayerToggle(layer)"
@@ -798,6 +809,13 @@ onMounted(async () => {
 
 /* 高德地图输入框组 */
 .amap-inputs {
+  display: flex;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+/* 百度地图输入框组 */
+.baidu-inputs {
   display: flex;
   gap: 6px;
   margin-left: 8px;

@@ -70,6 +70,8 @@ class ConfigService:
                 "enabled": True,
                 "order": 2,
                 "subdomains": ["0", "1", "2", "3"],
+                "ak": "",
+                "api_key": "",
             },
             "tianditu": {
                 "id": "tianditu",
