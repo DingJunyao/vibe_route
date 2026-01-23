@@ -30,6 +30,7 @@
       :highlight-track-id="highlightTrackId"
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
+      @point-hover="handlePointHover"
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
@@ -127,38 +128,34 @@ const leafletRef = ref()
 // 当前选择的地图层 ID
 const currentLayerId = ref<string>('')
 
-// 已启用的地图层列表
-const enabledMapLayers = computed<MapLayerConfig[]>(() => {
-  const allLayers = configStore.getMapLayers()
-  return allLayers.filter((l: MapLayerConfig) => l.enabled).sort((a, b) => a.order - b.order)
-})
-
 // 判断是否使用高德地图引擎
-// 只有当选中高德地图且配置了 API key 时才使用 AMap 引擎，否则使用 Leaflet 引擎
 const useAMapEngine = computed(() => {
   const layerId = currentLayerId.value
   if (layerId !== 'amap' && !layerId.startsWith('amap')) return false
   const amapConfig = configStore.getMapLayerById('amap')
-  return !!(amapConfig?.api_key) // 只有配置了 API key 才使用 AMap 引擎
+  return !!(amapConfig?.api_key)
 })
 
 // 判断是否使用百度地图引擎
-// 只有当选中百度地图且配置了 API key 时才使用 BMap 引擎，否则使用 Leaflet 引擎
 const useBMapEngine = computed(() => {
   const layerId = currentLayerId.value
   if (layerId !== 'baidu' && !layerId.startsWith('baidu')) return false
   const baiduConfig = configStore.getMapLayerById('baidu')
-  const apiKey = baiduConfig?.api_key || baiduConfig?.ak
-  return !!apiKey // 只有配置了 API key 或 ak 才使用 BMap 引擎
+  return !!(baiduConfig?.api_key || baiduConfig?.ak)
 })
 
 // 判断是否使用腾讯地图引擎
-// 只有当选中腾讯地图且配置了 API key 时才使用 TencentMap 引擎，否则使用 Leaflet 引擎
 const useTencentEngine = computed(() => {
   const layerId = currentLayerId.value
   if (layerId !== 'tencent' && !layerId.startsWith('tencent')) return false
   const tencentConfig = configStore.getMapLayerById('tencent')
-  return !!(tencentConfig?.api_key) // 只有配置了 API key 才使用 TencentMap 引擎
+  return !!(tencentConfig?.api_key)
+})
+
+// 已启用的地图层列表
+const enabledMapLayers = computed<MapLayerConfig[]>(() => {
+  const allLayers = configStore.getMapLayers()
+  return allLayers.filter((l: MapLayerConfig) => l.enabled).sort((a, b) => a.order - b.order)
 })
 
 // 切换地图层
@@ -192,8 +189,27 @@ function handlePointHover(point: Point | null, pointIndex: number) {
 function highlightPoint(index: number) {
   if (useAMapEngine.value && amapRef.value?.highlightPoint) {
     amapRef.value.highlightPoint(index)
+  } else if (useBMapEngine.value && bmapRef.value?.highlightPoint) {
+    bmapRef.value.highlightPoint(index)
+  } else if (useTencentEngine.value && tencentRef.value?.highlightPoint) {
+    tencentRef.value.highlightPoint(index)
+  } else if (leafletRef.value?.highlightPoint) {
+    // Leaflet 引擎也支持
+    leafletRef.value.highlightPoint(index)
   }
-  // 其他地图引擎暂不支持
+}
+
+// 隐藏标记（由图表鼠标离开触发）
+function hideMarker() {
+  if (useAMapEngine.value && amapRef.value?.hideMarker) {
+    amapRef.value.hideMarker()
+  } else if (useBMapEngine.value && bmapRef.value?.hideMarker) {
+    bmapRef.value.hideMarker()
+  } else if (useTencentEngine.value && tencentRef.value?.hideMarker) {
+    tencentRef.value.hideMarker()
+  } else if (leafletRef.value?.hideMarker) {
+    leafletRef.value.hideMarker()
+  }
 }
 
 onMounted(async () => {
@@ -203,6 +219,11 @@ onMounted(async () => {
   }
   // 初始化当前图层
   currentLayerId.value = props.defaultLayerId || configStore.getMapProvider()
+})
+
+// 监听 currentLayerId 变化
+watch(currentLayerId, () => {
+  // 图层切换时重新渲染
 })
 
 // 监听 defaultLayerId prop 变化
@@ -215,6 +236,7 @@ watch(() => props.defaultLayerId, (newVal) => {
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
+  hideMarker,
 })
 </script>
 

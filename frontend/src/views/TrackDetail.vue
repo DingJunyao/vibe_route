@@ -520,11 +520,12 @@ function renderChart() {
         const dataIndex = params[0].dataIndex
         const point = sampledPoints[dataIndex]
         const speedRaw = point.speed
-        const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : 'null'
-        let result = `点 #${dataIndex}<br/>时间: ${formatTime(point.time)}<br/>`
+        const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : '-'
+        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTime(point.time) : '-'}<br/>`
         for (const param of params) {
           if (param.seriesName === '海拔') {
-            result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} m<br/>`
+            const elevationValue = param.value !== null ? param.value.toFixed(1) : '-'
+            result += `${param.marker}${param.seriesName}: ${elevationValue} m<br/>`
           } else if (param.seriesName === '速度') {
             result += `${param.marker}${param.seriesName}: ${speedKmh} km/h<br/>`
           }

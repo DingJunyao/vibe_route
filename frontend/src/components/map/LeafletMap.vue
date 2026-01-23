@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, Ref, onMounted, onUnmounted, watch } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'proj4leaflet'
@@ -58,6 +58,7 @@ interface Point {
   longitude_bd09?: number | null
   elevation?: number | null
   time?: string | null
+  speed?: number | null
   province?: string | null
   city?: string | null
   district?: string | null
@@ -86,6 +87,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   (e: 'point-click', point: Point, trackId: number): void
+  (e: 'point-hover', point: Point | null, pointIndex: number): void
 }>()
 
 const configStore = useConfigStore()
@@ -95,6 +97,15 @@ const mapContainer = ref<HTMLElement>()
 const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
+
+// 轨迹数据
+const trackPoints: Ref<Point[]> = ref([])
+const trackPath: Ref<[number, number][]> = ref([])
+
+// 鼠标标记和 tooltip
+const mouseMarker = ref<L.Marker | null>(null)
+const tooltip = ref<L.Popup | null>(null)
+const lastHoverIndex = ref(-1)
 
 // 当前底图层 ID
 const currentLayerId = ref<string>(
@@ -142,7 +153,6 @@ function getCRS(crsType: CRSType): L.CRS {
 
 // 初始化地图
 function initMap() {
-  console.log('[LeafletMap] initMap, mapContainer:', mapContainer.value)
   if (!mapContainer.value) {
     console.error('[LeafletMap] mapContainer is null!')
     return
@@ -161,8 +171,6 @@ function initMap() {
     crs: crs,
   })
 
-  console.log('[LeafletMap] map created with CRS:', crs, layerConfig)
-
   // 添加默认底图（使用当前提供商）
   addTileLayer(currentLayerId.value)
 
@@ -171,6 +179,162 @@ function initMap() {
     position: 'bottomleft',
     imperial: false, // 不使用英制单位
   }).addTo(map.value as L.Map)
+
+  // 创建标记和提示框
+  createMouseMarker()
+  createTooltip()
+
+  // 统一的鼠标处理函数
+  const handleMouseMove = (lng: number, lat: number) => {
+    if (trackPath.value.length < 2) return
+
+    const mouseLngLat: [number, number] = [lng, lat]
+    const zoom = map.value!.getZoom()
+    const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+    let minDistance = Infinity
+    let nearestIndex = -1
+    let nearestPosition: [number, number] = [0, 0]
+
+    // 快速查找最近的点
+    for (let i = 0; i < trackPath.value.length - 1; i++) {
+      const p1 = trackPath.value[i]
+      const p2 = trackPath.value[i + 1]
+      const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+      const dist = distance(mouseLngLat, closest)
+
+      if (dist < minDistance) {
+        minDistance = dist
+        nearestPosition = closest
+        const distToP1 = distance(closest, p1)
+        const distToP2 = distance(closest, p2)
+        nearestIndex = distToP1 < distToP2 ? i : i + 1
+      }
+    }
+
+    const triggered = minDistance < dynamicDistance
+
+    // 更新或隐藏标记
+    if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
+      const point = trackPoints.value[nearestIndex]
+      // 如果是同一个点，跳过更新
+      if (nearestIndex !== lastHoverIndex.value) {
+        lastHoverIndex.value = nearestIndex
+
+        // 更新标记位置并显示
+        if (mouseMarker.value) {
+          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          mouseMarker.value.addTo(map.value!)
+        }
+
+        // 更新提示框内容
+        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+        const location = formatLocationInfo(point)
+
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            <div style="color: #666;">时间: ${timeStr}</div>
+            <div style="color: #666;">速度: ${speed}</div>
+            <div style="color: #666;">海拔: ${elevation}</div>
+          </div>
+        `
+
+        if (tooltip.value) {
+          tooltip.value.setContent(content)
+          tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          tooltip.value.openOn(map.value!)
+        }
+
+        // 发射事件
+        emit('point-hover', point, nearestIndex)
+      }
+    } else {
+      hideMarker()
+    }
+  }
+
+  // Leaflet mousemove 监听
+  map.value.on('mousemove', (e: L.LeafletMouseEvent) => {
+    handleMouseMove(e.latlng.lng, e.latlng.lat)
+  })
+
+  // 移动端：点击地图显示轨迹信息
+  const isMobile = window.innerWidth <= 768
+  if (isMobile) {
+    map.value.on('click', (e: L.LeafletMouseEvent) => {
+      const lng = e.latlng.lng
+      const lat = e.latlng.lat
+
+      if (trackPath.value.length < 2) {
+        hideMarker()
+        return
+      }
+
+      const zoom = map.value!.getZoom()
+      const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+      let minDistance = Infinity
+      let nearestIndex = -1
+      let nearestPosition: [number, number] = [0, 0]
+
+      // 查找最近的点
+      for (let i = 0; i < trackPath.value.length - 1; i++) {
+        const p1 = trackPath.value[i]
+        const p2 = trackPath.value[i + 1]
+        const closest = closestPointOnSegment([lng, lat], p1, p2)
+        const dist = distance([lng, lat], closest)
+
+        if (dist < minDistance) {
+          minDistance = dist
+          nearestPosition = closest
+          const distToP1 = distance(closest, p1)
+          const distToP2 = distance(closest, p2)
+          nearestIndex = distToP1 < distToP2 ? i : i + 1
+        }
+      }
+
+      const triggered = minDistance < dynamicDistance
+
+      if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
+        const point = trackPoints.value[nearestIndex]
+
+        if (mouseMarker.value) {
+          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          mouseMarker.value.addTo(map.value!)
+        }
+
+        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+        const location = formatLocationInfo(point)
+
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            <div style="color: #666;">时间: ${timeStr}</div>
+            <div style="color: #666;">速度: ${speed}</div>
+            <div style="color: #666;">海拔: ${elevation}</div>
+          </div>
+        `
+
+        if (tooltip.value) {
+          tooltip.value.setContent(content)
+          tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          tooltip.value.openOn(map.value!)
+        }
+
+        lastHoverIndex.value = nearestIndex
+        emit('point-hover', point, nearestIndex)
+      } else {
+        hideMarker()
+      }
+    })
+  }
 }
 
 // 添加底图
@@ -403,6 +567,162 @@ function recreateMap() {
     imperial: false,
   }).addTo(map.value as L.Map)
 
+  // 创建标记和提示框
+  createMouseMarker()
+  createTooltip()
+
+  // 统一的鼠标处理函数
+  const handleMouseMove = (lng: number, lat: number) => {
+    if (trackPath.value.length < 2) return
+
+    const mouseLngLat: [number, number] = [lng, lat]
+    const zoom = map.value!.getZoom()
+    const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+    let minDistance = Infinity
+    let nearestIndex = -1
+    let nearestPosition: [number, number] = [0, 0]
+
+    // 快速查找最近的点
+    for (let i = 0; i < trackPath.value.length - 1; i++) {
+      const p1 = trackPath.value[i]
+      const p2 = trackPath.value[i + 1]
+      const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+      const dist = distance(mouseLngLat, closest)
+
+      if (dist < minDistance) {
+        minDistance = dist
+        nearestPosition = closest
+        const distToP1 = distance(closest, p1)
+        const distToP2 = distance(closest, p2)
+        nearestIndex = distToP1 < distToP2 ? i : i + 1
+      }
+    }
+
+    const triggered = minDistance < dynamicDistance
+
+    // 更新或隐藏标记
+    if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
+      const point = trackPoints.value[nearestIndex]
+      // 如果是同一个点，跳过更新
+      if (nearestIndex !== lastHoverIndex.value) {
+        lastHoverIndex.value = nearestIndex
+
+        // 更新标记位置并显示
+        if (mouseMarker.value) {
+          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          mouseMarker.value.addTo(map.value!)
+        }
+
+        // 更新提示框内容
+        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+        const location = formatLocationInfo(point)
+
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            <div style="color: #666;">时间: ${timeStr}</div>
+            <div style="color: #666;">速度: ${speed}</div>
+            <div style="color: #666;">海拔: ${elevation}</div>
+          </div>
+        `
+
+        if (tooltip.value) {
+          tooltip.value.setContent(content)
+          tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          tooltip.value.openOn(map.value!)
+        }
+
+        // 发射事件
+        emit('point-hover', point, nearestIndex)
+      }
+    } else {
+      hideMarker()
+    }
+  }
+
+  // Leaflet mousemove 监听
+  map.value.on('mousemove', (e: L.LeafletMouseEvent) => {
+    handleMouseMove(e.latlng.lng, e.latlng.lat)
+  })
+
+  // 移动端：点击地图显示轨迹信息
+  const isMobile = window.innerWidth <= 768
+  if (isMobile) {
+    map.value.on('click', (e: L.LeafletMouseEvent) => {
+      const lng = e.latlng.lng
+      const lat = e.latlng.lat
+
+      if (trackPath.value.length < 2) {
+        hideMarker()
+        return
+      }
+
+      const zoom = map.value!.getZoom()
+      const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+      let minDistance = Infinity
+      let nearestIndex = -1
+      let nearestPosition: [number, number] = [0, 0]
+
+      // 查找最近的点
+      for (let i = 0; i < trackPath.value.length - 1; i++) {
+        const p1 = trackPath.value[i]
+        const p2 = trackPath.value[i + 1]
+        const closest = closestPointOnSegment([lng, lat], p1, p2)
+        const dist = distance([lng, lat], closest)
+
+        if (dist < minDistance) {
+          minDistance = dist
+          nearestPosition = closest
+          const distToP1 = distance(closest, p1)
+          const distToP2 = distance(closest, p2)
+          nearestIndex = distToP1 < distToP2 ? i : i + 1
+        }
+      }
+
+      const triggered = minDistance < dynamicDistance
+
+      if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
+        const point = trackPoints.value[nearestIndex]
+
+        if (mouseMarker.value) {
+          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          mouseMarker.value.addTo(map.value!)
+        }
+
+        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+        const location = formatLocationInfo(point)
+
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            <div style="color: #666;">时间: ${timeStr}</div>
+            <div style="color: #666;">速度: ${speed}</div>
+            <div style="color: #666;">海拔: ${elevation}</div>
+          </div>
+        `
+
+        if (tooltip.value) {
+          tooltip.value.setContent(content)
+          tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+          tooltip.value.openOn(map.value!)
+        }
+
+        lastHoverIndex.value = nearestIndex
+        emit('point-hover', point, nearestIndex)
+      } else {
+        hideMarker()
+      }
+    })
+  }
+
   // 重新绘制轨迹
   drawTracks()
 }
@@ -462,6 +782,129 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
   return null
 }
 
+// 格式化地理信息显示
+function formatLocationInfo(point: Point): string {
+  const parts: string[] = []
+
+  // 行政区划
+  if (point.province) parts.push(point.province)
+  if (point.city && point.city !== point.province) parts.push(point.city)
+  if (point.district) parts.push(point.district)
+
+  // 道路信息
+  const roadParts: string[] = []
+  if (point.road_number) {
+    roadParts.push(point.road_number.replace(/,/g, ' / '))
+  }
+  if (point.road_name) {
+    roadParts.push(point.road_name)
+  }
+
+  if (roadParts.length > 0) {
+    parts.push(roadParts.join(' '))
+  }
+
+  return parts.join(' ')
+}
+
+// 计算两点距离
+function distance(p1: [number, number], p2: [number, number]): number {
+  const dx = p1[0] - p2[0]
+  const dy = p1[1] - p2[1]
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+// 计算点到线段的最近点
+function closestPointOnSegment(p: [number, number], v: [number, number], w: [number, number]): [number, number] {
+  const l2 = (v[0] - w[0]) ** 2 + (v[1] - w[1]) ** 2
+  if (l2 === 0) return v
+
+  let t = ((p[0] - w[0]) * (v[0] - w[0]) + (p[1] - w[1]) * (v[1] - w[1])) / l2
+  t = Math.max(0, Math.min(1, t))
+
+  return [
+    w[0] + t * (v[0] - w[0]),
+    w[1] + t * (v[1] - w[1]),
+  ]
+}
+
+// 从外部高亮指定点（由图表触发）
+function highlightPoint(index: number) {
+  if (index < 0 || index >= trackPoints.value.length) {
+    hideMarker()
+    return
+  }
+
+  if (index === lastHoverIndex.value) return
+
+  lastHoverIndex.value = index
+
+  const point = trackPoints.value[index]
+  const position = trackPath.value[index]
+
+  if (!map.value || !mouseMarker.value || !tooltip.value || !point || !position) return
+
+  // 更新标记位置
+  mouseMarker.value.setLatLng([position[1], position[0]])
+  mouseMarker.value.addTo(map.value)
+
+  // 创建 tooltip 内容
+  const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+  const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+  const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+  const location = formatLocationInfo(point)
+
+  const content = `
+    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
+      ${location ? `<div style="color: #666;">${location}</div>` : ''}
+      <div style="color: #666;">时间: ${timeStr}</div>
+      <div style="color: #666;">速度: ${speed}</div>
+      <div style="color: #666;">海拔: ${elevation}</div>
+    </div>
+  `
+
+  tooltip.value.setContent(content)
+  tooltip.value.setLatLng([position[1], position[0]])
+  tooltip.value.openOn(map.value)
+}
+
+// 隐藏标记
+function hideMarker() {
+  if (mouseMarker.value) {
+    map.value?.removeLayer(mouseMarker.value)
+  }
+  if (tooltip.value) {
+    map.value?.closePopup()
+  }
+}
+
+// 创建鼠标标记
+function createMouseMarker() {
+  if (!map.value) return
+
+  const icon = L.divIcon({
+    className: 'leaflet-mouse-marker',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  })
+
+  mouseMarker.value = L.marker([0, 0], { icon, interactive: false })
+}
+
+// 创建 tooltip
+function createTooltip() {
+  if (!map.value) return
+
+  tooltip.value = L.popup({
+    closeButton: false,
+    closeOnClick: false,
+    autoClose: false,
+    className: 'leaflet-mouse-tooltip',
+    offset: [0, -10],
+  })
+}
+
 // 绘制轨迹
 function drawTracks() {
   if (!map.value || !props.tracks.length) return
@@ -471,6 +914,10 @@ function drawTracks() {
 
   // 清除现有轨迹
   clearTracks()
+
+  // 重置轨迹数据
+  trackPoints.value = []
+  trackPath.value = []
 
   const bounds = L.latLngBounds([])
 
@@ -491,6 +938,9 @@ function drawTracks() {
 
       latLngs.push([lat, lng])
       bounds.extend([lat, lng])
+      // 保存轨迹点和路径用于鼠标悬停
+      trackPoints.value.push(point)
+      trackPath.value.push([lng, lat])  // Leaflet 使用 [lng, lat]
     }
 
     // 如果没有有效点，跳过
@@ -552,14 +1002,16 @@ watch(() => props.defaultLayerId, (newId) => {
   }
 })
 
+// 暴露方法给父组件
+defineExpose({
+  highlightPoint,
+  hideMarker,
+})
+
 // 生命周期
 onMounted(async () => {
-  console.log('[LeafletMap] onMounted, props.tracks:', props.tracks)
-
   // 等待配置加载完成（如果还没有加载）
-  if (!configStore.config) {
-    await configStore.fetchConfig()
-  }
+  await configStore.fetchConfig()
 
   // 初始化地图层列表
   initMapLayers()
@@ -569,7 +1021,6 @@ onMounted(async () => {
   const exists = mapLayers.value.find((l: MapLayerConfig) => l.id === defaultId)
   currentLayerId.value = exists ? defaultId : (mapLayers.value[0]?.id || 'osm')
   updateCurrentLayerConfig()
-  console.log('[LeafletMap] Using layer:', currentLayerId.value, currentLayerConfig.value)
 
   initMap()
   drawTracks()
@@ -641,5 +1092,35 @@ onUnmounted(() => {
 
 :deep(.leaflet-control-attribution) {
   font-size: 10px;
+}
+
+/* 鼠标标记样式 */
+:deep(.leaflet-mouse-marker) {
+  background: #409eff;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Tooltip 样式 - 移除白边 */
+:deep(.leaflet-mouse-tooltip) {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+:deep(.leaflet-mouse-tooltip .leaflet-popup-content-wrapper) {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+:deep(.leaflet-mouse-tooltip .leaflet-popup-tip) {
+  display: none;
+}
+
+:deep(.leaflet-mouse-tooltip .leaflet-popup-content) {
+  margin: 0;
 }
 </style>

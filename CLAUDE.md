@@ -147,9 +147,43 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 - 移动端使用卡片列表替代表格
 - viewport 配置禁止页面缩放：`maximum-scale=1.0, user-scalable=no`
 
+### 地图与图表双向同步
+
+轨迹详情页（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）实现了地图与图表的双向交互：
+
+#### 桌面端 - 鼠标悬停
+
+- 地图鼠标悬停 → 图表高亮对应点
+- 图表鼠标悬停 → 地图显示标记和 tooltip
+
+#### 移动端 - 点击
+
+- 点击地图靠近轨迹 → 显示对应点的 tooltip
+- 点击地图远离轨迹 → 隐藏 tooltip
+
+#### 关键技术点
+
+- 动态触发距离：`Math.pow(2, 12 - zoom) * 0.008` 随缩放级别调整
+
+- 几何计算：点到线段距离、最近点查找
+
+- 位置信息格式化：`省 市 区 road_number road_name`（多条道路编号逗号分隔转斜杠）
+
+- 事件处理：高德地图 `mousemove`/`click` + DOM 捕获阶段备用
+
+- 图表同步：ECharts `dispatchAction` 触发 `showTip`/`highlight`
+
+- Polyline `bubble: true` 允许事件冒泡
+
+#### 涉及文件
+
+- [`AMap.vue`](frontend/src/components/map/AMap.vue) - 高德地图组件
+- [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图引擎包装器
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页
+
 ## File Structure Highlights
 
-```
+```text
 backend/
 ├── app/
 │   ├── api/              # API 路由 (auth, tracks, admin, tasks, road_signs)

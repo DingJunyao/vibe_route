@@ -100,15 +100,22 @@ function createMouseMarker() {
 
   const AMap = (window as any).AMap
 
-  // 创建标记
+  // 使用 HTML 内容创建蓝色圆点标记（与 Leaflet 样式一致）
+  const markerContent = `
+    <div style="
+      width: 12px;
+      height: 12px;
+      background: #409eff;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+    "></div>
+  `
+
   mouseMarker = new AMap.Marker({
     position: new AMap.LngLat(0, 0),
-    icon: new AMap.Icon({
-      size: new AMap.Size(16, 16),
-      image: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjYiIGZpbGw9IiNmZjQ0NDQiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIyIi8+PC9zdmc+',
-      imageSize: new AMap.Size(16, 16),
-    }),
-    offset: new AMap.Pixel(-8, -8),
+    content: markerContent,
+    offset: new AMap.Pixel(-6, -6),
     zIndex: 100,
     map: null,  // 初始不添加到地图
   })
@@ -396,7 +403,6 @@ async function initMap() {
 
       let minDistance = Infinity
       let nearestIndex = -1
-      let nearestLngLat: [number, number] = [0, 0]
       let nearestPosition: [number, number] = [0, 0]
 
       // 快速查找最近的点
@@ -412,7 +418,6 @@ async function initMap() {
           const distToP1 = distance(closest, p1)
           const distToP2 = distance(closest, p2)
           nearestIndex = distToP1 < distToP2 ? i : i + 1
-          nearestLngLat = distToP1 < distToP2 ? p1 : p2
         }
       }
 
