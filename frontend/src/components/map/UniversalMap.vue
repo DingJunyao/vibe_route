@@ -6,6 +6,7 @@
       ref="tencentRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      @point-hover="handlePointHover"
     />
     <!-- 高德地图引擎 -->
     <AMap

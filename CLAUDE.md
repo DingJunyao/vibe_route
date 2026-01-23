@@ -207,11 +207,66 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 
 5. **资源清理**：在覆盖物的 `remove()` 方法中移除事件监听器，避免内存泄漏
 
+##### 腾讯地图 GL JS API 特殊处理
+
+腾讯地图 GL JS API 版本 ([`TencentMap.vue`](frontend/src/components/map/TencentMap.vue)) 有以下特殊要求：
+
+1. **坐标转换 API 不可用**：腾讯地图 GL JS API 不提供 `containerToLatLng`、`pointToLngLat` 等坐标转换方法，需要手动计算：
+
+   ```javascript
+   const bounds = TMapInstance.getBounds()
+   const ne = bounds.getNorthEast()
+   const sw = bounds.getSouthWest()
+   const lngRange = ne.lng - sw.lng
+   const latRange = ne.lat - sw.lat
+   const xRatio = x / rect.width
+   const yRatio = y / rect.height
+   const lng = sw.lng + lngRange * xRatio
+   const lat = ne.lat - latRange * yRatio
+   ```
+
+2. **使用 MultiMarker 显示标记**：创建 Canvas 绘制的蓝色圆点作为 data URL，配合 `TMap.MultiMarker` 显示悬停标记：
+
+   ```javascript
+   const canvas = document.createElement('canvas')
+   canvas.width = 16
+   canvas.height = 16
+   const ctx = canvas.getContext('2d')
+   // 绘制白色边框和蓝色圆点
+   const dataUrl = canvas.toDataURL()
+   mouseMarker = new TMap.MultiMarker({
+     map: null,
+     styles: {
+       'blue-dot': new TMap.MarkerStyle({
+         width: 16,
+         height: 16,
+         anchor: { x: 8, y: 8 },
+         src: dataUrl,
+       }),
+     },
+     geometries: [],
+   })
+   ```
+
+3. **事件监听在 DOM 容器上**：使用 `addEventListener` 在 `mapContainer` 上监听 `click` 和 `touchend` 事件，捕获阶段（`capture: true`）确保事件能被捕获
+
+4. **避免重复设置 lastHoverIndex**：在事件处理器中不要提前设置 `lastHoverIndex`，应让 `updateMarker` 函数来设置，否则会被"同一索引"检查拦截而跳过更新
+
+5. **InfoWindow 样式覆盖**：使用 `:deep()` 选择器移除默认的 padding 和 margin：
+
+   ```css
+   :deep(.tmap-infowindow-content) {
+     padding: 0 !important;
+     margin: 0 !important;
+   }
+   ```
+
 #### 涉及文件
 
 - [`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图组件（支持 OSM、天地图等）
 - [`AMap.vue`](frontend/src/components/map/AMap.vue) - 高德地图组件
 - [`BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图组件
+- [`TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图组件
 - [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图引擎包装器
 - [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页
 
