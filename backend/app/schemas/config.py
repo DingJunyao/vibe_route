@@ -32,6 +32,8 @@ class MapLayerConfig(BaseModel):
     subdomains: Optional[str | List[str]] = Field(default=None, description="子域名列表，如 'abc' 或 ['0','1','2']")
     ak: Optional[str] = Field(default="", description="百度地图 AK")
     tk: Optional[str] = Field(default="", description="天地图 tk")
+    api_key: Optional[str] = Field(default="", description="高德地图 JS API Key")
+    security_js_code: Optional[str] = Field(default="", description="高德地图安全密钥")
 
 
 class GeocodingProvider(str):

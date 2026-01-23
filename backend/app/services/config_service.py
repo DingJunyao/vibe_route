@@ -47,6 +47,8 @@ class ConfigService:
                 "enabled": True,
                 "order": 0,
                 "subdomains": ["1", "2", "3", "4"],
+                "api_key": "",
+                "security_js_code": "",
             },
             "tencent": {
                 "id": "tencent",

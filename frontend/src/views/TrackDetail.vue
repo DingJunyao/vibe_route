@@ -82,7 +82,7 @@
                   调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
                 </div> -->
                 <div style="height: 500px; position: relative;">
-                  <LeafletMap
+                  <UniversalMap
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                   />
@@ -325,7 +325,7 @@ import {
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse } from '@/api/track'
-import LeafletMap from '@/components/map/LeafletMap.vue'
+import UniversalMap from '@/components/map/UniversalMap.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()

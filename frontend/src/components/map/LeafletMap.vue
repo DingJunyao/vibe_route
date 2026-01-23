@@ -1,7 +1,7 @@
 <template>
   <div class="leaflet-map-container">
     <div ref="mapContainer" class="map"></div>
-    <div class="map-controls">
+    <div class="map-controls" v-if="!hideLayerSelector">
       <!-- 桌面端：按钮组 -->
       <el-button-group size="small" class="desktop-layer-selector">
         <el-button
@@ -74,12 +74,14 @@ interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   defaultLayerId?: string
+  hideLayerSelector?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   defaultLayerId: undefined,
+  hideLayerSelector: false,
 })
 
 const emit = defineEmits<{
@@ -541,6 +543,13 @@ watch(() => props.tracks, () => {
 
 watch(() => props.highlightTrackId, () => {
   updateTracks()
+})
+
+// 监听 defaultLayerId 变化（从 UniversalMap 传入）
+watch(() => props.defaultLayerId, (newId) => {
+  if (newId && newId !== currentLayerId.value) {
+    switchLayer(newId)
+  }
 })
 
 // 生命周期

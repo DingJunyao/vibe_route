@@ -17,6 +17,8 @@ export interface MapLayerConfig {
   subdomains?: string | string[]
   ak?: string  // 百度地图 AK
   tk?: string  // 天地图 tk
+  api_key?: string  // 高德地图 JS API Key
+  security_js_code?: string  // 高德地图安全密钥
 }
 
 // 系统配置相关接口

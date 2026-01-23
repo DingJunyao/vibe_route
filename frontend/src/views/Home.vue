@@ -110,7 +110,7 @@
           </div>
         </template>
         <div class="map-container">
-          <LeafletMap :tracks="tracksWithPoints" />
+          <UniversalMap :tracks="tracksWithPoints" />
           <div v-if="tracksWithPoints.length === 0 && !loadingTracks" class="map-empty">
             <el-empty description="暂无轨迹数据" :image-size="80" />
           </div>
@@ -139,7 +139,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { trackApi, type Track, type TrackPoint } from '@/api/track'
-import LeafletMap from '@/components/map/LeafletMap.vue'
+import UniversalMap from '@/components/map/UniversalMap.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()

@@ -66,6 +66,25 @@
                           clearable
                           show-password
                         />
+                        <!-- 高德地图 JS API Key 和安全密钥输入框 -->
+                        <div v-if="layer.id === 'amap'" class="amap-inputs">
+                          <el-input
+                            v-model="layer.api_key"
+                            placeholder="API Key（必填）"
+                            size="small"
+                            style="width: 180px"
+                            clearable
+                            show-password
+                          />
+                          <el-input
+                            v-model="layer.security_js_code"
+                            placeholder="安全密钥（可选）"
+                            size="small"
+                            style="width: 160px"
+                            clearable
+                            show-password
+                          />
+                        </div>
                         <el-switch
                           v-model="layer.enabled"
                           @change="onMapLayerToggle(layer)"
@@ -775,6 +794,13 @@ onMounted(async () => {
 
 .map-layer-item :deep(.el-input__wrapper) {
   width: 200px;
+}
+
+/* 高德地图输入框组 */
+.amap-inputs {
+  display: flex;
+  gap: 6px;
+  margin-left: 8px;
 }
 
 /* 移动端响应式 */
