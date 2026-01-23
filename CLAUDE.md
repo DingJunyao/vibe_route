@@ -169,15 +169,49 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 
 - 位置信息格式化：`省 市 区 road_number road_name`（多条道路编号逗号分隔转斜杠）
 
-- 事件处理：高德地图 `mousemove`/`click` + DOM 捕获阶段备用
+- **高德地图**事件处理：`mousemove`/`click` + DOM 捕获阶段备用
+
+- **百度地图**事件处理：`addEventListener('mousemove')`/`addEventListener('click')`
+
+- **Leaflet 地图**事件处理：`mousemove`/`click` 直接监听地图实例
 
 - 图表同步：ECharts `dispatchAction` 触发 `showTip`/`highlight`
 
-- Polyline `bubble: true` 允许事件冒泡
+- Polyline `bubble: true`（高德）允许事件冒泡
+
+- 蓝色圆点标记：`#409eff` 背景，`2px solid #fff` 边框，`border-radius: 50%`
+
+##### 百度地图 GL 特殊处理
+
+百度地图 GL 版本 ([`BMap.vue`](frontend/src/components/map/BMap.vue)) 有以下特殊要求：
+
+1. **自定义覆盖物必须继承`BMapGL.Overlay`**：标记类需要继承覆盖物基类，并实现 `initialize(map)` 和 `draw()` 方法
+
+2. **监听地图移动/缩放事件**：在 `initialize` 方法中添加 `moveend` 和 `zoomend` 监听器，确保地图拖动或缩放时标记位置自动更新：
+
+   ```javascript
+   map.addEventListener('moveend', this._mapMoveHandler)
+   map.addEventListener('zoomend', this._mapMoveHandler)
+   ```
+
+3. **使用标准覆盖物 API**：添加/移除覆盖物使用 `map.addOverlay(overlay)` 和 `map.removeOverlay(overlay)`
+
+4. **InfoWindow 状态冲突**：百度地图的 InfoWindow 有状态管理问题，连续调用 `openInfoWindow` 可能不生效。解决方法：
+
+   ```javascript
+   BMapInstance.closeInfoWindow()
+   setTimeout(() => {
+     BMapInstance.openInfoWindow(newTooltip, bmapPoint)
+   }, 0)
+   ```
+
+5. **资源清理**：在覆盖物的 `remove()` 方法中移除事件监听器，避免内存泄漏
 
 #### 涉及文件
 
+- [`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图组件（支持 OSM、天地图等）
 - [`AMap.vue`](frontend/src/components/map/AMap.vue) - 高德地图组件
+- [`BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图组件
 - [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图引擎包装器
 - [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页
 

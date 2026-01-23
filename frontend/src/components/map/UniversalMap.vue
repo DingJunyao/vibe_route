@@ -21,6 +21,7 @@
       ref="bmapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      @point-hover="handlePointHover"
     />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
