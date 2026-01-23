@@ -1,5 +1,8 @@
 # Vibe Route - 轨迹管理系统
 
+> 本项目尚未完成。使用 Claude Code + GLM Coding Plan 生成。  
+> 🚀 速来拼好模，智谱 GLM Coding 超值订阅，邀你一起薅羊毛！Claude Code、Cline 等 20+ 大编程工具无缝支持，“码力”全开，越拼越爽！立即开拼，享限时惊喜价！链接：https://www.bigmodel.cn/glm-coding?ic=AGNTPPSX90
+
 基于 [gpxutil](https://github.com/DingJunyao/gpxutil) 构建的全栈 Web 轨迹管理系统。
 
 每一次旅程都是生命中独一无二的叙事。从山峦叠嶂到城市街巷，从晨光熹微到暮色四合，足迹在时空之中交织出属于自己的轨迹。这些轨迹不仅记录了走过的距离，更承载着沿途的风景、心境与回忆。
