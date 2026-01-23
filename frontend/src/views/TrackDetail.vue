@@ -83,8 +83,10 @@
                 </div> -->
                 <div style="height: 500px; position: relative;">
                   <UniversalMap
+                    ref="mapRef"
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
+                    @point-hover="handleMapPointHover"
                   />
                 </div>
               </template>
@@ -347,7 +349,9 @@ const points = ref<TrackPoint[]>([])
 const trackId = ref<number>(parseInt(route.params.id as string))
 const highlightedPointIndex = ref<number>(-1)
 
+const mapRef = ref()
 const chartRef = ref<HTMLElement>()
+let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 const downloadDialogVisible = ref(false)
 const downloadCRS = ref('original')
 
@@ -395,6 +399,12 @@ const trackWithPoints = computed(() => {
       longitude_bd09: p.longitude_bd09,
       elevation: p.elevation,
       time: p.time,
+      speed: p.speed,
+      province: p.province,
+      city: p.city,
+      district: p.district,
+      road_name: p.road_name,
+      road_number: p.road_number,
     })),
   }
 })
@@ -460,6 +470,7 @@ function renderChart() {
   if (!chartRef.value || !points.value.length) return
 
   const chart = echarts.init(chartRef.value)
+  chartInstance = chart  // 保存图表实例
 
   // 判断是否为移动端
   const isMobile = window.innerWidth <= 768
@@ -506,12 +517,16 @@ function renderChart() {
     tooltip: {
       trigger: 'axis',
       formatter: (params: any) => {
-        let result = `时间: ${formatTime(sampledPoints[params[0].dataIndex].time)}<br/>`
+        const dataIndex = params[0].dataIndex
+        const point = sampledPoints[dataIndex]
+        const speedRaw = point.speed
+        const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : 'null'
+        let result = `点 #${dataIndex}<br/>时间: ${formatTime(point.time)}<br/>`
         for (const param of params) {
           if (param.seriesName === '海拔') {
             result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} m<br/>`
           } else if (param.seriesName === '速度') {
-            result += `${param.marker}${param.seriesName}: ${param.value.toFixed(1)} km/h<br/>`
+            result += `${param.marker}${param.seriesName}: ${speedKmh} km/h<br/>`
           }
         }
         return result
@@ -610,7 +625,7 @@ function renderChart() {
         type: 'line',
         yAxisIndex: 1,
         data: sampledSpeedData.map(d => d[1]),
-        smooth: true, 
+        smooth: false,  // 禁用平滑，确保 tooltip 显示原始数据点值
         sampling: null,
         symbol: 'none',
         areaStyle: isMobile ? undefined : {
@@ -644,11 +659,76 @@ function renderChart() {
 
   chart.setOption(option)
 
+  // 图表鼠标移动事件监听 - 用于反向同步到地图
+  chart.on('mousemove', (params: any) => {
+    // 检查是否在数据系列上
+    if (params.componentType === 'series' && params.dataIndex !== undefined) {
+      // 使用采样的原始索引（如果有采样数据）
+      let originalIndex = params.dataIndex
+
+      // 调用地图组件的 highlightPoint 方法
+      if (mapRef.value?.highlightPoint) {
+        mapRef.value.highlightPoint(originalIndex)
+      }
+    }
+  })
+
+  // 使用 axis 指针事件更可靠
+  chart.on('showTip', (params: any) => {
+    if (params.dataIndex !== undefined && mapRef.value?.highlightPoint) {
+      mapRef.value.highlightPoint(params.dataIndex)
+    }
+  })
+
+  // 图表鼠标离开事件 - 隐藏地图标记
+  chart.on('mouseleave', () => {
+    if (mapRef.value?.hideMarker) {
+      mapRef.value.hideMarker()
+    }
+  })
+
+  // 也监听 hideTip 事件
+  chart.on('hideTip', () => {
+    if (mapRef.value?.hideMarker) {
+      mapRef.value.hideMarker()
+    }
+  })
+
   // 响应式调整
   const resizeObserver = new ResizeObserver(() => {
     chart.resize()
   })
   resizeObserver.observe(chartRef.value)
+}
+
+// 处理地图点悬浮事件 - 同步到图表
+function handleMapPointHover(point: any, pointIndex: number) {
+  if (!chartInstance || pointIndex < 0) return
+
+  // 在图表上显示标记线
+  chartInstance.dispatchAction({
+    type: 'showTip',
+    seriesIndex: 0,
+    dataIndex: pointIndex,
+  })
+
+  // 高亮该点
+  chartInstance.dispatchAction({
+    type: 'highlight',
+    seriesIndex: 0,
+    dataIndex: pointIndex,
+  })
+
+  // 取消之前的高亮
+  if (highlightedPointIndex.value >= 0 && highlightedPointIndex.value !== pointIndex) {
+    chartInstance.dispatchAction({
+      type: 'downplay',
+      seriesIndex: 0,
+      dataIndex: highlightedPointIndex.value,
+    })
+  }
+
+  highlightedPointIndex.value = pointIndex
 }
 
 // 填充地理信息
@@ -853,12 +933,6 @@ onMounted(async () => {
   try {
     await fetchTrackDetail()
     await fetchTrackPoints()
-
-    // 调试信息
-    console.log('Track loaded:', track.value)
-    console.log('Points loaded:', points.value.length)
-    console.log('First point:', points.value[0])
-    console.log('trackWithPoints:', trackWithPoints.value)
   } catch (error) {
     console.error('Failed to load track data:', error)
   } finally {

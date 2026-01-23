@@ -13,6 +13,7 @@
       ref="amapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      @point-hover="handlePointHover"
     />
     <!-- 百度地图引擎 -->
     <BMap
@@ -87,6 +88,12 @@ interface Point {
   longitude_bd09?: number | null
   elevation?: number | null
   time?: string | null
+  speed?: number | null
+  province?: string | null
+  city?: string | null
+  district?: string | null
+  road_name?: string | null
+  road_number?: string | null
 }
 
 interface Track {
@@ -105,6 +112,11 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   defaultLayerId: undefined,
 })
+
+// 定义 emit 事件
+const emit = defineEmits<{
+  (e: 'point-hover', point: Point | null, pointIndex: number): void
+}>()
 
 const configStore = useConfigStore()
 const amapRef = ref()
@@ -171,6 +183,19 @@ function toggleFullscreen() {
   }
 }
 
+// 处理地图点悬浮事件
+function handlePointHover(point: Point | null, pointIndex: number) {
+  emit('point-hover', point, pointIndex)
+}
+
+// 高亮指定点（由图表触发）
+function highlightPoint(index: number) {
+  if (useAMapEngine.value && amapRef.value?.highlightPoint) {
+    amapRef.value.highlightPoint(index)
+  }
+  // 其他地图引擎暂不支持
+}
+
 onMounted(async () => {
   // 等待配置加载
   if (!configStore.config) {
@@ -185,6 +210,11 @@ watch(() => props.defaultLayerId, (newVal) => {
   if (newVal) {
     currentLayerId.value = newVal
   }
+})
+
+// 暴露方法给父组件
+defineExpose({
+  highlightPoint,
 })
 </script>
 
