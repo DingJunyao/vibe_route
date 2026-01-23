@@ -7,16 +7,15 @@
       </div>
       <div class="header-right">
         <div class="header-actions">
-          <el-button link type="primary" @click="showEditDialog" class="desktop-only">
+          <el-button type="primary" @click="showEditDialog" class="desktop-only">
             <el-icon><Edit /></el-icon>
             编辑
           </el-button>
-          <el-button link type="primary" @click="downloadDialogVisible = true" class="desktop-only">
+          <el-button type="primary" @click="downloadDialogVisible = true" class="desktop-only">
             <el-icon><Download /></el-icon>
             下载 GPX
           </el-button>
           <el-button
-            link
             type="primary"
             @click="handleFillGeocoding"
             class="desktop-only"
