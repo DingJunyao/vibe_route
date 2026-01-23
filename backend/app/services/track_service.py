@@ -32,12 +32,28 @@ class TrackService:
 
     async def cancel_all_tasks(self):
         """取消所有后台任务"""
+        if not self._background_tasks:
+            return
+
+        # 取消所有未完成的任务
         for task in list(self._background_tasks):
             if not task.done():
                 task.cancel()
-        # 等待任务取消
+
+        # 等待任务取消（忽略所有异常）
         if self._background_tasks:
-            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._background_tasks, return_exceptions=True),
+                    timeout=3.0  # 最多等待3秒
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                # 超时或被取消时直接忽略
+                pass
+            except Exception:
+                # 其他异常也忽略
+                pass
+
         self._background_tasks.clear()
 
     async def _get_geocoding_service(self, db: AsyncSession):
@@ -744,6 +760,320 @@ class TrackService:
             "updated_tracks": updated_tracks,
             "updated_points": updated_points,
             "total_tracks": len(tracks)
+        }
+
+    async def get_timeline(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> List[dict]:
+        """
+        获取轨迹的区域时间线
+
+        按时间顺序聚合轨迹点，当区域发生变化时创建新的时间线条目。
+        区域包括：省、市、区、道路名称、道路编号
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+
+        Returns:
+            时间线条目列表，每个条目包含区域信息和时间范围
+        """
+        # 检查权限
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            return []
+
+        # 获取轨迹点，按 point_index 排序
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            return []
+
+        timeline_entries = []
+        current_entry = None
+        point_count = 0
+
+        for point in points:
+            # 构建区域标识符（用于检测区域变化）
+            region_key = (
+                point.province or '',
+                point.city or '',
+                point.district or '',
+                point.road_name or '',
+                point.road_number or '',
+            )
+
+            # 如果区域发生变化或这是第一个点，创建新条目
+            if current_entry is None or current_entry['region_key'] != region_key:
+                # 保存前一个条目
+                if current_entry is not None:
+                    current_entry['end_time'] = point.time
+                    timeline_entries.append({
+                        'province': current_entry['province'],
+                        'city': current_entry['city'],
+                        'district': current_entry['district'],
+                        'road_name': current_entry['road_name'],
+                        'road_number': current_entry['road_number'],
+                        'start_time': current_entry['start_time'],
+                        'end_time': current_entry['end_time'],
+                        'point_count': current_entry['point_count'],
+                    })
+
+                # 创建新条目
+                current_entry = {
+                    'region_key': region_key,
+                    'province': point.province,
+                    'city': point.city,
+                    'district': point.district,
+                    'road_name': point.road_name,
+                    'road_number': point.road_number,
+                    'start_time': point.time,
+                    'end_time': None,
+                    'point_count': 0,
+                }
+                point_count = 0
+
+            current_entry['point_count'] = point_count + 1
+            point_count += 1
+
+        # 保存最后一个条目
+        if current_entry is not None:
+            current_entry['end_time'] = points[-1].time if points else None
+            timeline_entries.append({
+                'province': current_entry['province'],
+                'city': current_entry['city'],
+                'district': current_entry['district'],
+                'road_name': current_entry['road_name'],
+                'road_number': current_entry['road_number'],
+                'start_time': current_entry['start_time'],
+                'end_time': current_entry['end_time'],
+                'point_count': current_entry['point_count'],
+            })
+
+        return timeline_entries
+
+    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """计算两点之间的距离（米），使用 Haversine 公式"""
+        from math import radians, sin, cos, sqrt, atan2
+
+        dlat = radians(lat2 - lat1)
+        dlon = radians(lon2 - lon1)
+        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return 6371000 * c  # 地球半径 6371km
+
+    def _aggregate_node_stats(self, node: dict) -> dict:
+        """
+        递归聚合节点统计信息，让上级包含下级的数据
+        返回 (distance, point_count, start_time, end_time)
+        """
+        total_distance = node.get('own_distance', 0)
+        total_points = node.get('own_point_count', 0)
+        earliest_time = node.get('start_time')
+        latest_time = node.get('end_time')
+
+        if node.get('children'):
+            for child in node['children']:
+                child_distance, child_points, child_start, child_end = self._aggregate_node_stats(child)
+                total_distance += child_distance
+                total_points += child_points
+
+                # 聚合时间范围
+                if child_start:
+                    if earliest_time is None or child_start < earliest_time:
+                        earliest_time = child_start
+                if child_end:
+                    if latest_time is None or child_end > latest_time:
+                        latest_time = child_end
+
+        node['distance'] = total_distance
+        node['point_count'] = total_points
+        node['start_time'] = earliest_time
+        node['end_time'] = latest_time
+
+        return total_distance, total_points, earliest_time, latest_time
+
+    async def get_region_tree(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> dict:
+        """
+        获取轨迹的区域树结构（按时间顺序）
+
+        返回按时间顺序展开的区域树，同一区域的多次经过会分开显示。
+        结构：省 -> 市 -> 区 -> 道路
+        每个节点包含统计信息（路径长度、时间范围）
+        上级节点的统计数据包含所有下级节点
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+
+        Returns:
+            {'regions': 区域树列表, 'stats': 各级区域数量统计}
+        """
+        # 检查权限
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
+
+        # 获取轨迹点，按 point_index 排序
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
+
+        # 按时间顺序构建区域树
+        root_nodes = []
+        node_counter = [0]
+
+        # 统计各级区域数量（去重）
+        province_set = set()
+        city_set = set()
+        district_set = set()
+        road_set = set()
+
+        def create_node(name: str, node_type: str, road_number: str = None) -> dict:
+            """创建一个新节点"""
+            node_counter[0] += 1
+            return {
+                'id': f"node_{node_counter[0]}",
+                'name': name,
+                'type': node_type,
+                'road_number': road_number,
+                'own_distance': 0.0,  # 自己的路径长度（不含子节点）
+                'distance': 0.0,  # 总路径长度（含子节点）
+                'own_point_count': 0,  # 自己的点数
+                'point_count': 0,  # 总点数
+                'start_time': None,
+                'end_time': None,
+                'children': [],
+            }
+
+        # 当前活跃的节点路径
+        current_province = None
+        current_city = None
+        current_district = None
+        current_road = None
+        prev_point = None
+
+        for point in points:
+            province = point.province or '未知区域'
+            city = point.city or province
+            district = point.district or city
+            road_name = point.road_name
+            road_number = point.road_number
+
+            # 统计各级区域
+            if province: province_set.add(province)
+            if city and city != province: city_set.add(city)
+            if district and district != city: district_set.add(district)
+            if road_name: road_set.add(road_name)
+
+            # 检查是否需要创建新的省级节点
+            if current_province is None or current_province[0] != province:
+                new_province = create_node(province, 'province')
+                root_nodes.append(new_province)
+                current_province = (province, new_province)
+                current_city = None
+                current_district = None
+                current_road = None
+
+            province_node = current_province[1]
+
+            # 检查是否需要创建新的市级节点
+            if current_city is None or current_city[0] != city:
+                new_city = create_node(city, 'city')
+                province_node['children'].append(new_city)
+                current_city = (city, new_city)
+                current_district = None
+                current_road = None
+
+            city_node = current_city[1]
+
+            # 检查是否需要创建新的区级节点
+            if current_district is None or current_district[0] != district:
+                new_district = create_node(district, 'district')
+                city_node['children'].append(new_district)
+                current_district = (district, new_district)
+                current_road = None
+
+            district_node = current_district[1]
+
+            # 检查是否需要创建新的道路节点
+            # 有道路信息时用道路名称，无道路信息时用"（无名）"
+            if road_name:
+                road_key = (road_name, road_number or '')
+            else:
+                road_key = ('（无名）', '')
+
+            if current_road is None or current_road[0] != road_key:
+                if road_name:
+                    new_road = create_node(road_name, 'road', road_number)
+                else:
+                    new_road = create_node('（无名）', 'road', None)
+                district_node['children'].append(new_road)
+                current_road = (road_key, new_road)
+
+            # 确定当前最低层级的活跃节点
+            if current_road:
+                active_node = current_road[1]
+            elif current_district:
+                active_node = current_district[1]
+            elif current_city:
+                active_node = current_city[1]
+            else:
+                active_node = province_node
+
+            # 累加点数
+            active_node['own_point_count'] += 1
+
+            # 更新时间范围
+            if point.time:
+                if active_node['start_time'] is None or point.time < active_node['start_time']:
+                    active_node['start_time'] = point.time
+                if active_node['end_time'] is None or point.time > active_node['end_time']:
+                    active_node['end_time'] = point.time
+
+            # 计算距离
+            if prev_point:
+                distance = self._calculate_distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84
+                )
+                active_node['own_distance'] += distance
+
+            prev_point = point
+
+        # 后处理：聚合统计信息，让上级包含下级
+        for node in root_nodes:
+            self._aggregate_node_stats(node)
+
+        return {
+            'regions': root_nodes,
+            'stats': {
+                'province': len(province_set),
+                'city': len(city_set),
+                'district': len(district_set),
+                'road': len(road_set),
+            }
         }
 
 

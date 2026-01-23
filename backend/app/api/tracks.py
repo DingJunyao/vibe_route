@@ -15,6 +15,7 @@ from app.schemas.track import (
     TrackListResponse,
     TrackPointResponse,
     TrackStatsResponse,
+    RegionTreeResponse,
 )
 from app.services.track_service import track_service
 
@@ -265,6 +266,36 @@ async def get_fill_progress(
     }
 
 
+@router.get("/fill-progress/all")
+async def get_all_fill_progress(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取当前用户所有正在填充的轨迹的进度
+
+    只返回有进度信息的轨迹（状态为 filling, completed, failed）
+    """
+    # 获取用户的所有轨迹ID
+    tracks, _ = await track_service.get_list(db, current_user.id, 0, 1000)
+
+    result = {}
+    for track in tracks:
+        progress = track_service.get_fill_progress(track.id)
+        if progress and progress.get("status") in ("filling", "completed", "failed"):
+            current = progress.get("current", 0)
+            total_points = progress.get("total", 0)
+            percent = int((current / total_points * 100)) if total_points > 0 else 0
+            result[track.id] = {
+                "status": progress.get("status", "idle"),
+                "current": current,
+                "total": total_points,
+                "percent": percent,
+            }
+
+    return result
+
+
 @router.get("/{track_id}/points")
 async def get_track_points(
     track_id: int,
@@ -393,3 +424,24 @@ async def download_track(
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+@router.get("/{track_id}/regions", response_model=RegionTreeResponse)
+async def get_track_regions(
+    track_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取轨迹的区域树
+
+    返回按行政层级组织且按时间顺序展开的区域树：省 -> 市 -> 区 -> 道路
+    同一区域的多次经过会分开显示。
+    """
+    result = await track_service.get_region_tree(db, track_id, current_user.id)
+
+    return {
+        "track_id": track_id,
+        "regions": result.get('regions', []),
+        "stats": result.get('stats', {}),
+    }

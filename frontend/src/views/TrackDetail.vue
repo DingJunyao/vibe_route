@@ -208,22 +208,45 @@
               </el-descriptions>
             </el-card>
 
-            <!-- 经过的区域 -->
+            <!-- 经过的区域 - 树形展示 -->
             <el-card class="areas-card" shadow="never">
               <template #header>
-                <span>经过区域</span>
+                <div class="card-header">
+                  <span>经过区域</span>
+                  <el-tag v-if="regionStats.province > 0" size="small" type="info">
+                    {{ regionStats.province }} 省级 / {{ regionStats.city }} 地级 / {{ regionStats.district }} 县级
+                  </el-tag>
+                </div>
               </template>
-              <div v-if="areas.length > 0" class="areas-list">
-                <el-tag
-                  v-for="(area, index) in areas"
-                  :key="index"
-                  class="area-tag"
-                  size="small"
+              <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+              <div v-else-if="regionTree.length > 0" class="region-tree-container">
+                <el-tree
+                  :data="regionTree"
+                  :props="{ label: 'name', children: 'children' }"
+                  default-expand-all
+                  :expand-on-click-node="false"
+                  node-key="id"
                 >
-                  {{ area }}
-                </el-tag>
+                  <template #default="{ node, data }">
+                    <div class="region-tree-node">
+                      <div class="node-label">
+                        <el-icon class="node-icon" :class="`icon-${data.type}`">
+                          <LocationFilled v-if="data.type === 'province'" />
+                          <LocationFilled v-else-if="data.type === 'city'" />
+                          <LocationFilled v-else-if="data.type === 'district'" />
+                          <Odometer v-else-if="data.type === 'road'" />
+                        </el-icon>
+                        <span class="node-name">{{ formatNodeLabel(data) }}</span>
+                      </div>
+                      <div class="node-info">
+                        <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                        <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                      </div>
+                    </div>
+                  </template>
+                </el-tree>
               </div>
-              <el-empty v-else description="暂无区域信息" :image-size="60" />
+              <el-empty v-else description="暂无区域信息，请先填充地理信息" :image-size="60" />
             </el-card>
 
             <!-- 轨迹点列表
@@ -326,7 +349,7 @@ import {
   LocationFilled,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import { trackApi, type Track, type TrackPoint, type FillProgressResponse } from '@/api/track'
+import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -372,6 +395,16 @@ const fillProgress = ref<{
 }>({ current: 0, total: 0, status: 'idle' })
 let fillProgressTimer: number | null = null
 
+// 区域树相关
+const regionTree = ref<RegionNode[]>([])
+const regionTreeLoading = ref(false)
+const regionStats = ref<{ province: number; city: number; district: number; road: number }>({
+  province: 0,
+  city: 0,
+  district: 0,
+  road: 0,
+})
+
 // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
   if (!track.value || !points.value.length) return null
@@ -407,20 +440,6 @@ const trackWithPoints = computed(() => {
       road_number: p.road_number,
     })),
   }
-})
-
-// 提取经过的区域
-const areas = computed(() => {
-  const uniqueAreas = new Set<string>()
-  for (const point of points.value) {
-    if (point.province) {
-      uniqueAreas.add(point.province)
-    }
-    if (point.city && point.city !== point.province) {
-      uniqueAreas.add(point.city)
-    }
-  }
-  return Array.from(uniqueAreas)
 })
 
 // 处理用户下拉菜单命令
@@ -463,6 +482,77 @@ async function fetchTrackPoints() {
   } catch (error) {
     // 错误已在拦截器中处理
   }
+}
+
+// 获取区域树
+async function fetchRegions() {
+  if (!track.value?.has_area_info && !track.value?.has_road_info) {
+    regionTree.value = []
+    regionStats.value = { province: 0, city: 0, district: 0, road: 0 }
+    return
+  }
+
+  try {
+    regionTreeLoading.value = true
+    const response = await trackApi.getRegions(trackId.value)
+    regionTree.value = response.regions
+    regionStats.value = response.stats
+  } catch (error) {
+    // 错误已在拦截器中处理
+    regionTree.value = []
+    regionStats.value = { province: 0, city: 0, district: 0, road: 0 }
+  } finally {
+    regionTreeLoading.value = false
+  }
+}
+
+// 格式化节点显示名称
+function formatNodeLabel(node: RegionNode): string {
+  let label = node.name
+  if (node.road_number) {
+    // 将逗号分隔的道路编号改为斜杠分隔
+    const roadNumbers = node.road_number.split(',').map(s => s.trim()).join(' / ')
+    label += ` (${roadNumbers})`
+  }
+  return label
+}
+
+// 格式化距离
+function formatDistance(meters: number): string {
+  if (meters >= 1000) {
+    const km = (meters / 1000).toFixed(2)
+    // 去掉末尾的 .00
+    return km.endsWith('.00') ? `${km.slice(0, -3)} km` : `${km} km`
+  }
+  return `${Math.round(meters)} m`
+}
+
+// 格式化时间范围
+function formatTimeRange(start: string | null, end: string | null): string {
+  if (!start) return '-'
+  const startDate = new Date(start)
+  const endDate = end ? new Date(end) : null
+
+  // 格式化时间（本地时区）
+  const formatTime = (date: Date) => {
+    const hours = date.getHours().toString().padStart(2, '0')
+    const minutes = date.getMinutes().toString().padStart(2, '0')
+    return `${hours}:${minutes}`
+  }
+
+  if (endDate) {
+    const diff = (endDate.getTime() - startDate.getTime()) / 1000 / 60 // 分钟
+    if (diff < 1) {
+      return `${formatTime(startDate)}`
+    } else if (diff < 60) {
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff)}分钟)`
+    } else {
+      const hours = Math.floor(diff / 60)
+      const mins = Math.round(diff % 60)
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${hours}小时${mins}分钟)`
+    }
+  }
+  return formatTime(startDate)
 }
 
 // 渲染海拔和速度合并图表
@@ -760,8 +850,7 @@ function startPollingProgress() {
         // 重新加载轨迹数据
         await fetchTrackDetail()
         await fetchTrackPoints()
-        // 重新渲染区域列表
-        // areas 会自动更新
+        await fetchRegions()
       } else if (response.progress.status === 'error') {
         stopPollingProgress()
         fillingGeocoding.value = false
@@ -893,11 +982,6 @@ async function downloadTrack() {
 }
 
 // 格式化函数
-function formatDistance(meters: number): string {
-  if (meters < 1000) return `${meters.toFixed(1)} m`
-  return `${(meters / 1000).toFixed(2)} km`
-}
-
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
@@ -934,6 +1018,7 @@ onMounted(async () => {
   try {
     await fetchTrackDetail()
     await fetchTrackPoints()
+    await fetchRegions()
   } catch (error) {
     console.error('Failed to load track data:', error)
   } finally {
@@ -1128,14 +1213,78 @@ onUnmounted(() => {
   height: 220px;
 }
 
-.areas-list {
+/* 时间线样式 */
+.card-header {
   display: flex;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* 区域树样式 */
+.region-tree-container {
+  padding: 10px 0;
+}
+
+.region-tree-node {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding-right: 10px;
+}
+
+.node-label {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 
-.area-tag {
-  margin: 0;
+.node-icon {
+  font-size: 16px;
+}
+
+.node-icon.icon-province {
+  color: #f56c6c;
+}
+
+.node-icon.icon-city {
+  color: #409eff;
+}
+
+.node-icon.icon-district {
+  color: #67c23a;
+}
+
+.node-icon.icon-road {
+  color: #e6a23c;
+}
+
+.node-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+.node-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.node-distance {
+  color: #606266;
+  font-weight: 500;
+}
+
+.node-time {
+  color: #909399;
+}
+
+.info-missing {
+  color: #f56c6c;
+  font-size: 12px;
+  font-style: italic;
 }
 
 .points-list {

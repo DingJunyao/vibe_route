@@ -105,3 +105,34 @@ class TrackStatsResponse(BaseModel):
     total_duration: Optional[int] = 0  # 秒
     total_elevation_gain: Optional[float] = 0  # 米
     total_elevation_loss: Optional[float] = 0  # 米
+
+
+class RegionNode(BaseModel):
+    """区域树节点"""
+    id: str
+    name: str
+    type: str  # province, city, district, road
+    point_count: int = 0
+    distance: float = 0  # 路径长度（米）
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    road_number: Optional[str] = None
+    children: List['RegionNode'] = []
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        if dt is None:
+            return None
+        return dt.isoformat() + '+00:00'
+
+
+# 更新前向引用
+RegionNode.model_rebuild()
+
+
+class RegionTreeResponse(BaseModel):
+    """区域树响应 schema"""
+    track_id: int
+    regions: List[RegionNode]
+    stats: dict  # 各级区域数量统计

@@ -76,6 +76,40 @@ export interface FillProgressResponse {
   }
 }
 
+export interface FillProgressItem {
+  status: 'idle' | 'filling' | 'completed' | 'failed'
+  current: number
+  total: number
+  percent: number
+}
+
+export type AllFillProgressResponse = Record<number, FillProgressItem>
+
+export interface RegionNode {
+  id: string
+  name: string
+  type: 'province' | 'city' | 'district' | 'road'
+  road_number: string | null
+  has_info: boolean  // 是否有详细信息
+  distance: number  // 路径长度（米）
+  start_time: string | null
+  end_time: string | null
+  children: RegionNode[]
+}
+
+export interface RegionStats {
+  province: number
+  city: number
+  district: number
+  road: number
+}
+
+export interface RegionTreeResponse {
+  track_id: number
+  regions: RegionNode[]
+  stats: RegionStats
+}
+
 // API 方法
 export const trackApi = {
   // 上传轨迹
@@ -152,5 +186,15 @@ export const trackApi = {
   // 获取填充进度
   getFillProgress(trackId: number): Promise<FillProgressResponse> {
     return http.get(`/tracks/${trackId}/fill-progress`)
+  },
+
+  // 获取所有轨迹的填充进度
+  getAllFillProgress(): Promise<AllFillProgressResponse> {
+    return http.get('/tracks/fill-progress/all')
+  },
+
+  // 获取区域树
+  getRegions(trackId: number): Promise<RegionTreeResponse> {
+    return http.get(`/tracks/${trackId}/regions`)
   },
 }

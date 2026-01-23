@@ -73,9 +73,29 @@
           <el-table :data="tracks" style="width: 100%" @row-click="viewTrack" class="pc-table">
             <el-table-column prop="name" label="轨迹名称" min-width="200">
               <template #default="{ row }">
-                <el-link :underline="false" @click.stop="viewTrack(row)">
-                  {{ row.name }}
-                </el-link>
+                <div class="track-name-cell">
+                  <el-link :underline="false" @click.stop="viewTrack(row)">
+                    {{ row.name }}
+                  </el-link>
+                  <template v-if="getTrackProgress(row.id)">
+                    <el-tag
+                      v-if="getTrackProgress(row.id)!.status === 'filling'"
+                      type="primary"
+                      size="small"
+                      class="progress-tag"
+                    >
+                      填充中 {{ getTrackProgress(row.id)!.percent }}%
+                    </el-tag>
+                    <el-tag
+                      v-else-if="getTrackProgress(row.id)!.status === 'failed'"
+                      type="danger"
+                      size="small"
+                      class="progress-tag"
+                    >
+                      填充失败
+                    </el-tag>
+                  </template>
+                </div>
               </template>
             </el-table-column>
 
@@ -139,6 +159,25 @@
                   <span class="label">时长</span>
                   <span class="value">{{ formatDuration(row.duration) }}</span>
                 </div>
+                <div class="card-item" v-if="getTrackProgress(row.id)">
+                  <span class="label">状态</span>
+                  <span class="value">
+                    <el-tag
+                      v-if="getTrackProgress(row.id)!.status === 'filling'"
+                      type="primary"
+                      size="small"
+                    >
+                      填充中 {{ getTrackProgress(row.id)!.percent }}%
+                    </el-tag>
+                    <el-tag
+                      v-else-if="getTrackProgress(row.id)!.status === 'failed'"
+                      type="danger"
+                      size="small"
+                    >
+                      填充失败
+                    </el-tag>
+                  </span>
+                </div>
               </div>
               <div class="card-actions" @click.stop>
                 <el-button type="primary" size="small" @click="viewTrack(row)">
@@ -194,7 +233,7 @@ import {
   SortUp,
   SortDown,
 } from '@element-plus/icons-vue'
-import { trackApi, type Track } from '@/api/track'
+import { trackApi, type Track, type AllFillProgressResponse, type FillProgressItem } from '@/api/track'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -218,12 +257,58 @@ const searchQuery = ref('')
 const sortBy = ref('start_time')
 const sortOrder = ref<'asc' | 'desc'>('asc')  // 初始为正序图标，表示从新到旧
 
+// 填充进度数据
+const fillProgress = ref<AllFillProgressResponse>({})
+let progressTimer: ReturnType<typeof setInterval> | null = null
+const PROGRESS_REFRESH_INTERVAL = 2000  // 2秒刷新一次
+
 // 排序选项
 const sortOptions = [
   { label: '最新', value: 'start_time' },
   { label: '距离', value: 'distance' },
   { label: '时长', value: 'duration' },
 ]
+
+// 获取所有填充进度
+async function loadAllProgress() {
+  try {
+    const data = await trackApi.getAllFillProgress()
+    fillProgress.value = data
+  } catch (error) {
+    // 静默处理错误
+  }
+}
+
+// 启动进度轮询
+function startProgressPolling() {
+  if (progressTimer) return
+  // 立即加载一次
+  loadAllProgress()
+  // 定时刷新
+  progressTimer = setInterval(() => {
+    loadAllProgress()
+  }, PROGRESS_REFRESH_INTERVAL)
+}
+
+// 停止进度轮询
+function stopProgressPolling() {
+  if (progressTimer) {
+    clearInterval(progressTimer)
+    progressTimer = null
+  }
+}
+
+// 获取轨迹的进度信息
+function getTrackProgress(trackId: number): FillProgressItem | null {
+  return fillProgress.value[trackId] || null
+}
+
+// 检查是否有正在填充的轨迹
+function hasFillingTracks(): boolean {
+  return Object.values(fillProgress.value).some(
+    p => p.status === 'filling'
+  )
+}
 
 async function loadTracks() {
   loading.value = true
@@ -354,6 +439,8 @@ function formatDateTime(dateStr: string | null): string {
 
 onMounted(async () => {
   await loadTracks()
+  // 启动进度轮询
+  startProgressPolling()
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
@@ -362,6 +449,7 @@ onMounted(async () => {
 // 组件卸载时移除监听器
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  stopProgressPolling()  // 停止进度轮询
 })
 </script>
 
@@ -496,6 +584,16 @@ onUnmounted(() => {
   display: flex;
   gap: 4px;
   align-items: center;
+}
+
+.track-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-tag {
+  flex-shrink: 0;
 }
 
 .pagination {
