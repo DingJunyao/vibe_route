@@ -11,8 +11,16 @@
             <el-icon><Edit /></el-icon>
             编辑
           </el-button>
-          <el-button type="primary" @click="downloadDialogVisible = true" class="desktop-only">
+          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
             <el-icon><Download /></el-icon>
+            导出数据
+          </el-button>
+          <el-button type="primary" @click="importDialogVisible = true" class="desktop-only">
+            <el-icon><Upload /></el-icon>
+            导入数据
+          </el-button>
+          <el-button type="primary" @click="downloadDialogVisible = true" class="desktop-only">
+            <el-icon><Document /></el-icon>
             下载 GPX
           </el-button>
           <el-button
@@ -21,7 +29,6 @@
             class="desktop-only"
             :loading="fillingGeocoding"
             :disabled="fillProgress.status === 'filling'"
-            v-if="!track?.has_area_info || !track?.has_road_info"
           >
             <el-icon><LocationFilled /></el-icon>
             填充地理信息
@@ -39,13 +46,21 @@
                 <el-icon><Edit /></el-icon>
                 编辑
               </el-dropdown-item>
-              <el-dropdown-item command="download" v-if="isMobile">
+              <el-dropdown-item command="exportPoints" v-if="isMobile">
                 <el-icon><Download /></el-icon>
+                导出数据
+              </el-dropdown-item>
+              <el-dropdown-item command="import" v-if="isMobile">
+                <el-icon><Upload /></el-icon>
+                导入数据
+              </el-dropdown-item>
+              <el-dropdown-item command="download" v-if="isMobile">
+                <el-icon><Document /></el-icon>
                 下载 GPX
               </el-dropdown-item>
               <el-dropdown-item
                 command="fill"
-                v-if="isMobile && (!track?.has_area_info || !track?.has_road_info)"
+                v-if="isMobile"
                 :disabled="fillProgress.status === 'filling'"
               >
                 <el-icon><LocationFilled /></el-icon>
@@ -179,32 +194,6 @@
                 <el-descriptions-item label="备注">
                   <span class="description-text">{{ track.description || '无' }}</span>
                 </el-descriptions-item>
-                <el-descriptions-item label="填充进度">
-                  <div class="fill-progress-content">
-                    <div v-if="fillProgress.status === 'filling'" class="fill-progress-bar">
-                      <el-progress
-                        :percentage="getFillProgressPercentage()"
-                        :show-text="true"
-                        :stroke-width="8"
-                      />
-                      <div class="fill-progress-text">
-                        {{ fillProgress.current }} / {{ fillProgress.total }}
-                      </div>
-                    </div>
-                    <div v-else-if="fillProgress.status === 'completed'" class="fill-status-text">
-                      <el-icon color="#67c23a"><SuccessFilled /></el-icon>
-                      已填充
-                    </div>
-                    <div v-else-if="fillProgress.status === 'error'" class="fill-status-text">
-                      <el-icon color="#f56c6c"><CircleCloseFilled /></el-icon>
-                      填充失败
-                    </div>
-                    <div v-else class="fill-status-text">
-                      <el-tag v-if="track.has_area_info && track.has_road_info" type="success" size="small">已填充</el-tag>
-                      <el-tag v-else type="info" size="small">未填充</el-tag>
-                    </div>
-                  </div>
-                </el-descriptions-item>
               </el-descriptions>
             </el-card>
 
@@ -218,35 +207,72 @@
                   </el-tag>
                 </div>
               </template>
-              <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
-              <div v-else-if="regionTree.length > 0" class="region-tree-container">
-                <el-tree
-                  :data="regionTree"
-                  :props="{ label: 'name', children: 'children' }"
-                  default-expand-all
-                  :expand-on-click-node="false"
-                  node-key="id"
-                >
-                  <template #default="{ node, data }">
-                    <div class="region-tree-node">
-                      <div class="node-label">
-                        <el-icon class="node-icon" :class="`icon-${data.type}`">
-                          <LocationFilled v-if="data.type === 'province'" />
-                          <LocationFilled v-else-if="data.type === 'city'" />
-                          <LocationFilled v-else-if="data.type === 'district'" />
-                          <Odometer v-else-if="data.type === 'road'" />
-                        </el-icon>
-                        <span class="node-name">{{ formatNodeLabel(data) }}</span>
-                      </div>
-                      <div class="node-info">
-                        <span class="node-distance">{{ formatDistance(data.distance) }}</span>
-                        <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
-                      </div>
-                    </div>
-                  </template>
-                </el-tree>
+
+              <!-- 未填充提示（仅在未填充且未开始填充时显示） -->
+              <div v-if="(!track.has_area_info || !track.has_road_info) && !(fillProgress.status === 'filling' || fillingGeocoding)" class="no-fill-hint">
+                <el-icon><LocationFilled /></el-icon>
+                <span>请填充地理信息后查看</span>
+                <div class="no-fill-actions">
+                  <el-button type="primary" size="small" @click="handleFillGeocoding" :loading="fillingGeocoding">
+                    立即填充
+                  </el-button>
+                  <el-button type="success" size="small" @click="importDialogVisible = true">
+                    导入数据
+                  </el-button>
+                </div>
               </div>
-              <el-empty v-else description="暂无区域信息，请先填充地理信息" :image-size="60" />
+
+              <!-- 填充进度（开始填充后显示，无论是否已填充） -->
+              <template v-if="fillProgress.status === 'filling' || fillingGeocoding">
+                <div class="fill-progress-section">
+                  <div class="fill-progress-hint">正在填充地理信息……</div>
+                  <div class="fill-progress-with-action">
+                    <el-progress
+                      :percentage="fillProgressPercentage"
+                      :show-text="false"
+                      :stroke-width="8"
+                    />
+                    <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
+                  </div>
+                  <div class="fill-progress-text">
+                    <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
+                    <span v-else>正在准备...</span>
+                  </div>
+                </div>
+              </template>
+
+              <!-- 区域树 -->
+              <template v-else>
+                <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+                <div v-else-if="regionTree.length > 0" class="region-tree-container">
+                  <el-tree
+                    :data="regionTree"
+                    :props="{ label: 'name', children: 'children' }"
+                    default-expand-all
+                    :expand-on-click-node="false"
+                    node-key="id"
+                  >
+                    <template #default="{ node, data }">
+                      <div class="region-tree-node">
+                        <div class="node-label">
+                          <el-icon class="node-icon" :class="`icon-${data.type}`">
+                            <LocationFilled v-if="data.type === 'province'" />
+                            <LocationFilled v-else-if="data.type === 'city'" />
+                            <LocationFilled v-else-if="data.type === 'district'" />
+                            <Odometer v-else-if="data.type === 'road'" />
+                          </el-icon>
+                          <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
+                          <span v-else class="node-name">{{ formatNodeLabel(data) }}</span>
+                        </div>
+                        <div class="node-info">
+                          <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                          <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                        </div>
+                      </div>
+                    </template>
+                  </el-tree>
+                </div>
+              </template>
             </el-card>
 
             <!-- 轨迹点列表
@@ -324,6 +350,88 @@
         <el-button type="primary" @click="downloadTrack">下载</el-button>
       </template>
     </el-dialog>
+
+    <!-- 导出数据对话框 -->
+    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" width="400px">
+      <el-form label-width="100px">
+        <el-form-item label="文件格式">
+          <el-radio-group v-model="exportFormat">
+            <el-radio value="csv">CSV (Excel)</el-radio>
+            <el-radio value="xlsx">XLSX (Excel)</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-alert type="info" :closable="false" style="margin-top: 10px">
+          导出后可以编辑地理信息，然后重新导入
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportPointsDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="exportPoints">导出</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 导入数据对话框 -->
+    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" width="500px">
+      <el-form label-width="100px">
+        <el-form-item label="匹配方式">
+          <el-radio-group v-model="importMatchMode">
+            <el-radio value="index">索引 (index 列)</el-radio>
+            <el-radio value="time">时间 (time_date/time_time 或 time 列)</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="importMatchMode === 'time'" label="文件时区">
+          <el-select v-model="importTimezone" placeholder="选择导入文件的时间戳时区">
+            <el-option label="UTC (世界标准时间)" value="UTC" />
+            <el-option label="UTC+8 (北京时间)" value="UTC+8" />
+            <el-option label="Asia/Shanghai (中国标准时间)" value="Asia/Shanghai" />
+            <el-option label="UTC+1" value="UTC+1" />
+            <el-option label="UTC+2" value="UTC+2" />
+            <el-option label="UTC+3" value="UTC+3" />
+            <el-option label="UTC+4" value="UTC+4" />
+            <el-option label="UTC+5" value="UTC+5" />
+            <el-option label="UTC+6" value="UTC+6" />
+            <el-option label="UTC+7" value="UTC+7" />
+            <el-option label="UTC+9" value="UTC+9" />
+            <el-option label="UTC+10" value="UTC+10" />
+            <el-option label="UTC-5" value="UTC-5" />
+            <el-option label="UTC-6" value="UTC-6" />
+            <el-option label="UTC-7" value="UTC-7" />
+            <el-option label="UTC-8" value="UTC-8" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="importMatchMode === 'time'" label="时间误差">
+          <el-input-number v-model="importTimeTolerance" :min="0.1" :max="60" :step="0.1" :precision="1" style="width: 150px" />
+          <span style="margin-left: 8px; color: #999;">秒（不含边界值，如 1 表示 &lt; 1 秒）</span>
+        </el-form-item>
+        <el-form-item label="选择文件">
+          <el-upload
+            ref="uploadRef"
+            :auto-upload="false"
+            :limit="1"
+            accept=".csv,.xlsx"
+            :on-change="handleFileChange"
+            :on-remove="handleFileRemove"
+          >
+            <el-button type="primary">
+              <el-icon><Upload /></el-icon>
+              选择文件
+            </el-button>
+            <template #tip>
+              <div style="font-size: 12px; color: #999; margin-top: 5px">
+                支持 CSV 或 XLSX 格式
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+        <el-alert type="info" :closable="false" style="margin-top: 10px">
+          导入将更新地理信息和备注，不会修改坐标和原始数据
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <el-button @click="importDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="importing" @click="importPoints" :disabled="!importFile">导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -332,16 +440,18 @@ import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { UploadFile, UploadInstance } from 'element-plus'
 import {
   ArrowLeft,
   Download,
+  Upload,
   Edit,
+  Document,
   Odometer,
   Clock,
   Top,
   Bottom,
   SuccessFilled,
-  CircleCloseFilled,
   User,
   ArrowDown,
   Setting,
@@ -391,7 +501,7 @@ const fillingGeocoding = ref(false)
 const fillProgress = ref<{
   current: number
   total: number
-  status: 'idle' | 'filling' | 'completed' | 'error'
+  status: 'idle' | 'filling' | 'completed' | 'error' | 'stopped'
 }>({ current: 0, total: 0, status: 'idle' })
 let fillProgressTimer: number | null = null
 
@@ -404,6 +514,20 @@ const regionStats = ref<{ province: number; city: number; district: number; road
   district: 0,
   road: 0,
 })
+
+// 导出相关
+const exportPointsDialogVisible = ref(false)
+const exportFormat = ref<'csv' | 'xlsx'>('csv')
+const exporting = ref(false)
+
+// 导入相关
+const importDialogVisible = ref(false)
+const importing = ref(false)
+const importFile = ref<File | null>(null)
+const importMatchMode = ref<'index' | 'time'>('index')
+const importTimezone = ref<string>('UTC+8')
+const importTimeTolerance = ref<number>(1.0)
+const uploadRef = ref<UploadInstance>()
 
 // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
@@ -460,6 +584,10 @@ function handleCommand(command: string) {
     showEditDialog()
   } else if (command === 'download') {
     downloadDialogVisible.value = true
+  } else if (command === 'exportPoints') {
+    exportPointsDialogVisible.value = true
+  } else if (command === 'import') {
+    importDialogVisible.value = true
   } else if (command === 'fill') {
     handleFillGeocoding()
   }
@@ -508,13 +636,18 @@ async function fetchRegions() {
 
 // 格式化节点显示名称
 function formatNodeLabel(node: RegionNode): string {
-  let label = node.name
-  if (node.road_number) {
-    // 将逗号分隔的道路编号改为斜杠分隔
+  // 道路节点的特殊格式：道路编号在前，道路名称在后
+  if (node.type === 'road' && node.road_number) {
     const roadNumbers = node.road_number.split(',').map(s => s.trim()).join(' / ')
-    label += ` (${roadNumbers})`
+    // 如果有道路名称且不是（无名），则道路编号 + 空格 + 道路名称
+    if (node.name && node.name !== '（无名）') {
+      return `${roadNumbers} ${node.name}`
+    }
+    // 只有道路编号
+    return roadNumbers
   }
-  return label
+  // 非道路节点或没有道路编号，直接返回名称
+  return node.name
 }
 
 // 格式化距离
@@ -824,13 +957,48 @@ function handleMapPointHover(point: any, pointIndex: number) {
 
 // 填充地理信息
 async function handleFillGeocoding() {
+  // 如果已经填充过，显示确认对话框
+  if (track.value?.has_area_info || track.value?.has_road_info) {
+    try {
+      await ElMessageBox.confirm(
+        '已填充地理信息，再次填充会覆盖已有的信息，是否继续？',
+        '确认重新填充',
+        {
+          confirmButtonText: '继续',
+          cancelButtonText: '取消',
+          type: 'warning',
+        }
+      )
+    } catch {
+      // 用户点击取消
+      return
+    }
+  }
+
   try {
+    console.log('开始填充，当前 fillProgress:', fillProgress.value)
     await trackApi.fillGeocoding(trackId.value)
     ElMessage.success('开始填充地理信息')
     fillingGeocoding.value = true
+    console.log('fillingGeocoding 设为 true，开始轮询')
     startPollingProgress()
   } catch (error) {
     // 错误已在拦截器中处理
+  }
+}
+
+// 停止填充地理信息
+async function handleStopFillGeocoding() {
+  try {
+    await trackApi.stopFillGeocoding(trackId.value)
+    ElMessage.info('已停止填充')
+    stopPollingProgress()
+    fillingGeocoding.value = false
+    // 重新加载进度状态
+    const response = await trackApi.getFillProgress(trackId.value)
+    fillProgress.value = response.progress
+  } catch (error) {
+    console.error('Stop fill error:', error)
   }
 }
 
@@ -838,9 +1006,11 @@ async function handleFillGeocoding() {
 function startPollingProgress() {
   if (fillProgressTimer) return
 
+  console.log('启动轮询，间隔 2 秒')
   fillProgressTimer = window.setInterval(async () => {
     try {
       const response = await trackApi.getFillProgress(trackId.value)
+      console.log('收到进度更新:', response.progress)
       fillProgress.value = response.progress
 
       if (response.progress.status === 'completed') {
@@ -855,6 +1025,10 @@ function startPollingProgress() {
         stopPollingProgress()
         fillingGeocoding.value = false
         ElMessage.error('填充地理信息失败')
+      } else if (response.progress.status === 'stopped') {
+        stopPollingProgress()
+        fillingGeocoding.value = false
+        ElMessage.info('填充已停止')
       }
     } catch (error) {
       console.error('Failed to fetch fill progress:', error)
@@ -869,6 +1043,14 @@ function stopPollingProgress() {
     fillProgressTimer = null
   }
 }
+
+// 填充进度百分比
+const fillProgressPercentage = computed(() => {
+  if (fillProgress.value.total > 0) {
+    return Math.round((fillProgress.value.current / fillProgress.value.total) * 100)
+  }
+  return 0
+})
 
 // 获取填充进度百分比
 function getFillProgressPercentage(): number {
@@ -978,6 +1160,94 @@ async function downloadTrack() {
   } catch (error) {
     console.error('Download error:', error)
     ElMessage.error('下载失败')
+  }
+}
+
+// 导出轨迹点
+async function exportPoints() {
+  try {
+    exporting.value = true
+    const url = trackApi.exportPoints(trackId.value, exportFormat.value)
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error('导出失败')
+    }
+
+    // 获取文件名
+    const contentDisposition = response.headers.get('Content-Disposition')
+    let filename = `track_${trackId.value}_points.${exportFormat.value}`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/)
+      if (match) filename = match[1]
+    }
+
+    // 创建 blob 并下载
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(blobUrl)
+
+    exportPointsDialogVisible.value = false
+    ElMessage.success('导出成功')
+  } catch (error) {
+    console.error('Export error:', error)
+    ElMessage.error('导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
+
+// 处理文件选择
+function handleFileChange(file: UploadFile) {
+  if (file.raw) {
+    importFile.value = file.raw
+  }
+}
+
+// 处理文件移除
+function handleFileRemove() {
+  importFile.value = null
+}
+
+// 导入轨迹点
+async function importPoints() {
+  if (!importFile.value) {
+    ElMessage.warning('请先选择文件')
+    return
+  }
+
+  try {
+    importing.value = true
+    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value)
+
+    const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
+    ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
+
+    importDialogVisible.value = false
+    importFile.value = null
+    if (uploadRef.value) {
+      uploadRef.value.clearFiles()
+    }
+
+    // 重新加载轨迹数据
+    await fetchTrackDetail()
+    await fetchTrackPoints()
+    await fetchRegions()
+  } catch (error) {
+    console.error('Import error:', error)
+    ElMessage.error('导入失败，请检查文件格式是否正确')
+  } finally {
+    importing.value = false
   }
 }
 
@@ -1281,6 +1551,76 @@ onUnmounted(() => {
   color: #909399;
 }
 
+/* 未填充提示 */
+.no-fill-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 40px 20px;
+  color: #909399;
+}
+
+.no-fill-hint .el-icon {
+  font-size: 48px;
+  color: #c0c4cc;
+}
+
+.no-fill-hint span {
+  font-size: 14px;
+}
+
+.no-fill-actions {
+  display: flex;
+  gap: 12px;
+}
+
+/* 填充进度 */
+.fill-progress-section {
+  padding: 20px;
+}
+
+.fill-progress-hint {
+  font-size: 14px;
+  color: #409eff;
+  margin-bottom: 12px;
+}
+
+.fill-progress-with-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fill-progress-with-action :deep(.el-progress) {
+  flex: 1;
+}
+
+.stop-fill-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  position: relative;
+}
+
+.stop-fill-btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 10px;
+  height: 10px;
+  background-color: currentColor;
+}
+
+.fill-progress-text {
+  text-align: left;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #606266;
+}
+
 .info-missing {
   color: #f56c6c;
   font-size: 12px;
@@ -1357,7 +1697,7 @@ onUnmounted(() => {
 .fill-progress-text {
   font-size: 12px;
   color: #909399;
-  text-align: center;
+  text-align: left;
   margin-top: 4px;
 }
 

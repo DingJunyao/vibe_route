@@ -52,6 +52,7 @@ numpy
 tqdm
 pyyaml
 loguru
+openpyxl
 
 # 测试
 pytest

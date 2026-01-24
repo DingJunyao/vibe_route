@@ -84,6 +84,9 @@ class TrackPoint(Base, AuditMixin):
     road_number = Column(String(50), nullable=True)
     road_name_en = Column(String(200), nullable=True)
 
+    # 备注
+    memo = Column(Text, nullable=True)
+
     # 关系
     track = relationship("Track", back_populates="points")
 

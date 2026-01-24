@@ -437,6 +437,15 @@ class TrackService:
         """获取地理信息填充进度"""
         return self._filling_progress.get(track_id, {"current": 0, "total": 0, "status": "idle"})
 
+    def stop_fill_geocoding(self, track_id: int) -> bool:
+        """停止地理信息填充"""
+        if track_id in self._filling_progress:
+            progress = self._filling_progress[track_id]
+            if progress.get("status") == "filling":
+                progress["status"] = "stopped"
+                return True
+        return False
+
     async def fill_geocoding_info(
         self,
         db: AsyncSession,
@@ -492,6 +501,11 @@ class TrackService:
 
                 updated_count = 0
                 for idx, point in enumerate(points):
+                    # 检查是否已停止
+                    if self._filling_progress[track_id].get("status") == "stopped":
+                        logger.info(f"Geocoding fill stopped for track {track_id}")
+                        return
+
                     try:
                         lat = point.latitude_wgs84
                         lon = point.longitude_wgs84
@@ -981,11 +995,11 @@ class TrackService:
             road_name = point.road_name
             road_number = point.road_number
 
-            # 统计各级区域
-            if province: province_set.add(province)
-            if city and city != province: city_set.add(city)
-            if district and district != city: district_set.add(district)
-            if road_name: road_set.add(road_name)
+            # 统计各级区域（排除"未知区域"）
+            if province and province != '未知区域': province_set.add(province)
+            if city and city != province and city != '未知区域': city_set.add(city)
+            if district and district != city and district != '未知区域': district_set.add(district)
+            if road_name and road_name != '未知区域': road_set.add(road_name)
 
             # 检查是否需要创建新的省级节点
             if current_province is None or current_province[0] != province:
@@ -1022,13 +1036,13 @@ class TrackService:
             if road_name:
                 road_key = (road_name, road_number or '')
             else:
-                road_key = ('（无名）', '')
+                road_key = ('（无名）', road_number or '')
 
             if current_road is None or current_road[0] != road_key:
                 if road_name:
                     new_road = create_node(road_name, 'road', road_number)
                 else:
-                    new_road = create_node('（无名）', 'road', None)
+                    new_road = create_node('（无名）', 'road', road_number)
                 district_node['children'].append(new_road)
                 current_road = (road_key, new_road)
 
@@ -1074,6 +1088,642 @@ class TrackService:
                 'district': len(district_set),
                 'road': len(road_set),
             }
+        }
+
+
+    async def export_points_to_csv(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> tuple[str, str]:
+        """
+        导出轨迹点为 CSV 格式（UTF-8 带 BOM）
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+
+        Returns:
+            (文件名, CSV 内容)
+        """
+        # 检查权限并获取轨迹
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        # 获取轨迹点
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            raise ValueError("轨迹没有数据点")
+
+        # CSV BOM 头
+        csv_lines = []
+        csv_lines.append("\ufeff")  # UTF-8 BOM
+
+        # CSV 表头
+        headers = [
+            "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
+            "longitude_wgs84", "latitude_wgs84",
+            "longitude_gcj02", "latitude_gcj02",
+            "longitude_bd09", "latitude_bd09",
+            "elevation", "distance", "course", "speed",
+            "province", "city", "area",
+            "province_en", "city_en", "area_en",
+            "road_num", "road_name", "road_name_en", "memo"
+        ]
+        csv_lines.append(",".join(headers))
+
+        # 计算累计距离
+        total_distance = 0.0
+        prev_point = None
+
+        for point in points:
+            # 计算到前一个点的距离
+            if prev_point:
+                distance = self._calculate_distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84
+                )
+                total_distance += distance
+            else:
+                total_distance = 0.0
+
+            # 解析时间
+            time_date = ""
+            time_time = ""
+            time_microsecond = ""
+            elapsed_time = ""
+
+            if point.time:
+                time_date = point.time.strftime("%Y/%m/%d")
+                time_time = point.time.strftime("%H:%M:%S")
+                time_microsecond = str(point.time.microsecond)
+
+                # 计算已用时间
+                if track.start_time:
+                    elapsed = (point.time - track.start_time).total_seconds()
+                    elapsed_time = f"{elapsed:.2f}"
+
+            # 构建行数据
+            row = [
+                str(point.point_index),
+                time_date,
+                time_time,
+                time_microsecond,
+                elapsed_time,
+                f"{point.longitude_wgs84:.6f}" if point.longitude_wgs84 else "",
+                f"{point.latitude_wgs84:.6f}" if point.latitude_wgs84 else "",
+                f"{point.longitude_gcj02:.6f}" if point.longitude_gcj02 else "",
+                f"{point.latitude_gcj02:.6f}" if point.latitude_gcj02 else "",
+                f"{point.longitude_bd09:.6f}" if point.longitude_bd09 else "",
+                f"{point.latitude_bd09:.6f}" if point.latitude_bd09 else "",
+                f"{point.elevation:.1f}" if point.elevation is not None else "",
+                f"{total_distance:.2f}",
+                f"{point.bearing:.2f}" if point.bearing is not None else "",
+                f"{point.speed:.2f}" if point.speed is not None else "",
+                point.province or "",
+                point.city or "",
+                point.district or "",
+                point.province_en or "",
+                point.city_en or "",
+                point.district_en or "",
+                point.road_number or "",
+                point.road_name or "",
+                point.road_name_en or "",
+                getattr(point, 'memo', None) or "",
+            ]
+
+            # CSV 转义：包含逗号的字段用引号包裹
+            csv_row = []
+            for field in row:
+                if "," in field or '"' in field or "\n" in field:
+                    # 转义引号并包裹
+                    field = '"' + field.replace('"', '""') + '"'
+                csv_row.append(field)
+
+            csv_lines.append(",".join(csv_row))
+            prev_point = point
+
+        filename = f"{track.name}_points.csv"
+        content = "\n".join(csv_lines)
+
+        return filename, content
+
+    async def export_points_to_xlsx(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> tuple[str, bytes]:
+        """
+        导出轨迹点为 XLSX 格式
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+
+        Returns:
+            (文件名, XLSX 二进制内容)
+        """
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment
+        from io import BytesIO
+
+        # 检查权限并获取轨迹
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        # 获取轨迹点
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            raise ValueError("轨迹没有数据点")
+
+        # 创建工作簿
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "轨迹点"
+
+        # 设置表头
+        headers = [
+            "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
+            "longitude_wgs84", "latitude_wgs84",
+            "longitude_gcj02", "latitude_gcj02",
+            "longitude_bd09", "latitude_bd09",
+            "elevation", "distance", "course", "speed",
+            "province", "city", "area",
+            "province_en", "city_en", "area_en",
+            "road_num", "road_name", "road_name_en", "memo"
+        ]
+
+        # 写入表头（加粗）
+        header_font = Font(bold=True)
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=header)
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal='center')
+
+        # 计算累计距离并写入数据
+        total_distance = 0.0
+        prev_point = None
+
+        for row_idx, point in enumerate(points, start=2):
+            # 计算到前一个点的距离
+            if prev_point:
+                distance = self._calculate_distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84
+                )
+                total_distance += distance
+            else:
+                total_distance = 0.0
+
+            # 解析时间
+            time_date = ""
+            time_time = ""
+            time_microsecond = ""
+            elapsed_time = ""
+
+            if point.time:
+                time_date = point.time.strftime("%Y/%m/%d")
+                time_time = point.time.strftime("%H:%M:%S")
+                time_microsecond = str(point.time.microsecond)
+
+                # 计算已用时间
+                if track.start_time:
+                    elapsed = (point.time - track.start_time).total_seconds()
+                    elapsed_time = f"{elapsed:.2f}"
+
+            # 写入行数据
+            row_data = [
+                point.point_index,
+                time_date,
+                time_time,
+                time_microsecond,
+                elapsed_time,
+                round(point.longitude_wgs84, 6) if point.longitude_wgs84 else None,
+                round(point.latitude_wgs84, 6) if point.latitude_wgs84 else None,
+                round(point.longitude_gcj02, 6) if point.longitude_gcj02 else None,
+                round(point.latitude_gcj02, 6) if point.latitude_gcj02 else None,
+                round(point.longitude_bd09, 6) if point.longitude_bd09 else None,
+                round(point.latitude_bd09, 6) if point.latitude_bd09 else None,
+                round(point.elevation, 1) if point.elevation is not None else None,
+                round(total_distance, 2),
+                round(point.bearing, 2) if point.bearing is not None else None,
+                round(point.speed, 2) if point.speed is not None else None,
+                point.province,
+                point.city,
+                point.district,
+                point.province_en,
+                point.city_en,
+                point.district_en,
+                point.road_number,
+                point.road_name,
+                point.road_name_en,
+                getattr(point, 'memo', None),
+            ]
+
+            for col_idx, value in enumerate(row_data, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=value)
+
+            prev_point = point
+
+        # 保存到内存
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        filename = f"{track.name}_points.xlsx"
+        return filename, output.read()
+
+    async def import_points_from_file(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+        file_content: bytes,
+        file_format: str,
+        match_mode: str = "index",
+        timezone: str = "UTC",
+        time_tolerance: float = 1.0,
+    ) -> dict:
+        """
+        从文件导入轨迹点数据，更新行政区划和道路信息
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+            file_content: 文件内容
+            file_format: 文件格式 (csv 或 xlsx)
+            match_mode: 匹配方式 (index=索引匹配, time=时间匹配)
+            timezone: 导入文件的时间戳时区（如 UTC、UTC+8、Asia/Shanghai）
+            time_tolerance: 时间匹配误差（秒），默认 1 秒（不含）
+
+        Returns:
+            {"updated": 更新的点数, "total": 总点数, "matched_by": 匹配方式}
+        """
+        # 检查权限
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        # 获取现有轨迹点
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            raise ValueError("轨迹没有数据点")
+
+        # 创建索引到点的映射
+        points_map = {p.point_index: p for p in points}
+
+        # 解析时区
+        from datetime import datetime, timezone as dt_timezone, timedelta
+        import zoneinfo
+
+        # 解析时区字符串
+        try:
+            if timezone.startswith("UTC") or timezone.startswith("GMT"):
+                # 处理 UTC+8, UTC-5 等格式
+                sign = 1
+                offset_str = timezone[3:].strip()
+                if offset_str:
+                    if offset_str[0] == "-":
+                        sign = -1
+                        offset_str = offset_str[1:]
+                    hours = int(offset_str)
+                    tz = dt_timezone(timedelta(hours=sign * hours))
+                else:
+                    tz = dt_timezone.utc
+            else:
+                # 使用 IANA 时区数据库（如 Asia/Shanghai）
+                tz = zoneinfo.ZoneInfo(timezone)
+        except Exception as e:
+            logger.warning(f"Invalid timezone '{timezone}', using UTC: {e}")
+            tz = dt_timezone.utc
+
+        # 创建时间到点的映射（用于时间匹配）
+        # 使用 (time.timestamp(), 误差范围内) 的方式存储
+        points_by_time = {}
+        db_time_range = {"min": None, "max": None}
+        for p in points:
+            if p.time:
+                # 数据库中的 time 字段是 UTC 时间（无时区信息）
+                # 需要明确指定为 UTC 时区再获取时间戳，否则会被当作本地时间处理
+                if p.time.tzinfo is None:
+                    ts = p.time.replace(tzinfo=dt_timezone.utc).timestamp()
+                else:
+                    ts = p.time.timestamp()
+                points_by_time[ts] = p
+                # 记录时间范围
+                if db_time_range["min"] is None or ts < db_time_range["min"]:
+                    db_time_range["min"] = ts
+                if db_time_range["max"] is None or ts > db_time_range["max"]:
+                    db_time_range["max"] = ts
+
+        # 调试：显示数据库中的前 3 个时间戳
+        sample_timestamps = list(points_by_time.keys())[:3]
+        logger.info(f"Database sample timestamps: {sample_timestamps}")
+
+        # 记录使用的匹配方式
+        matched_by = "none"
+
+        # 调试日志 - 显示数据库时间范围
+        if db_time_range["min"] is not None:
+            from datetime import datetime as dt
+            min_time = dt.fromtimestamp(db_time_range["min"], dt_timezone.utc)
+            max_time = dt.fromtimestamp(db_time_range["max"], dt_timezone.utc)
+            logger.info(f"Import: match_mode={match_mode}, timezone={timezone}, total_points={len(points)}")
+            logger.info(f"Database time range (UTC): {min_time} to {max_time}")
+        else:
+            logger.info(f"Import: match_mode={match_mode}, timezone={timezone}, total_points={len(points)}")
+            logger.warning("No time data found in database points!")
+
+        # 计数器用于限制日志输出
+        row_count = [0]  # 用列表以便在嵌套函数中修改
+
+        def find_point_by_time(parsed_time: datetime) -> TrackPoint | None:
+            """根据时间查找匹配的轨迹点"""
+            if not parsed_time:
+                return None
+
+            # 将文件时间（无时区）解释为用户指定的时区，然后转换为 UTC 时间戳
+            # 文件中的时间是 UTC+8 时间，需要转换为 UTC 来匹配数据库
+            # 例如：文件时间 15:21:47 (UTC+8) -> 07:21:47 UTC
+            if parsed_time.tzinfo is None:
+                # 文件时间是用户指定的时区（如 UTC+8）
+                parsed_time = parsed_time.replace(tzinfo=tz)
+
+            # 转换为 UTC 时间戳
+            target_ts = parsed_time.astimezone(dt_timezone.utc).timestamp()
+
+            # 只记录前 3 行的时间匹配日志
+            if row_count[0] < 3:
+                logger.info(f"find_point_by_time: file_time={parsed_time} -> target_ts={target_ts}")
+
+            # 查找最接近的点（使用用户指定的误差范围，不含边界值）
+            for ts, p in points_by_time.items():
+                diff = abs(ts - target_ts)
+                if diff < time_tolerance:
+                    if row_count[0] < 3:
+                        logger.info(f"  Found match: ts={ts}, diff={diff:.3f}s")
+                    return p
+
+            if row_count[0] < 3:
+                logger.debug(f"  No match found (checked {len(points_by_time)} points)")
+            return None
+
+        def parse_time_from_row(row: dict, headers: set | list | None = None) -> datetime | None:
+            """从行数据解析时间"""
+            # 优先使用 time_date + time_time 组合
+            time_date = None
+            time_time = None
+            time_col = None
+
+            if isinstance(row, dict):
+                # 记录第一行用于调试
+                if row.get("index") == "0" or row.get("index") == 0:
+                    logger.info(f"CSV first row keys: {list(row.keys())}")
+                    logger.info(f"CSV first row: {row}")
+                time_date = row.get("time_date", "").strip()
+                time_time = row.get("time_time", "").strip()
+                time_col = row.get("time", "").strip()
+            else:
+                # XLSX 使用 headers
+                if headers:
+                    # 如果 headers 已经是 list，直接使用；否则转换
+                    header_list = headers if isinstance(headers, list) else list(headers)
+                    # 记录第一行用于调试
+                    if "index" in header_list:
+                        idx = header_list.index("index")
+                        if idx < len(row) and (row[idx] == "0" or row[idx] == 0):
+                            logger.info(f"XLSX headers: {header_list}")
+                            logger.info(f"XLSX first row: {dict(zip(header_list, row))}")
+
+                    if "time_date" in header_list:
+                        idx = header_list.index("time_date")
+                        if idx < len(row):
+                            time_date = str(row[idx]).strip() if row[idx] else ""
+                    if "time_time" in header_list:
+                        idx = header_list.index("time_time")
+                        if idx < len(row):
+                            time_time = str(row[idx]).strip() if row[idx] else ""
+                    if "time" in header_list:
+                        idx = header_list.index("time")
+                        if idx < len(row) and row[idx] is not None:
+                            # XLSX 中可能是 datetime 对象，直接返回
+                            if isinstance(row[idx], datetime):
+                                return row[idx]
+                            time_col = str(row[idx]).strip()
+
+            # 尝试 time_date + time_time 组合
+            if time_date and time_time:
+                try:
+                    dt_str = f"{time_date} {time_time}"
+                    # 支持多种日期格式
+                    for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                                "%Y/%m/%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S.%f"):
+                        try:
+                            return datetime.strptime(dt_str, fmt)
+                        except ValueError:
+                            continue
+                except Exception:
+                    pass
+
+            # 尝试单一 time 列
+            if time_col:
+                # 只记录前 3 行的解析日志
+                if row_count[0] < 3:
+                    logger.info(f"Parsing time_col: '{time_col}'")
+                # 尝试常见格式
+                for fmt in ("%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+                            "%Y/%m/%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S.%f",
+                            "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f",
+                            "%Y/%d/%m %H:%M:%S", "%Y/%d/%m %H:%M:%S.%f"):
+                    try:
+                        result = datetime.strptime(time_col, fmt)
+                        if row_count[0] < 3:
+                            logger.info(f"Successfully parsed with fmt '{fmt}': {result}")
+                        return result
+                    except ValueError:
+                        continue
+                if row_count[0] < 3:
+                    logger.warning(f"Failed to parse time: '{time_col}'")
+
+            return None
+
+        def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
+            """更新点的可编辑字段"""
+            def get_val(key: str) -> str | None:
+                if isinstance(row, dict):
+                    val = row.get(key)
+                    return val.strip() if val else None
+                else:
+                    if headers and key in headers:
+                        # 如果 headers 已经是 list，直接使用；否则转换
+                        header_list = headers if isinstance(headers, list) else list(headers)
+                        idx = header_list.index(key)
+                        if idx < len(row):
+                            val = row[idx]
+                            return str(val).strip() if val else None
+                return None
+
+            if get_val("province") is not None:
+                point.province = get_val("province") or None
+            if get_val("city") is not None:
+                point.city = get_val("city") or None
+            if get_val("area") is not None:
+                point.district = get_val("area") or None
+            if get_val("province_en") is not None:
+                point.province_en = get_val("province_en") or None
+            if get_val("city_en") is not None:
+                point.city_en = get_val("city_en") or None
+            if get_val("area_en") is not None:
+                point.district_en = get_val("area_en") or None
+            if get_val("road_num") is not None:
+                point.road_number = get_val("road_num") or None
+            if get_val("road_name") is not None:
+                point.road_name = get_val("road_name") or None
+            if get_val("road_name_en") is not None:
+                point.road_name_en = get_val("road_name_en") or None
+            if get_val("memo") is not None:
+                point.memo = get_val("memo") or None
+
+            point.updated_by = user_id
+
+        # 解析文件
+        if file_format == "csv":
+            import csv
+            from io import StringIO
+
+            # 处理 BOM
+            content_str = file_content.decode('utf-8-sig')
+            reader = csv.DictReader(StringIO(content_str))
+
+            updated_count = 0
+            for row in reader:
+                point = None
+
+                # 根据匹配方式选择匹配逻辑
+                if match_mode == "index":
+                    # 使用 index 匹配
+                    index_str = row.get("index", "").strip()
+                    if index_str:
+                        try:
+                            index = int(index_str)
+                            if index in points_map:
+                                point = points_map[index]
+                                matched_by = "index"
+                        except ValueError:
+                            pass
+                else:  # match_mode == "time"
+                    # 使用时间匹配
+                    parsed_time = parse_time_from_row(row)
+                    row_count[0] += 1  # 增加计数
+                    if parsed_time:
+                        point = find_point_by_time(parsed_time)
+                        if point:
+                            matched_by = "time"
+
+                if point:
+                    update_point_fields(point, row)
+                    updated_count += 1
+
+        elif file_format == "xlsx":
+            from openpyxl import load_workbook
+            from io import BytesIO
+
+            wb = load_workbook(BytesIO(file_content))
+            ws = wb.active
+
+            # 获取表头
+            headers = []
+            for cell in ws[1]:
+                headers.append(cell.value)
+
+            headers_set = set(headers)
+            logger.info(f"XLSX file headers: {headers}")
+
+            updated_count = 0
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or all(v is None for v in row):
+                    continue
+
+                point = None
+
+                # 根据匹配方式选择匹配逻辑
+                if match_mode == "index":
+                    # 使用 index 匹配
+                    if "index" in headers_set:
+                        idx = headers.index("index")
+                        if idx < len(row) and row[idx] is not None:
+                            try:
+                                index = int(row[idx])
+                                if index in points_map:
+                                    point = points_map[index]
+                                    matched_by = "index"
+                            except (ValueError, TypeError):
+                                pass
+                else:  # match_mode == "time"
+                    # 使用时间匹配
+                    parsed_time = parse_time_from_row(row, headers)
+                    row_count[0] += 1  # 增加计数
+                    if parsed_time:
+                        point = find_point_by_time(parsed_time)
+                        if point:
+                            matched_by = "time"
+
+                if point:
+                    update_point_fields(point, row, headers)
+                    updated_count += 1
+        else:
+            raise ValueError(f"不支持的文件格式: {file_format}")
+
+        # 检查是否有行政区划或道路信息，更新 track 状态
+        has_area = any(
+            p.province or p.city or p.district or
+            p.province_en or p.city_en or p.district_en
+            for p in points
+        )
+        has_road = any(
+            p.road_number or p.road_name or p.road_name_en
+            for p in points
+        )
+
+        if has_area:
+            track.has_area_info = True
+        if has_road:
+            track.has_road_info = True
+        track.updated_by = user_id
+
+        await db.commit()
+
+        logger.info(f"Imported data for track {track_id}: {updated_count}/{len(points)} points updated, matched by {matched_by}")
+
+        return {
+            "updated": updated_count,
+            "total": len(points),
+            "matched_by": matched_by
         }
 
 

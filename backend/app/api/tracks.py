@@ -266,6 +266,29 @@ async def get_fill_progress(
     }
 
 
+@router.post("/{track_id}/fill-stop")
+async def stop_fill_geocoding(
+    track_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    停止填充地理信息
+    """
+    track = await track_service.get_by_id(db, track_id, current_user.id)
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在",
+        )
+
+    success = track_service.stop_fill_geocoding(track_id)
+    if success:
+        return {"message": "已停止填充地理信息", "track_id": track_id}
+    else:
+        return {"message": "填充未在进行中", "track_id": track_id}
+
+
 @router.get("/fill-progress/all")
 async def get_all_fill_progress(
     current_user: User = Depends(get_current_user),
@@ -445,3 +468,129 @@ async def get_track_regions(
         "regions": result.get('regions', []),
         "stats": result.get('stats', {}),
     }
+
+
+@router.get("/{track_id}/export")
+async def export_track_points(
+    track_id: int,
+    format: str = Query("csv", pattern="^(csv|xlsx)$"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    导出轨迹点数据为 CSV 或 XLSX 格式
+
+    - format: 导出格式 (csv 或 xlsx)
+    - CSV 格式使用 UTF-8 编码带 BOM，确保 Excel 正确显示中文
+    - 导出文件包含所有轨迹点的详细数据，便于编辑行政区划和道路信息
+    """
+    from fastapi.responses import Response
+    from loguru import logger
+    from urllib.parse import quote
+
+    def encode_filename(filename: str) -> str:
+        """编码文件名以支持中文"""
+        encoded = quote(filename.encode('utf-8'))
+        return f"attachment; filename*=UTF-8''{encoded}"
+
+    try:
+        logger.info(f"Exporting track {track_id} as {format}")
+
+        if format == "csv":
+            filename, content = await track_service.export_points_to_csv(
+                db, track_id, current_user.id
+            )
+            logger.info(f"CSV export successful: {filename}")
+            return Response(
+                content=content,
+                media_type="text/csv; charset=utf-8",
+                headers={
+                    "Content-Disposition": encode_filename(filename),
+                },
+            )
+        else:  # xlsx
+            filename, content = await track_service.export_points_to_xlsx(
+                db, track_id, current_user.id
+            )
+            logger.info(f"XLSX export successful: {filename}")
+            return Response(
+                content=content,
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": encode_filename(filename),
+                },
+            )
+    except ValueError as e:
+        logger.error(f"Export ValueError: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.exception(f"Export failed for track {track_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导出失败: {str(e)}",
+        )
+
+
+@router.post("/{track_id}/import")
+async def import_track_points(
+    track_id: int,
+    file: UploadFile = File(...),
+    match_mode: str = Form("index"),
+    timezone: str = Form("UTC"),
+    time_tolerance: float = Form(1.0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    从 CSV 或 XLSX 文件导入轨迹点数据，更新行政区划和道路信息
+
+    - file: CSV 或 XLSX 文件
+    - match_mode: 匹配方式，index=索引匹配，time=时间匹配
+    - timezone: 导入文件的时间戳时区（如 UTC、UTC+8、Asia/Shanghai），默认 UTC
+    - time_tolerance: 时间匹配误差（秒），默认 1 秒（不含）
+    - 只更新可编辑字段：行政区划、道路信息、备注
+    - 坐标、海拔、速度等原始数据不会被修改
+    """
+    # 验证匹配方式
+    if match_mode not in ("index", "time"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无效的匹配方式，可选值: index, time",
+        )
+    # 验证误差范围
+    if time_tolerance <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="时间误差必须大于 0",
+        )
+    # 确定文件格式
+    filename = file.filename or ""
+    if filename.lower().endswith(".csv"):
+        file_format = "csv"
+    elif filename.lower().endswith(".xlsx"):
+        file_format = "xlsx"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不支持的文件格式，请上传 CSV 或 XLSX 文件",
+        )
+
+    try:
+        content = await file.read()
+        result = await track_service.import_points_from_file(
+            db, track_id, current_user.id, content, file_format, match_mode, timezone, time_tolerance
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"导入失败: {str(e)}",
+        )

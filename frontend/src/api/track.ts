@@ -44,6 +44,7 @@ export interface TrackPoint {
   city_en: string | null
   district_en: string | null
   road_name_en: string | null
+  memo: string | null  // 备注
 }
 
 export interface TrackListResponse {
@@ -108,6 +109,12 @@ export interface RegionTreeResponse {
   track_id: number
   regions: RegionNode[]
   stats: RegionStats
+}
+
+export interface ImportResponse {
+  updated: number
+  total: number
+  matched_by: 'index' | 'time' | 'none'
 }
 
 // API 方法
@@ -188,6 +195,11 @@ export const trackApi = {
     return http.get(`/tracks/${trackId}/fill-progress`)
   },
 
+  // 停止填充地理信息
+  stopFillGeocoding(trackId: number): Promise<{ message: string; track_id: number }> {
+    return http.post(`/tracks/${trackId}/fill-stop`)
+  },
+
   // 获取所有轨迹的填充进度
   getAllFillProgress(): Promise<AllFillProgressResponse> {
     return http.get('/tracks/fill-progress/all')
@@ -196,5 +208,24 @@ export const trackApi = {
   // 获取区域树
   getRegions(trackId: number): Promise<RegionTreeResponse> {
     return http.get(`/tracks/${trackId}/regions`)
+  },
+
+  // 导出轨迹点
+  exportPoints(trackId: number, format: 'csv' | 'xlsx' = 'csv'): string {
+    return `/api/tracks/${trackId}/export?format=${format}`
+  },
+
+  // 导入轨迹点
+  importPoints(trackId: number, file: File, matchMode: 'index' | 'time', timezone: string = 'UTC+8', timeTolerance: number = 1.0): Promise<ImportResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('match_mode', matchMode)
+    formData.append('timezone', timezone)
+    formData.append('time_tolerance', String(timeTolerance))
+    return http.post(`/tracks/${trackId}/import`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
   },
 }
