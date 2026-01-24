@@ -1002,10 +1002,18 @@ watch(() => props.defaultLayerId, (newId) => {
   }
 })
 
+// 调整地图大小（用于响应式布局）
+function resize() {
+  if (map.value) {
+    map.value.invalidateSize()
+  }
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
+  resize,
 })
 
 // 生命周期

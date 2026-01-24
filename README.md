@@ -15,6 +15,22 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 
 这不仅仅是一个轨迹管理系统，更是一个个人历史档案馆，一个行走记忆的数字化画布。
 
+## 项目截图
+
+### PC Web 端
+
+![主页](./doc/img/desktop_main.png)
+
+![轨迹列表](./doc/img/desktop_list.png)
+
+![轨迹详情](./doc/img/desktop_detail.png)
+
+### 移动 Web 端
+
+![主页](./doc/img/mobile_main.png) ![轨迹列表](./doc/img/mobile_list.png)
+
+![轨迹详情 - 1](./doc/img/mobile_detail_1.png) ![轨迹详情 - 2](./doc/img/mobile_detail_2.png)
+
 ## 项目进度
 
 ### 已完成 ✅

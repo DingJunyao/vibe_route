@@ -214,6 +214,19 @@ function hideMarker() {
   }
 }
 
+// 调整地图大小（用于响应式布局）
+function resize() {
+  if (useAMapEngine.value && amapRef.value?.resize) {
+    amapRef.value.resize()
+  } else if (useBMapEngine.value && bmapRef.value?.resize) {
+    bmapRef.value.resize()
+  } else if (useTencentEngine.value && tencentRef.value?.resize) {
+    tencentRef.value.resize()
+  } else if (leafletRef.value?.resize) {
+    leafletRef.value.resize()
+  }
+}
+
 onMounted(async () => {
   // 等待配置加载
   if (!configStore.config) {
@@ -239,6 +252,7 @@ watch(() => props.defaultLayerId, (newVal) => {
 defineExpose({
   highlightPoint,
   hideMarker,
+  resize,
 })
 </script>
 

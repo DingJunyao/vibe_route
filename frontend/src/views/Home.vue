@@ -146,6 +146,7 @@ const authStore = useAuthStore()
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
+const screenHeight = ref(window.innerHeight)
 const isMobile = computed(() => screenWidth.value <= 768)
 
 // 标记组件是否已挂载，用于避免卸载后更新状态
@@ -154,6 +155,7 @@ let isMounted = true
 // 监听窗口大小变化
 function handleResize() {
   screenWidth.value = window.innerWidth
+  screenHeight.value = window.innerHeight
 }
 
 const stats = ref({
@@ -436,12 +438,15 @@ onUnmounted(() => {
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
-  flex: 1;
+  height: calc(100vh - 60px); /* 减去导航栏高度 */
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .stats-row {
   margin-bottom: 20px;
+  flex-shrink: 0; /* 防止统计卡片被压缩 */
 }
 
 .stat-card {
@@ -486,7 +491,8 @@ onUnmounted(() => {
 }
 
 .map-card {
-  height: calc(100% - 140px);
+  flex: 1; /* 自动填充剩余空间 */
+  min-height: 0; /* 允许 flex 子元素缩小 */
   display: flex;
   flex-direction: column;
 }
@@ -555,6 +561,11 @@ onUnmounted(() => {
 
   .main {
     padding: 10px;
+    height: calc(100vh - 60px); /* 减去导航栏高度 */
+  }
+
+  .stats-row {
+    margin-bottom: 10px;
   }
 
   .stats-row :deep(.el-col) {
@@ -566,36 +577,46 @@ onUnmounted(() => {
   }
 
   .stats-row :deep(.el-card__body) {
-    min-height: 80px;
+    min-height: 70px;
+    max-height: 80px;
     display: flex;
     align-items: center;
-    padding: 12px;
+    padding: 10px;
   }
 
   .stat-icon {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     flex-shrink: 0;
   }
 
   .stat-icon :deep(.el-icon) {
-    font-size: 20px;
+    font-size: 18px;
   }
 
   .stat-value {
-    font-size: 18px;
+    font-size: 16px;
     white-space: nowrap;
   }
 
   .stat-label {
-    font-size: 12px;
+    font-size: 11px;
     white-space: nowrap;
+  }
+
+  .map-card {
+    flex: 1;
+    min-height: 200px;
   }
 
   .map-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 10px;
+    gap: 5px;
+  }
+
+  .map-header span {
+    font-size: 14px;
   }
 }
 </style>

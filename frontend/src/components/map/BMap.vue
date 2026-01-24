@@ -671,10 +671,19 @@ onUnmounted(() => {
   }
 })
 
+// 调整地图大小（用于响应式布局）
+function resize() {
+  if (BMapInstance) {
+    // 百度地图会自动调整大小，这里可以调用 reset 来确保地图正确显示
+    // 但为了避免改变用户当前视角，我们不做额外操作
+  }
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
+  resize,
 })
 </script>
 

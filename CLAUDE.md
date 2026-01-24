@@ -147,6 +147,128 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 - 移动端使用卡片列表替代表格
 - viewport 配置禁止页面缩放：`maximum-scale=1.0, user-scalable=no`
 
+### 响应式布局与视口适配
+
+为了确保内容能在第一屏完整显示，首页和轨迹详情页采用了基于视口高度（vh）的动态布局方案。
+
+#### 核心技术
+
+##### 1. 视口高度单位 (vh)
+
+使用 `vh`（视口高度百分比）动态计算元素高度，自动适应不同屏幕尺寸：
+
+```css
+/* 主容器高度 = 视口高度 - 导航栏高度 */
+.main {
+  height: calc(100vh - 60px);
+}
+
+/* 地图容器使用视口高度的百分比 */
+.normal-map-container {
+  height: 40vh;
+  min-height: 300px;
+}
+
+.chart {
+  height: 22vh;
+  min-height: 180px;
+}
+```
+
+##### 2. 窗口大小监听
+
+使用 `ref` 和事件监听器追踪窗口尺寸变化：
+
+```typescript
+const screenWidth = ref(window.innerWidth)
+const screenHeight = ref(window.innerHeight)
+const isMobile = computed(() => screenWidth.value <= 768)
+const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
+
+function handleResize() {
+  screenWidth.value = window.innerWidth
+  screenHeight.value = window.innerHeight
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+```
+
+##### 3. Flexbox 布局
+
+使用 flex 布局实现自适应空间分配：
+
+```css
+.main {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 60px);
+}
+
+.stats-row {
+  flex-shrink: 0; /* 防止被压缩 */
+}
+
+.map-card {
+  flex: 1; /* 自动填充剩余空间 */
+  min-height: 0; /* 允许 flex 子元素缩小 */
+}
+```
+
+#### 首页布局 ([`Home.vue`](frontend/src/views/Home.vue))
+
+| 端       | 主容器高度            | 统计卡片                  | 地图卡片               |
+|----------|-----------------------|---------------------------|------------------------|
+| 电脑端   | `calc(100vh - 60px)`  | 固定高度（4 列横向）      | `flex: 1` 填充剩余     |
+| 移动端   | `calc(100vh - 60px)`  | 70-80px 高度（2x2 网格）  | `flex: 1`，最小 200px  |
+
+#### 轨迹详情页布局 ([`TrackDetail.vue`](frontend/src/views/TrackDetail.vue))
+
+**固定布局**（电脑端高度 >= 800px）：
+
+- 左侧固定（地图 + 图表），右侧滚动
+- 地图使用 `flex: 1` 自适应填充
+
+**常规布局**（电脑端高度 < 800px）：
+
+- 左右独立滚动
+- 地图：40vh（最小 300px）
+- 图表：22vh（最小 180px）
+
+**移动端布局**：
+
+- 单列流式布局
+- 地图：30vh（最小 200px）
+- 图表：20vh（最小 150px）
+
+#### 地图响应式重绘
+
+使用 `ResizeObserver` 监听地图容器大小变化，触发地图重绘：
+
+```typescript
+// 在 TrackDetail.vue 中
+const mapWrapperRef = ref<HTMLElement>()
+let mapResizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  if (mapWrapperRef.value) {
+    mapResizeObserver = new ResizeObserver(() => {
+      if (mapRef.value?.resize) {
+        mapRef.value.resize()
+      }
+    })
+    mapResizeObserver.observe(mapWrapperRef.value)
+  }
+})
+```
+
+所有地图组件（[`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue)、[`AMap.vue`](frontend/src/components/map/AMap.vue)、[`BMap.vue`](frontend/src/components/map/BMap.vue)、[`TencentMap.vue`](frontend/src/components/map/TencentMap.vue)）都暴露了 `resize()` 方法，通过 [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) 统一调用。
+
 ### 地图与图表双向同步
 
 轨迹详情页（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）实现了地图与图表的双向交互：

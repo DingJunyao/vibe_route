@@ -713,10 +713,18 @@ onUnmounted(() => {
   }
 })
 
+// 调整地图大小（用于响应式布局）
+function resize() {
+  if (TMapInstance) {
+    // 腾讯地图会自动调整大小
+  }
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
+  resize,
 })
 </script>
 

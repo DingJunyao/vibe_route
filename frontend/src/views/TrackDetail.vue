@@ -80,23 +80,21 @@
       </div>
     </el-header>
 
-    <el-main class="main" v-loading="loading">
+    <el-main class="main" :class="{ 'main-fixed': isTallScreen }" v-loading="loading">
       <!-- 调试信息 -->
       <el-alert v-if="!track" type="error" :closable="false" style="margin-bottom: 20px">
         轨迹数据加载失败，请返回列表重试
       </el-alert>
 
       <template v-if="track">
-        <el-row :gutter="20">
-          <!-- 左侧：地图和统计 -->
-          <el-col :xs="24" :md="16">
+        <!-- 固定布局容器（高屏时使用） -->
+        <div v-if="isTallScreen" class="fixed-layout">
+          <!-- 左侧固定区域 -->
+          <div class="fixed-left">
             <!-- 地图 -->
             <el-card class="map-card" shadow="never">
               <template v-if="trackWithPoints">
-                <!-- <div style="background: #e5e5e5; padding: 10px; font-size: 12px; color: #666;">
-                  调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
-                </div> -->
-                <div style="height: 500px; position: relative;">
+                <div ref="mapWrapperRef" class="map-wrapper">
                   <UniversalMap
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
@@ -124,10 +122,205 @@
               </template>
               <div ref="chartRef" class="chart"></div>
             </el-card>
-          </el-col>
+          </div>
 
-          <!-- 右侧：轨迹点和信息 -->
-          <el-col :xs="24" :md="8">
+          <!-- 右侧滚动区域 -->
+          <div class="scrollable-right">
+            <el-row :gutter="20">
+              <el-col :xs="24" :md="24">
+                <!-- 统计信息 -->
+                <el-card class="stats-card" shadow="never">
+                  <template #header>
+                    <span>轨迹统计</span>
+                  </template>
+                  <el-row :gutter="20">
+                    <el-col :span="12">
+                      <div class="stat-item">
+                        <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
+                        <div class="stat-content">
+                          <div class="stat-value">{{ formatDistance(track.distance) }}</div>
+                          <div class="stat-label">总里程</div>
+                        </div>
+                      </div>
+                    </el-col>
+                    <el-col :span="12">
+                      <div class="stat-item">
+                        <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
+                        <div class="stat-content">
+                          <div class="stat-value">{{ formatDuration(track.duration) }}</div>
+                          <div class="stat-label">总时长</div>
+                        </div>
+                      </div>
+                    </el-col>
+                    <el-col :span="12">
+                      <div class="stat-item">
+                        <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
+                        <div class="stat-content">
+                          <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
+                          <div class="stat-label">总爬升</div>
+                        </div>
+                      </div>
+                    </el-col>
+                    <el-col :span="12">
+                      <div class="stat-item">
+                        <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
+                        <div class="stat-content">
+                          <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
+                          <div class="stat-label">总下降</div>
+                        </div>
+                      </div>
+                    </el-col>
+                  </el-row>
+                </el-card>
+
+                <!-- 轨迹信息 -->
+                <el-card class="info-card" shadow="never">
+                  <template #header>
+                    <span>轨迹信息</span>
+                  </template>
+                  <el-descriptions :column="1" border>
+                    <el-descriptions-item label="文件名">
+                      {{ track.original_filename }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="坐标系">
+                      <el-tag size="small">{{ track.original_crs.toUpperCase() }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="开始时间">
+                      {{ formatDateTime(track.start_time) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="结束时间">
+                      {{ formatDateTime(track.end_time) }}
+                    </el-descriptions-item>
+                    <el-descriptions-item label="备注">
+                      <span class="description-text">{{ track.description || '无' }}</span>
+                    </el-descriptions-item>
+                  </el-descriptions>
+                </el-card>
+
+                <!-- 经过的区域 - 树形展示 -->
+                <el-card class="areas-card" shadow="never">
+                  <template #header>
+                    <div class="card-header">
+                      <span>经过区域</span>
+                      <el-tag v-if="regionStats.province > 0" size="small" type="info">
+                        {{ regionStats.province }} 省级 / {{ regionStats.city }} 地级 / {{ regionStats.district }} 县级
+                      </el-tag>
+                    </div>
+                  </template>
+
+                  <!-- 未填充提示（仅在未填充且未开始填充时显示） -->
+                  <div v-if="(!track.has_area_info || !track.has_road_info) && !(fillProgress.status === 'filling' || fillingGeocoding)" class="no-fill-hint">
+                    <el-icon><LocationFilled /></el-icon>
+                    <span>请填充地理信息后查看</span>
+                    <div class="no-fill-actions">
+                      <el-button type="primary" size="small" @click="handleFillGeocoding" :loading="fillingGeocoding">
+                        立即填充
+                      </el-button>
+                      <el-button type="success" size="small" @click="importDialogVisible = true">
+                        导入数据
+                      </el-button>
+                    </div>
+                  </div>
+
+                  <!-- 填充进度（开始填充后显示，无论是否已填充） -->
+                  <template v-if="fillProgress.status === 'filling' || fillingGeocoding">
+                    <div class="fill-progress-section">
+                      <div class="fill-progress-hint">正在填充地理信息……</div>
+                      <div class="fill-progress-with-action">
+                        <el-progress
+                          :percentage="fillProgressPercentage"
+                          :show-text="false"
+                          :stroke-width="8"
+                        />
+                        <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
+                      </div>
+                      <div class="fill-progress-text">
+                        <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
+                        <span v-else>正在准备...</span>
+                      </div>
+                    </div>
+                  </template>
+
+                  <!-- 区域树 -->
+                  <template v-else>
+                    <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+                    <div v-else-if="regionTree.length > 0" class="region-tree-container">
+                      <el-tree
+                        :data="regionTree"
+                        :props="{ label: 'name', children: 'children' }"
+                        default-expand-all
+                        :expand-on-click-node="false"
+                        node-key="id"
+                      >
+                        <template #default="{ data }">
+                          <div class="region-tree-node">
+                            <div class="node-label">
+                              <el-icon class="node-icon" :class="`icon-${data.type}`">
+                                <LocationFilled v-if="data.type === 'province'" />
+                                <LocationFilled v-else-if="data.type === 'city'" />
+                                <LocationFilled v-else-if="data.type === 'district'" />
+                                <Odometer v-else-if="data.type === 'road'" />
+                              </el-icon>
+                              <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
+                              <span v-else class="node-name">{{ formatNodeLabel(data) }}</span>
+                            </div>
+                            <div class="node-info">
+                              <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                              <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                            </div>
+                          </div>
+                        </template>
+                      </el-tree>
+                    </div>
+                  </template>
+                </el-card>
+              </el-col>
+            </el-row>
+          </div>
+        </div>
+
+        <!-- 常规布局（低屏时使用） -->
+        <div v-else class="normal-layout">
+          <!-- 左侧：地图和图表 -->
+          <div class="normal-left">
+            <!-- 地图 -->
+            <el-card class="map-card" shadow="never">
+              <template v-if="trackWithPoints">
+                <!-- <div style="background: #e5e5e5; padding: 10px; font-size: 12px; color: #666;">
+                  调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
+                </div> -->
+                <div class="normal-map-container">
+                  <UniversalMap
+                    ref="mapRef"
+                    :tracks="[trackWithPoints]"
+                    :highlight-track-id="track.id"
+                    @point-hover="handleMapPointHover"
+                  />
+                </div>
+              </template>
+              <template v-else>
+                <div class="map-placeholder">
+                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0" class="debug-info">
+                    轨迹点数量: {{ points.length }}，
+                    有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
+                  </p>
+                  <el-button size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
+                </div>
+              </template>
+            </el-card>
+
+            <!-- 海拔和速度图表 -->
+            <el-card class="chart-card" shadow="never">
+              <template #header>
+                <span>海拔与速度变化</span>
+              </template>
+              <div ref="chartRef" class="chart"></div>
+            </el-card>
+          </div>
+
+          <!-- 右侧：轨迹信息和区域 -->
+          <div class="normal-right">
             <!-- 统计信息 -->
             <el-card class="stats-card" shadow="never">
               <template #header>
@@ -307,8 +500,8 @@
                 </div>
               </el-scrollbar>
             </el-card> -->
-          </el-col>
-        </el-row>
+          </div>
+        </div>
       </template>
     </el-main>
 
@@ -436,7 +629,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -471,9 +664,14 @@ const authStore = useAuthStore()
 const screenWidth = ref(window.innerWidth)
 const isMobile = computed(() => screenWidth.value <= 768)
 
+// 响应式：判断是否为高屏（用于固定布局，仅电脑端）
+const screenHeight = ref(window.innerHeight)
+const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
+
 // 监听窗口大小变化
 function handleResize() {
   screenWidth.value = window.innerWidth
+  screenHeight.value = window.innerHeight
 }
 
 const loading = ref(true)
@@ -483,8 +681,10 @@ const trackId = ref<number>(parseInt(route.params.id as string))
 const highlightedPointIndex = ref<number>(-1)
 
 const mapRef = ref()
+const mapWrapperRef = ref<HTMLElement>()
 const chartRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
+let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
 const downloadDialogVisible = ref(false)
 const downloadCRS = ref('original')
 
@@ -976,11 +1176,9 @@ async function handleFillGeocoding() {
   }
 
   try {
-    console.log('开始填充，当前 fillProgress:', fillProgress.value)
     await trackApi.fillGeocoding(trackId.value)
     ElMessage.success('开始填充地理信息')
     fillingGeocoding.value = true
-    console.log('fillingGeocoding 设为 true，开始轮询')
     startPollingProgress()
   } catch (error) {
     // 错误已在拦截器中处理
@@ -1006,11 +1204,9 @@ async function handleStopFillGeocoding() {
 function startPollingProgress() {
   if (fillProgressTimer) return
 
-  console.log('启动轮询，间隔 2 秒')
   fillProgressTimer = window.setInterval(async () => {
     try {
       const response = await trackApi.getFillProgress(trackId.value)
-      console.log('收到进度更新:', response.progress)
       fillProgress.value = response.progress
 
       if (response.progress.status === 'completed') {
@@ -1301,14 +1497,38 @@ onMounted(async () => {
   // 等待 DOM 更新后渲染图表
   nextTick(() => {
     renderChart()
+
+    // 为地图容器添加 ResizeObserver（在固定布局中响应容器大小变化）
+    if (mapWrapperRef.value) {
+      mapResizeObserver = new ResizeObserver(() => {
+        if (mapRef.value?.resize) {
+          mapRef.value.resize()
+        }
+      })
+      mapResizeObserver.observe(mapWrapperRef.value)
+    }
   })
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
 })
 
+// 监听布局切换，重新渲染图表
+watch(isTallScreen, () => {
+  nextTick(() => {
+    renderChart()
+  })
+})
+
 onUnmounted(() => {
   stopPollingProgress()
+
+  // 清理地图 ResizeObserver
+  if (mapResizeObserver) {
+    mapResizeObserver.disconnect()
+    mapResizeObserver = null
+  }
+
   // 移除窗口大小监听器
   window.removeEventListener('resize', handleResize)
 })
@@ -1344,6 +1564,13 @@ onUnmounted(() => {
 .map-card {
   position: relative;
   z-index: 1;
+}
+
+/* 常规布局地图容器 */
+.normal-map-container {
+  height: 40vh;
+  min-height: 300px;
+  position: relative;
 }
 
 :deep(.leaflet-map-container) {
@@ -1480,7 +1707,8 @@ onUnmounted(() => {
 }
 
 .chart {
-  height: 220px;
+  height: 22vh;
+  min-height: 180px;
 }
 
 /* 时间线样式 */
@@ -1744,11 +1972,13 @@ onUnmounted(() => {
 
   .map-card :deep(.el-card__body),
   .map-placeholder {
-    height: 300px;
+    height: calc(30vh);
+    min-height: 200px;
   }
 
   .chart {
-    height: 200px;
+    height: calc(20vh);
+    min-height: 150px;
   }
 
   .stat-icon {
@@ -1761,6 +1991,158 @@ onUnmounted(() => {
 
   .stat-label {
     font-size: 11px;
+  }
+
+  /* 移动端保持流式布局，整个页面可滚动 */
+  .normal-layout {
+    flex-direction: column;
+  }
+}
+
+/* 固定布局样式（高屏 >= 800px） */
+.main-fixed {
+  padding: 20px !important;
+  height: calc(100vh - 60px); /* 减去导航栏高度 */
+  overflow: hidden !important;
+}
+
+.fixed-layout {
+  display: flex;
+  gap: 20px;
+  height: 100%;
+}
+
+.fixed-left {
+  flex: 0 0 calc(66.666% - 10px);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.fixed-left .map-card {
+  flex: 1;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.fixed-left .map-card :deep(.el-card__body) {
+  flex: 1;
+  padding: 0;
+  height: auto;
+}
+
+.map-wrapper {
+  height: 100%;
+  position: relative;
+}
+
+.fixed-left .chart-card {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.scrollable-right {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 5px;
+}
+
+/* 滚动条样式优化 */
+.scrollable-right::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scrollable-right::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.scrollable-right::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.scrollable-right::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+.scrollable-right .stats-card,
+.scrollable-right .info-card,
+.scrollable-right .areas-card {
+  margin-bottom: 20px;
+}
+
+/* 常规布局样式（仅电脑端高度 < 800px 时使用独立滚动） */
+@media (min-width: 769px) {
+  .normal-layout {
+    display: flex;
+    gap: 20px;
+    height: calc(100vh - 100px);
+  }
+
+  .normal-left {
+    flex: 0 0 calc(66.666% - 10px);
+    direction: rtl;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-left: 5px;
+  }
+
+  .normal-left > * {
+    direction: ltr;
+  }
+
+  .normal-left::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .normal-left::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+  }
+
+  .normal-left::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+  }
+
+  .normal-left::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+  }
+
+  .normal-right {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 5px;
+  }
+
+  .normal-right::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .normal-right::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+  }
+
+  .normal-right::-webkit-scrollbar-thumb {
+    background: #c1c1c1;
+    border-radius: 3px;
+  }
+
+  .normal-right::-webkit-scrollbar-thumb:hover {
+    background: #a8a8a8;
+  }
+
+  .normal-right .stats-card,
+  .normal-right .info-card,
+  .normal-right .areas-card {
+    margin-bottom: 20px;
   }
 }
 </style>
