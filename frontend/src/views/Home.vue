@@ -110,7 +110,7 @@
           </div>
         </template>
         <div class="map-container">
-          <UniversalMap :tracks="tracksWithPoints" />
+          <UniversalMap :tracks="tracksWithPoints" mode="home" />
           <div v-if="tracksWithPoints.length === 0 && !loadingTracks" class="map-empty">
             <el-empty description="暂无轨迹数据" :image-size="80" />
           </div>
@@ -174,6 +174,11 @@ const loadedTrackCount = ref(0)
 const tracksWithPoints = computed(() => {
   return tracks.value.map(track => ({
     id: track.id,
+    name: track.name,
+    start_time: track.start_time,
+    end_time: track.end_time,
+    distance: track.distance,
+    duration: track.duration,
     points: tracksPoints.value.get(track.id) || [],
   }))
 })

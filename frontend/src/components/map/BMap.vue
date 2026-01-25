@@ -56,23 +56,31 @@ function formatLocationInfo(point: Point): string {
 // 定义 emit 事件
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
+  (e: 'track-hover', trackId: number | null): void
 }>()
 
 interface Track {
   id: number
   points: Point[]
+  name?: string
+  start_time?: string | null
+  end_time?: string | null
+  distance?: number
+  duration?: number
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   defaultLayerId?: string
+  mode?: 'home' | 'detail'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   defaultLayerId: undefined,
+  mode: 'detail',
 })
 
 const configStore = useConfigStore()
@@ -85,6 +93,8 @@ let mouseMarker: any = null
 let trackPoints: Point[] = []
 let trackPath: { lng: number; lat: number }[] = []
 let lastHoverIndex = -1
+// home 模式：按轨迹分开存储
+const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
 
 // 初始化
 async function init() {
@@ -344,7 +354,11 @@ function hideMarker() {
   if (BMapInstance) {
     BMapInstance.closeInfoWindow()
   }
-  emit('point-hover', null, -1)
+  if (props.mode === 'home') {
+    emit('track-hover', null)
+  } else {
+    emit('point-hover', null, -1)
+  }
 }
 
 // 初始化地图
@@ -384,8 +398,6 @@ async function initMap() {
 
     // 统一的鼠标处理函数
     const handleMouseMove = (e: any) => {
-      if (trackPath.length < 2 || !BMapInstance) return
-
       // 百度地图事件对象可能有多种属性名，尝试不同的方式获取坐标
       let lng: number | undefined
       let lat: number | undefined
@@ -411,6 +423,17 @@ async function initMap() {
       if (lng === undefined || lat === undefined) return
 
       const mouseLngLat: [number, number] = [lng, lat]
+
+      if (props.mode === 'home') {
+        handleHomeModeMouseMove(mouseLngLat)
+      } else {
+        handleDetailModeMouseMove(mouseLngLat)
+      }
+    }
+
+    // detail 模式：显示最近的点信息
+    const handleDetailModeMouseMove = (mouseLngLat: [number, number]) => {
+      if (trackPath.length < 2 || !BMapInstance) return
 
       const zoom = BMapInstance.getZoom()
       const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
@@ -463,6 +486,149 @@ async function initMap() {
           lastHoverIndex = nearestIndex
           emit('point-hover', point, nearestIndex)
         }
+      } else {
+        hideMarker()
+      }
+    }
+
+    // home 模式：显示最近的轨迹信息
+    const handleHomeModeMouseMove = (mouseLngLat: [number, number]) => {
+      if (!BMapInstance) return
+
+      const zoom = BMapInstance.getZoom()
+      const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+      let minDistance = Infinity
+      let nearestTrackId: number | null = null
+      let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
+
+      // 遍历所有轨迹，找到最近的轨迹
+      for (const [trackId, data] of tracksData) {
+        if (data.path.length < 2) continue
+
+        for (let i = 0; i < data.path.length - 1; i++) {
+          const p1: [number, number] = [data.path[i].lng, data.path[i].lat]
+          const p2: [number, number] = [data.path[i + 1].lng, data.path[i + 1].lat]
+          const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+          const dist = distance(mouseLngLat, closest)
+
+          if (dist < minDistance) {
+            minDistance = dist
+            nearestPosition = { lng: closest[0], lat: closest[1] }
+            nearestTrackId = trackId
+          }
+        }
+      }
+
+      const triggered = minDistance < dynamicDistance
+
+      if (triggered && nearestTrackId !== null) {
+        const trackData = tracksData.get(nearestTrackId)
+        if (!trackData) return
+
+        const track = trackData.track
+
+        // 如果是同一条轨迹，跳过更新
+        if (nearestTrackId === lastHoverIndex) return
+
+        lastHoverIndex = nearestTrackId
+
+        const BMapGL = (window as any).BMapGL
+
+        // 先移除旧覆盖物
+        if (mouseMarker) {
+          try {
+            BMapInstance.removeOverlay(mouseMarker)
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        // 创建新覆盖物实例并添加到地图
+        const MouseMarkerOverlay = createMouseMarkerOverlay()
+        mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+        BMapInstance.addOverlay(mouseMarker)
+
+        // 格式化时间和里程
+        const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+          if (!time) return '-'
+          const date = new Date(time)
+          if (endDate) {
+            return date.toLocaleString('zh-CN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          }
+          return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        }
+
+        const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+          if (!start || !end) return false
+          const startDate = new Date(start)
+          const endDate = new Date(end)
+          return startDate.getFullYear() === endDate.getFullYear() &&
+                 startDate.getMonth() === endDate.getMonth() &&
+                 startDate.getDate() === endDate.getDate()
+        }
+
+        const formatTimeRange = () => {
+          const startTime = formatTime(track.start_time, false)
+          const endTime = isSameDay(track.start_time, track.end_time)
+            ? formatTime(track.end_time, true)
+            : formatTime(track.end_time, false)
+          return `${startTime} ~ ${endTime}`
+        }
+
+        const formatDistance = (meters: number | undefined) => {
+          if (meters === undefined) return '-'
+          if (meters < 1000) return `${meters.toFixed(1)} m`
+          return `${(meters / 1000).toFixed(2)} km`
+        }
+
+        const formatDuration = (seconds: number | undefined) => {
+          if (seconds === undefined) return '-'
+          const hours = Math.floor(seconds / 3600)
+          const minutes = Math.floor((seconds % 3600) / 60)
+          if (hours > 0) {
+            return `${hours}小时${minutes}分钟`
+          }
+          return `${minutes}分钟`
+        }
+
+        const title = `
+          <div style="padding: 8px 12px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div>
+        `
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="color: #666;">时间: ${formatTimeRange()}</div>
+            <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+            <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+          </div>
+        `
+
+        const newTooltip = new BMapGL.InfoWindow(content, {
+          width: 200,
+          height: 0,
+          offset: new BMapGL.Size(0, 0),
+          title: title,
+        })
+
+        const bmapPoint = new BMapGL.Point(nearestPosition.lng, nearestPosition.lat)
+        BMapInstance.closeInfoWindow()
+        setTimeout(() => {
+          BMapInstance.openInfoWindow(newTooltip, bmapPoint)
+        }, 0)
+
+        // 发射事件
+        emit('track-hover', nearestTrackId)
       } else {
         hideMarker()
       }
@@ -580,6 +746,7 @@ function drawTracks() {
   // 重置轨迹数据
   trackPoints = []
   trackPath = []
+  tracksData.clear()
 
   const BMapGL = (window as any).BMapGL
   const bounds: any[] = []
@@ -588,6 +755,8 @@ function drawTracks() {
     if (!track.points || track.points.length === 0) continue
 
     const points: any[] = []
+    const trackPathData: { lng: number; lat: number }[] = []
+    const trackPointsData: Point[] = []
 
     for (const point of track.points) {
       const coords = getBD09Coords(point)
@@ -596,12 +765,24 @@ function drawTracks() {
       const { lng, lat } = coords
       points.push(new BMapGL.Point(lng, lat))
       bounds.push(new BMapGL.Point(lng, lat))
-      // 保存轨迹点和路径用于鼠标悬停
+
+      // detail 模式：合并所有轨迹
       trackPoints.push(point)
       trackPath.push({ lng, lat })
+
+      // home 模式：按轨迹分开存储
+      trackPointsData.push(point)
+      trackPathData.push({ lng, lat })
     }
 
     if (points.length === 0) continue
+
+    // 保存轨迹数据用于 home 模式
+    tracksData.set(track.id, {
+      points: trackPointsData,
+      path: trackPathData,
+      track,
+    })
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId

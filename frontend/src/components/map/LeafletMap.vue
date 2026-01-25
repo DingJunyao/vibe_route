@@ -69,6 +69,11 @@ interface Point {
 interface Track {
   id: number
   points: Point[]
+  name?: string
+  start_time?: string | null
+  end_time?: string | null
+  distance?: number
+  duration?: number
 }
 
 interface Props {
@@ -76,6 +81,7 @@ interface Props {
   highlightTrackId?: number
   defaultLayerId?: string
   hideLayerSelector?: boolean
+  mode?: 'home' | 'detail'
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -83,11 +89,13 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   defaultLayerId: undefined,
   hideLayerSelector: false,
+  mode: 'detail',
 })
 
 const emit = defineEmits<{
   (e: 'point-click', point: Point, trackId: number): void
   (e: 'point-hover', point: Point | null, pointIndex: number): void
+  (e: 'track-hover', trackId: number | null): void
 }>()
 
 const configStore = useConfigStore()
@@ -98,9 +106,12 @@ const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
 
-// 轨迹数据
+// 轨迹数据 - detail 模式使用（合并所有轨迹）
 const trackPoints: Ref<Point[]> = ref([])
 const trackPath: Ref<[number, number][]> = ref([])
+
+// 轨迹数据 - home 模式使用（按轨迹分开存储）
+const tracksData: Ref<Map<number, { points: Point[]; path: [number, number][]; track: Track }>> = ref(new Map())
 
 // 鼠标标记和 tooltip
 const mouseMarker = ref<L.Marker | null>(null)
@@ -186,6 +197,17 @@ function initMap() {
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
+    if (props.mode === 'home') {
+      // home 模式：显示轨迹信息
+      handleHomeModeMouseMove(lng, lat)
+    } else {
+      // detail 模式：显示点信息
+      handleDetailModeMouseMove(lng, lat)
+    }
+  }
+
+  // detail 模式：显示最近的点信息
+  const handleDetailModeMouseMove = (lng: number, lat: number) => {
     if (trackPath.value.length < 2) return
 
     const mouseLngLat: [number, number] = [lng, lat]
@@ -254,6 +276,128 @@ function initMap() {
       }
     } else {
       hideMarker()
+    }
+  }
+
+  // home 模式：显示最近的轨迹信息
+  const handleHomeModeMouseMove = (lng: number, lat: number) => {
+    const mouseLngLat: [number, number] = [lng, lat]
+    const zoom = map.value!.getZoom()
+    const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+    let minDistance = Infinity
+    let nearestTrackId: number | null = null
+    let nearestPosition: [number, number] = [0, 0]
+
+    // 遍历所有轨迹，找到最近的轨迹
+    for (const [trackId, data] of tracksData.value) {
+      if (data.path.length < 2) continue
+
+      for (let i = 0; i < data.path.length - 1; i++) {
+        const p1 = data.path[i]
+        const p2 = data.path[i + 1]
+        const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+        const dist = distance(mouseLngLat, closest)
+
+        if (dist < minDistance) {
+          minDistance = dist
+          nearestPosition = closest
+          nearestTrackId = trackId
+        }
+      }
+    }
+
+    const triggered = minDistance < dynamicDistance
+
+    if (triggered && nearestTrackId !== null) {
+      const trackData = tracksData.value.get(nearestTrackId)
+      if (!trackData) return
+
+      const track = trackData.track
+
+      // 如果是同一条轨迹，跳过更新
+      if (nearestTrackId === lastHoverIndex.value) return
+
+      lastHoverIndex.value = nearestTrackId
+
+      // 更新标记位置并显示
+      if (mouseMarker.value) {
+        mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        mouseMarker.value.addTo(map.value!)
+      }
+
+      // 格式化时间和里程
+      const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+        if (!time) return '-'
+        const date = new Date(time)
+        if (endDate) {
+          return date.toLocaleString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        }
+        return date.toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      }
+
+      const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+        if (!start || !end) return false
+        const startDate = new Date(start)
+        const endDate = new Date(end)
+        return startDate.getFullYear() === endDate.getFullYear() &&
+               startDate.getMonth() === endDate.getMonth() &&
+               startDate.getDate() === endDate.getDate()
+      }
+
+      const formatTimeRange = () => {
+        const startTime = formatTime(track.start_time, false)
+        const endTime = isSameDay(track.start_time, track.end_time)
+          ? formatTime(track.end_time, true)
+          : formatTime(track.end_time, false)
+        return `${startTime} ~ ${endTime}`
+      }
+
+      const formatDistance = (meters: number | undefined) => {
+        if (meters === undefined) return '-'
+        if (meters < 1000) return `${meters.toFixed(1)} m`
+        return `${(meters / 1000).toFixed(2)} km`
+      }
+
+      const formatDuration = (seconds: number | undefined) => {
+        if (seconds === undefined) return '-'
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        if (hours > 0) {
+          return `${hours}小时${minutes}分钟`
+        }
+        return `${minutes}分钟`
+      }
+
+      const content = `
+        <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div style="color: #666;">时间: ${formatTimeRange()}</div>
+          <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+          <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+        </div>
+      `
+
+      if (tooltip.value) {
+        tooltip.value.setContent(content)
+        tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        tooltip.value.openOn(map.value!)
+      }
+
+      // 发射事件
+      emit('track-hover', nearestTrackId)
+    } else {
+      hideMarker()
+      emit('track-hover', null)
     }
   }
 
@@ -573,6 +717,17 @@ function recreateMap() {
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
+    if (props.mode === 'home') {
+      // home 模式：显示轨迹信息
+      handleHomeModeMouseMove(lng, lat)
+    } else {
+      // detail 模式：显示点信息
+      handleDetailModeMouseMove(lng, lat)
+    }
+  }
+
+  // detail 模式：显示最近的点信息
+  const handleDetailModeMouseMove = (lng: number, lat: number) => {
     if (trackPath.value.length < 2) return
 
     const mouseLngLat: [number, number] = [lng, lat]
@@ -641,6 +796,128 @@ function recreateMap() {
       }
     } else {
       hideMarker()
+    }
+  }
+
+  // home 模式：显示最近的轨迹信息
+  const handleHomeModeMouseMove = (lng: number, lat: number) => {
+    const mouseLngLat: [number, number] = [lng, lat]
+    const zoom = map.value!.getZoom()
+    const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+    let minDistance = Infinity
+    let nearestTrackId: number | null = null
+    let nearestPosition: [number, number] = [0, 0]
+
+    // 遍历所有轨迹，找到最近的轨迹
+    for (const [trackId, data] of tracksData.value) {
+      if (data.path.length < 2) continue
+
+      for (let i = 0; i < data.path.length - 1; i++) {
+        const p1 = data.path[i]
+        const p2 = data.path[i + 1]
+        const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+        const dist = distance(mouseLngLat, closest)
+
+        if (dist < minDistance) {
+          minDistance = dist
+          nearestPosition = closest
+          nearestTrackId = trackId
+        }
+      }
+    }
+
+    const triggered = minDistance < dynamicDistance
+
+    if (triggered && nearestTrackId !== null) {
+      const trackData = tracksData.value.get(nearestTrackId)
+      if (!trackData) return
+
+      const track = trackData.track
+
+      // 如果是同一条轨迹，跳过更新
+      if (nearestTrackId === lastHoverIndex.value) return
+
+      lastHoverIndex.value = nearestTrackId
+
+      // 更新标记位置并显示
+      if (mouseMarker.value) {
+        mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        mouseMarker.value.addTo(map.value!)
+      }
+
+      // 格式化时间和里程
+      const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+        if (!time) return '-'
+        const date = new Date(time)
+        if (endDate) {
+          return date.toLocaleString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        }
+        return date.toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      }
+
+      const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+        if (!start || !end) return false
+        const startDate = new Date(start)
+        const endDate = new Date(end)
+        return startDate.getFullYear() === endDate.getFullYear() &&
+               startDate.getMonth() === endDate.getMonth() &&
+               startDate.getDate() === endDate.getDate()
+      }
+
+      const formatTimeRange = () => {
+        const startTime = formatTime(track.start_time, false)
+        const endTime = isSameDay(track.start_time, track.end_time)
+          ? formatTime(track.end_time, true)
+          : formatTime(track.end_time, false)
+        return `${startTime} ~ ${endTime}`
+      }
+
+      const formatDistance = (meters: number | undefined) => {
+        if (meters === undefined) return '-'
+        if (meters < 1000) return `${meters.toFixed(1)} m`
+        return `${(meters / 1000).toFixed(2)} km`
+      }
+
+      const formatDuration = (seconds: number | undefined) => {
+        if (seconds === undefined) return '-'
+        const hours = Math.floor(seconds / 3600)
+        const minutes = Math.floor((seconds % 3600) / 60)
+        if (hours > 0) {
+          return `${hours}小时${minutes}分钟`
+        }
+        return `${minutes}分钟`
+      }
+
+      const content = `
+        <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div style="color: #666;">时间: ${formatTimeRange()}</div>
+          <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+          <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+        </div>
+      `
+
+      if (tooltip.value) {
+        tooltip.value.setContent(content)
+        tooltip.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        tooltip.value.openOn(map.value!)
+      }
+
+      // 发射事件
+      emit('track-hover', nearestTrackId)
+    } else {
+      hideMarker()
+      emit('track-hover', null)
     }
   }
 
@@ -877,6 +1154,9 @@ function hideMarker() {
   if (tooltip.value) {
     map.value?.closePopup()
   }
+  if (props.mode === 'home') {
+    emit('track-hover', null)
+  }
 }
 
 // 创建鼠标标记
@@ -918,6 +1198,7 @@ function drawTracks() {
   // 重置轨迹数据
   trackPoints.value = []
   trackPath.value = []
+  tracksData.value.clear()
 
   const bounds = L.latLngBounds([])
 
@@ -925,6 +1206,8 @@ function drawTracks() {
     if (!track.points || track.points.length === 0) continue
 
     const latLngs: L.LatLngExpression[] = []
+    const trackPathData: [number, number][] = []
+    const trackPointsData: Point[] = []
 
     for (const point of track.points) {
       const coords = getCoordsByCRS(point, crs, mapId)
@@ -938,13 +1221,25 @@ function drawTracks() {
 
       latLngs.push([lat, lng])
       bounds.extend([lat, lng])
-      // 保存轨迹点和路径用于鼠标悬停
+
+      // detail 模式：合并所有轨迹
       trackPoints.value.push(point)
-      trackPath.value.push([lng, lat])  // Leaflet 使用 [lng, lat]
+      trackPath.value.push([lng, lat])
+
+      // home 模式：按轨迹分开存储
+      trackPointsData.push(point)
+      trackPathData.push([lng, lat])
     }
 
     // 如果没有有效点，跳过
     if (latLngs.length === 0) continue
+
+    // 保存轨迹数据用于 home 模式
+    tracksData.value.set(track.id, {
+      points: trackPointsData,
+      path: trackPathData,
+      track,
+    })
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId

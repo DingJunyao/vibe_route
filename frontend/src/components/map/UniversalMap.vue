@@ -6,7 +6,9 @@
       ref="tencentRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :mode="mode"
       @point-hover="handlePointHover"
+      @track-hover="handleTrackHover"
     />
     <!-- 高德地图引擎 -->
     <AMap
@@ -14,7 +16,9 @@
       ref="amapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :mode="mode"
       @point-hover="handlePointHover"
+      @track-hover="handleTrackHover"
     />
     <!-- 百度地图引擎 -->
     <BMap
@@ -22,7 +26,9 @@
       ref="bmapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :mode="mode"
       @point-hover="handlePointHover"
+      @track-hover="handleTrackHover"
     />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
@@ -32,7 +38,9 @@
       :highlight-track-id="highlightTrackId"
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
+      :mode="mode"
       @point-hover="handlePointHover"
+      @track-hover="handleTrackHover"
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
@@ -108,17 +116,20 @@ interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   defaultLayerId?: string
+  mode?: 'home' | 'detail'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   defaultLayerId: undefined,
+  mode: 'detail',
 })
 
 // 定义 emit 事件
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
+  (e: 'track-hover', trackId: number | null): void
 }>()
 
 const configStore = useConfigStore()
@@ -185,6 +196,11 @@ function toggleFullscreen() {
 // 处理地图点悬浮事件
 function handlePointHover(point: Point | null, pointIndex: number) {
   emit('point-hover', point, pointIndex)
+}
+
+// 处理轨迹悬浮事件
+function handleTrackHover(trackId: number | null) {
+  emit('track-hover', trackId)
 }
 
 // 高亮指定点（由图表触发）

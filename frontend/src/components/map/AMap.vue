@@ -57,23 +57,31 @@ function formatLocationInfo(point: Point): string {
 // 定义 emit 事件
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
+  (e: 'track-hover', trackId: number | null): void
 }>()
 
 interface Track {
   id: number
   points: Point[]
+  name?: string
+  start_time?: string | null
+  end_time?: string | null
+  distance?: number
+  duration?: number
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   defaultLayerId?: string
+  mode?: 'home' | 'detail'
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   defaultLayerId: undefined,
+  mode: 'detail',
 })
 
 const configStore = useConfigStore()
@@ -88,6 +96,8 @@ let tooltip: any = null  // 信息提示框
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
 let trackPath: any[] = []  // 高德地图坐标路径
+// home 模式：按轨迹分开存储
+const tracksData = new Map<number, { points: Point[]; path: any[]; track: Track }>()
 
 // 节流和缓存
 let lastHoverIndex = -1  // 上次悬停的点索引
@@ -247,7 +257,11 @@ function hideMarker() {
   lastHoverIndex = -1
   if (mouseMarker) mouseMarker.setMap(null)
   if (tooltip) tooltip.close()
-  emit('point-hover', null, -1)
+  if (props.mode === 'home') {
+    emit('track-hover', null)
+  } else {
+    emit('point-hover', null, -1)
+  }
 }
 
 // 从外部高亮指定点（由图表触发）
@@ -396,6 +410,15 @@ async function initMap() {
 
     // 统一的鼠标处理函数
     const handleMouseMove = (mouseLngLat: [number, number]) => {
+      if (props.mode === 'home') {
+        handleHomeModeMouseMove(mouseLngLat)
+      } else {
+        handleDetailModeMouseMove(mouseLngLat)
+      }
+    }
+
+    // detail 模式：显示最近的点信息
+    const handleDetailModeMouseMove = (mouseLngLat: [number, number]) => {
       if (trackPath.length < 2) return
 
       const zoom = AMapInstance.getZoom()
@@ -459,6 +482,124 @@ async function initMap() {
           // 发射事件
           emit('point-hover', point, nearestIndex)
         }
+      } else {
+        hideMarker()
+      }
+    }
+
+    // home 模式：显示最近的轨迹信息
+    const handleHomeModeMouseMove = (mouseLngLat: [number, number]) => {
+      const zoom = AMapInstance.getZoom()
+      const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+      let minDistance = Infinity
+      let nearestTrackId: number | null = null
+      let nearestPosition: [number, number] = [0, 0]
+
+      // 遍历所有轨迹，找到最近的轨迹
+      for (const [trackId, data] of tracksData) {
+        if (data.path.length < 2) continue
+
+        for (let i = 0; i < data.path.length - 1; i++) {
+          const p1 = [data.path[i].lng, data.path[i].lat] as [number, number]
+          const p2 = [data.path[i + 1].lng, data.path[i + 1].lat] as [number, number]
+          const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+          const dist = distance(mouseLngLat, closest)
+
+          if (dist < minDistance) {
+            minDistance = dist
+            nearestPosition = closest
+            nearestTrackId = trackId
+          }
+        }
+      }
+
+      const triggered = minDistance < dynamicDistance
+
+      if (triggered && nearestTrackId !== null) {
+        const trackData = tracksData.get(nearestTrackId)
+        if (!trackData) return
+
+        const track = trackData.track
+
+        // 如果是同一条轨迹，跳过更新
+        if (nearestTrackId === lastHoverIndex) return
+
+        lastHoverIndex = nearestTrackId
+
+        const AMap = (window as any).AMap
+
+        // 更新标记位置并显示
+        mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+        mouseMarker.setMap(AMapInstance)
+
+        // 格式化时间和里程
+        const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+          if (!time) return '-'
+          const date = new Date(time)
+          if (endDate) {
+            return date.toLocaleString('zh-CN', {
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          }
+          return date.toLocaleString('zh-CN', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        }
+
+        const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+          if (!start || !end) return false
+          const startDate = new Date(start)
+          const endDate = new Date(end)
+          return startDate.getFullYear() === endDate.getFullYear() &&
+                 startDate.getMonth() === endDate.getMonth() &&
+                 startDate.getDate() === endDate.getDate()
+        }
+
+        const formatTimeRange = () => {
+          const startTime = formatTime(track.start_time, false)
+          const endTime = isSameDay(track.start_time, track.end_time)
+            ? formatTime(track.end_time, true)
+            : formatTime(track.end_time, false)
+          return `${startTime} ~ ${endTime}`
+        }
+
+        const formatDistance = (meters: number | undefined) => {
+          if (meters === undefined) return '-'
+          if (meters < 1000) return `${meters.toFixed(1)} m`
+          return `${(meters / 1000).toFixed(2)} km`
+        }
+
+        const formatDuration = (seconds: number | undefined) => {
+          if (seconds === undefined) return '-'
+          const hours = Math.floor(seconds / 3600)
+          const minutes = Math.floor((seconds % 3600) / 60)
+          if (hours > 0) {
+            return `${hours}小时${minutes}分钟`
+          }
+          return `${minutes}分钟`
+        }
+
+        const content = `
+          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+            <div style="color: #666;">时间: ${formatTimeRange()}</div>
+            <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+            <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+          </div>
+        `
+
+        tooltip.setContent(content)
+        tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+        tooltip.open(AMapInstance)
+
+        // 发射事件
+        emit('track-hover', nearestTrackId)
       } else {
         hideMarker()
       }
@@ -587,6 +728,7 @@ function drawTracks() {
   // 重置轨迹点数据
   trackPoints = []
   trackPath = []
+  tracksData.clear()
 
   const AMap = (window as any).AMap
   const bounds: any[] = []
@@ -595,6 +737,8 @@ function drawTracks() {
     if (!track.points || track.points.length === 0) continue
 
     const path: any[] = []
+    const trackPathData: any[] = []
+    const trackPointsData: Point[] = []
 
     for (const point of track.points) {
       const coords = getGCJ02Coords(point)
@@ -604,12 +748,23 @@ function drawTracks() {
       path.push(new AMap.LngLat(lng, lat))
       bounds.push(new AMap.LngLat(lng, lat))
 
-      // 保存轨迹点数据（用于查询）
+      // detail 模式：合并所有轨迹
       trackPoints.push(point)
       trackPath.push({ lng, lat })
+
+      // home 模式：按轨迹分开存储
+      trackPointsData.push(point)
+      trackPathData.push({ lng, lat })
     }
 
     if (path.length === 0) continue
+
+    // 保存轨迹数据用于 home 模式
+    tracksData.set(track.id, {
+      points: trackPointsData,
+      path: trackPathData,
+      track,
+    })
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
