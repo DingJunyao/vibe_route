@@ -890,10 +890,15 @@ class TrackService:
         递归聚合节点统计信息，让上级包含下级的数据
         返回 (distance, point_count, start_time, end_time)
         """
+        node_name = node.get('name', 'unknown')
+        print(f"[DEBUG] _aggregate_node_stats 开始: {node_name}, start={node.get('start_index')}, end={node.get('end_index')}, children={len(node.get('children', []))}")
+
         total_distance = node.get('own_distance', 0)
         total_points = node.get('own_point_count', 0)
         earliest_time = node.get('start_time')
         latest_time = node.get('end_time')
+        earliest_index = node.get('start_index', -1)
+        latest_index = node.get('end_index', -1)
 
         if node.get('children'):
             for child in node['children']:
@@ -909,10 +914,28 @@ class TrackService:
                     if latest_time is None or child_end > latest_time:
                         latest_time = child_end
 
+                # 聚合索引范围（父节点包含所有子节点的范围）
+                child_start_index = child.get('start_index', -1)
+                child_end_index = child.get('end_index', -1)
+                print(f"[DEBUG]   子节点 {child.get('name')}: start={child_start_index}, end={child_end_index}")
+                if child_start_index >= 0:
+                    if earliest_index < 0 or child_start_index < earliest_index:
+                        earliest_index = child_start_index
+                if child_end_index >= 0:
+                    if latest_index < 0 or child_end_index > latest_index:
+                        latest_index = child_end_index
+
         node['distance'] = total_distance
         node['point_count'] = total_points
         node['start_time'] = earliest_time
         node['end_time'] = latest_time
+        # 更新父节点的索引范围（包含所有子节点）
+        if node.get('children'):
+            node['start_index'] = earliest_index
+            node['end_index'] = latest_index
+            print(f"[DEBUG] _aggregate_node_stats 结束: {node_name}, start={node['start_index']}, end={node['end_index']}")
+        else:
+            print(f"[DEBUG] _aggregate_node_stats 结束（叶子节点）: {node_name}, start={node.get('start_index')}, end={node.get('end_index')}")
 
         return total_distance, total_points, earliest_time, latest_time
 
@@ -951,6 +974,8 @@ class TrackService:
         )
         points = list(result.scalars().all())
 
+        print(f"[DEBUG] 轨迹 {track_id} 共有 {len(points)} 个点")
+
         if not points:
             return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
 
@@ -978,6 +1003,8 @@ class TrackService:
                 'point_count': 0,  # 总点数
                 'start_time': None,
                 'end_time': None,
+                'start_index': -1,  # 起始点索引
+                'end_index': -1,    # 结束点索引
                 'children': [],
             }
 
@@ -989,6 +1016,9 @@ class TrackService:
         prev_point = None
 
         for point in points:
+            # 使用数据库中的 point_index
+            idx = point.point_index
+
             province = point.province or '未知区域'
             city = point.city or province
             district = point.district or city
@@ -1003,7 +1033,22 @@ class TrackService:
 
             # 检查是否需要创建新的省级节点
             if current_province is None or current_province[0] != province:
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point:
+                    current_road[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 省级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
+                if current_district is not None and prev_point:
+                    current_district[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 省级切换: 结束区级节点 {current_district[1]['name']}: end_index={prev_point.point_index}")
+                if current_city is not None and prev_point:
+                    current_city[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 省级切换: 结束市级节点 {current_city[1]['name']}: end_index={prev_point.point_index}")
+                # 结束旧省级节点的索引范围
+                if current_province is not None and prev_point:
+                    current_province[1]['end_index'] = prev_point.point_index
+                # 创建新省级节点并设置起始索引
                 new_province = create_node(province, 'province')
+                new_province['start_index'] = idx
                 root_nodes.append(new_province)
                 current_province = (province, new_province)
                 current_city = None
@@ -1014,22 +1059,43 @@ class TrackService:
 
             # 检查是否需要创建新的市级节点
             if current_city is None or current_city[0] != city:
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point:
+                    current_road[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 市级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
+                if current_district is not None and prev_point:
+                    current_district[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 市级切换: 结束区级节点 {current_district[1]['name']}: end_index={prev_point.point_index}")
+                # 结束旧市级节点的索引范围
+                if current_city is not None and prev_point:
+                    current_city[1]['end_index'] = prev_point.point_index
+                # 创建新市级节点并设置起始索引
                 new_city = create_node(city, 'city')
+                new_city['start_index'] = idx
                 province_node['children'].append(new_city)
                 current_city = (city, new_city)
                 current_district = None
                 current_road = None
 
-            city_node = current_city[1]
+            city_node = current_city[1] if current_city else province_node
 
             # 检查是否需要创建新的区级节点
             if current_district is None or current_district[0] != district:
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point:
+                    current_road[1]['end_index'] = prev_point.point_index
+                    print(f"[DEBUG] 区级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
+                # 结束旧区级节点的索引范围
+                if current_district is not None and prev_point:
+                    current_district[1]['end_index'] = prev_point.point_index
+                # 创建新区级节点并设置起始索引
                 new_district = create_node(district, 'district')
+                new_district['start_index'] = idx
                 city_node['children'].append(new_district)
                 current_district = (district, new_district)
                 current_road = None
 
-            district_node = current_district[1]
+            district_node = current_district[1] if current_district else city_node
 
             # 检查是否需要创建新的道路节点
             # 有道路信息时用道路名称，无道路信息时用"（无名）"
@@ -1039,10 +1105,18 @@ class TrackService:
                 road_key = ('（无名）', road_number or '')
 
             if current_road is None or current_road[0] != road_key:
+                # 结束旧道路节点的索引范围
+                if current_road is not None and prev_point:
+                    old_end = prev_point.point_index
+                    current_road[1]['end_index'] = old_end
+                    print(f"[DEBUG] 结束道路节点 {current_road[1]['name']}: end_index={old_end}")
+                # 创建新道路节点并设置起始索引
                 if road_name:
                     new_road = create_node(road_name, 'road', road_number)
                 else:
                     new_road = create_node('（无名）', 'road', road_number)
+                new_road['start_index'] = idx
+                print(f"[DEBUG] 创建道路节点 {new_road['name']}: start_index={idx}")
                 district_node['children'].append(new_road)
                 current_road = (road_key, new_road)
 
@@ -1076,9 +1150,35 @@ class TrackService:
 
             prev_point = point
 
+        # 设置所有活跃节点的结束索引（使用最后一个点的索引）
+        if prev_point:
+            last_index = prev_point.point_index
+            print(f"[DEBUG] 循环结束: 最后一个点索引={last_index}")
+
+            if current_road is not None:
+                current_road[1]['end_index'] = last_index
+                print(f"[DEBUG] 设置最后道路节点 {current_road[1]['name']}: end_index={last_index}")
+            if current_district is not None:
+                current_district[1]['end_index'] = last_index
+            if current_city is not None:
+                current_city[1]['end_index'] = last_index
+            if current_province is not None:
+                current_province[1]['end_index'] = last_index
+
         # 后处理：聚合统计信息，让上级包含下级
         for node in root_nodes:
             self._aggregate_node_stats(node)
+
+        # 打印所有道路节点的索引范围用于调试
+        def print_node_indices(node: dict, depth: int = 0):
+            indent = "  " * depth
+            print(f"{indent}{node['name']} ({node['type']}): start_index={node['start_index']}, end_index={node['end_index']}")
+            for child in node.get('children', []):
+                print_node_indices(child, depth + 1)
+
+        print("[DEBUG] 聚合后节点索引范围:")
+        for node in root_nodes:
+            print_node_indices(node)
 
         return {
             'regions': root_nodes,

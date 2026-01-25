@@ -566,6 +566,101 @@ BMapInstance.addEventListener('moveend', () => {
 
 **高德地图无需修改**：高德地图使用单个 InfoWindow 实例配合 `setContent()` 更新内容，不存在闪烁问题。
 
+### 轨迹详情页"经过区域"点击高亮功能
+
+轨迹详情页（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）实现了点击"经过区域"树中的项目高亮对应路径段的功能。
+
+#### 功能说明
+
+- 点击"经过区域"树中的任意项目（省/市/区/道路），地图上对应路径段显示为蓝色高亮
+- 地图右上角（地图选择器左边）出现清除按钮（关闭图标）
+- 点击清除按钮取消高亮，按钮同时消失
+- 移动端点击时会自动滚动到地图位置
+
+#### 后端实现
+
+**文件**: [`backend/app/services/track_service.py`](backend/app/services/track_service.py)
+
+在 `get_region_tree` 方法中，为每个区域节点添加 `start_index` 和 `end_index` 字段，记录该区域对应的轨迹点索引范围：
+
+```python
+def create_node(name: str, node_type: str, road_number: str = None) -> dict:
+    return {
+        # ... 其他字段 ...
+        'start_index': -1,  # 起始点索引
+        'end_index': -1,    # 结束点索引
+        'children': [],
+    }
+```
+
+使用数据库中的 `point.point_index` 字段作为索引来源，确保索引的准确性。
+
+**文件**: [`backend/app/schemas/track.py`](backend/app/schemas/track.py)
+
+更新 `RegionNode` schema，添加索引字段：
+
+```python
+class RegionNode(BaseModel):
+    # ... 其他字段 ...
+    start_index: int = -1
+    end_index: int = -1
+    children: List['RegionNode'] = []
+```
+
+#### 前端实现
+
+**文件**: [`frontend/src/api/track.ts`](frontend/src/api/track.ts)
+
+更新 `RegionNode` 接口：
+
+```typescript
+export interface RegionNode {
+  start_index: number
+  end_index: number
+  // ... 其他字段 ...
+}
+```
+
+**地图组件** - 所有四个地图引擎（[`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue)、[`AMap.vue`](frontend/src/components/map/AMap.vue)、[`BMap.vue`](frontend/src/components/map/BMap.vue)、[`TencentMap.vue`](frontend/src/components/map/TencentMap.vue)）都实现了路径段高亮：
+
+- 添加 `highlightSegment` prop（类型：`{ start: number; end: number } | null`）
+- 在 `drawTracks` 方法中绘制高亮路径段（蓝色，线宽 7）
+- 清除轨迹时同时清除高亮层
+
+**坐标对象注意事项**：
+
+- **高德地图**：需要使用 `AMap.LngLat` 对象，不能使用普通 `{ lng, lat }` 对象
+- **百度地图**：需要使用 `BMapGL.Point` 对象，不能使用普通 `{ lng, lat }` 对象
+- **腾讯地图**：使用 `TMap.LatLng` 对象（已在 `trackPath` 中使用）
+- **Leaflet 地图**：使用 `[lat, lng]` 数组格式
+
+**UniversalMap 组件** ([`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue))：
+
+- 添加 `highlightSegment` prop 并传递给所有地图引擎
+- 添加 `clear-segment-highlight` emit 事件
+- 在地图控制栏添加清除高亮按钮（地图选择器左边，使用 Close 图标）
+- 仅当 `highlightSegment` 不为空时显示按钮
+
+**TrackDetail 页面** ([`frontend/src/views/TrackDetail.vue`](frontend/src/views/TrackDetail.vue))：
+
+- 添加 `highlightedSegment` 状态管理
+- 实现 `handleRegionNodeClick` 处理函数
+  - 设置高亮路径段
+  - 移动端自动滚动到地图（使用 `containerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })`）
+- 实现 `clearSegmentHighlight` 清除函数
+- 在 `el-tree` 上绑定 `@node-click="handleRegionNodeClick"`
+- 在 `UniversalMap` 上绑定 `@clear-segment-highlight="clearSegmentHighlight"`
+
+#### 实现要点
+
+1. **滚动容器**：页面使用 `.track-detail-container` 作为滚动容器（`overflow-y: auto`），不是 `window`，因此需要使用 `containerRef.value?.scrollTo()` 而非 `window.scrollTo()`
+
+2. **索引追踪**：使用数据库字段 `point.point_index` 而非手动维护索引计数器，确保索引的准确性和一致性
+
+3. **节点切换处理**：当切换省份/城市/行政区时，需要先结束当前活跃的子节点，确保所有节点的 `end_index` 被正确设置
+
+4. **地图坐标对象**：不同地图引擎需要特定的坐标对象类型，使用前需转换
+
 ### 首页地图轨迹信息显示模式
 
 首页地图使用不同的交互模式，显示轨迹信息而非单点信息。

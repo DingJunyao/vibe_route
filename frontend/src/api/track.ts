@@ -95,6 +95,8 @@ export interface RegionNode {
   distance: number  // 路径长度（米）
   start_time: string | null
   end_time: string | null
+  start_index: number  // 起始点索引
+  end_index: number  // 结束点索引
   children: RegionNode[]
 }
 

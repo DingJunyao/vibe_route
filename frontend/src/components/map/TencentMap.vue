@@ -73,6 +73,7 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
+  highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -80,6 +81,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
+  highlightSegment: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -90,6 +92,7 @@ const configStore = useConfigStore()
 const mapContainer = ref<HTMLElement>()
 let TMapInstance: any = null
 let polylineLayer: any = null
+let highlightPolylineLayer: any = null  // 路径段高亮图层
 let mouseMarker: any = null  // 腾讯地图 Marker 实例
 let infoWindow: any = null  // 信息提示框
 
@@ -897,6 +900,12 @@ function drawTracks() {
     polylineLayer = null
   }
 
+  // 清除路径段高亮图层
+  if (highlightPolylineLayer) {
+    highlightPolylineLayer.setMap(null)
+    highlightPolylineLayer = null
+  }
+
   // 重置轨迹点数据
   trackPoints = []
   trackPath = []
@@ -970,6 +979,33 @@ function drawTracks() {
     geometries: geometries,
   })
 
+  // 绘制路径段高亮（detail 模式）
+  if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
+    const { start, end } = props.highlightSegment
+    // 确保索引在有效范围内
+    if (start >= 0 && end < trackPath.length && start <= end) {
+      const segmentPath = trackPath.slice(start, end + 1)
+      if (segmentPath.length > 0) {
+        highlightPolylineLayer = new TMap.MultiPolyline({
+          id: 'highlight-segment-layer',
+          map: TMapInstance,
+          styles: {
+            style_highlight: new TMap.PolylineStyle({
+              color: '#409eff',  // 蓝色高亮
+              width: 8,
+              borderWidth: 0,
+            }),
+          },
+          geometries: [{
+            id: 'highlight-segment',
+            styleId: 'style_highlight',
+            paths: segmentPath,
+          }],
+        })
+      }
+    }
+  }
+
   // 自动适应视图
   if (bounds.length > 0) {
     try {
@@ -1008,6 +1044,10 @@ watch(() => props.tracks, () => {
 }, { deep: true })
 
 watch(() => props.highlightTrackId, () => {
+  updateTracks()
+})
+
+watch(() => props.highlightSegment, () => {
   updateTracks()
 })
 

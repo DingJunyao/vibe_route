@@ -117,6 +117,8 @@ class RegionNode(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     road_number: Optional[str] = None
+    start_index: int = -1  # 起始点索引
+    end_index: int = -1  # 结束点索引
     children: List['RegionNode'] = []
 
     @field_serializer('start_time', 'end_time')

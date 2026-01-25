@@ -6,6 +6,7 @@
       ref="tencentRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :highlight-segment="highlightSegment"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -16,6 +17,7 @@
       ref="amapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :highlight-segment="highlightSegment"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -26,6 +28,7 @@
       ref="bmapRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :highlight-segment="highlightSegment"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -36,6 +39,7 @@
       ref="leafletRef"
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
+      :highlight-segment="highlightSegment"
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
       :mode="mode"
@@ -44,6 +48,12 @@
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
+      <!-- 清除高亮按钮 -->
+      <el-button-group v-if="highlightSegment" size="small" class="clear-highlight-btn">
+        <el-button @click="clearSegmentHighlight">
+          <el-icon><Close /></el-icon>
+        </el-button>
+      </el-button-group>
       <!-- 桌面端：按钮组 -->
       <el-button-group size="small" class="desktop-layer-selector">
         <el-button
@@ -81,7 +91,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
-import { FullScreen } from '@element-plus/icons-vue'
+import { Close, FullScreen } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
 import BMap from './BMap.vue'
@@ -115,6 +125,7 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
+  highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -122,6 +133,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
+  highlightSegment: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -130,6 +142,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'clear-segment-highlight'): void
 }>()
 
 const configStore = useConfigStore()
@@ -191,6 +204,11 @@ function toggleFullscreen() {
   } else {
     document.exitFullscreen()
   }
+}
+
+// 清除路径段高亮
+function clearSegmentHighlight() {
+  emit('clear-segment-highlight')
 }
 
 // 处理地图点悬浮事件
@@ -307,7 +325,8 @@ defineExpose({
     display: block;
   }
 
-  .fullscreen-btn {
+  .fullscreen-btn,
+  .clear-highlight-btn {
     flex-shrink: 0;
   }
 }

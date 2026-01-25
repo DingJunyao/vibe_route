@@ -72,6 +72,7 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
+  highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -79,6 +80,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
+  highlightSegment: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -89,6 +91,7 @@ const configStore = useConfigStore()
 const mapContainer = ref<HTMLElement>()
 let BMapInstance: any = null
 let polylines: any[] = []
+let highlightPolyline: any = null  // 路径段高亮图层
 let mouseMarker: any = null
 let customTooltip: HTMLElement | null = null  // 自定义 tooltip 元素
 let currentHighlightPoint: { index: number; position: { lng: number; lat: number }; point: Point } | null = null
@@ -1011,6 +1014,25 @@ function drawTracks() {
     polylines.push(polyline)
   }
 
+  // 绘制路径段高亮（detail 模式）
+  if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
+    const { start, end } = props.highlightSegment
+    // 确保索引在有效范围内
+    if (start >= 0 && end < trackPath.length && start <= end) {
+      const segmentPath = trackPath.slice(start, end + 1)
+      // 转换为 BMapGL.Point 对象数组
+      const pointPath = segmentPath.map(p => new BMapGL.Point(p.lng, p.lat))
+      if (pointPath.length > 0) {
+        highlightPolyline = new BMapGL.Polyline(pointPath, {
+          strokeColor: '#409eff',  // 蓝色高亮
+          strokeWeight: 7,
+          strokeOpacity: 0.9,
+        })
+        BMapInstance.addOverlay(highlightPolyline)
+      }
+    }
+  }
+
   // 自动适应视图
   if (bounds.length > 0) {
     try {
@@ -1035,6 +1057,16 @@ function clearTracks() {
     }
   })
   polylines = []
+
+  // 清除路径段高亮
+  if (highlightPolyline) {
+    try {
+      BMapInstance.removeOverlay(highlightPolyline)
+    } catch (e) {
+      // ignore
+    }
+    highlightPolyline = null
+  }
 }
 
 // 更新轨迹
@@ -1048,6 +1080,10 @@ watch(() => props.tracks, () => {
 }, { deep: true })
 
 watch(() => props.highlightTrackId, () => {
+  updateTracks()
+})
+
+watch(() => props.highlightSegment, () => {
   updateTracks()
 })
 

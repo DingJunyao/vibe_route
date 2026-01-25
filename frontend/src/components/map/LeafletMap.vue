@@ -79,6 +79,7 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
+  highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   hideLayerSelector?: boolean
   mode?: 'home' | 'detail'
@@ -87,6 +88,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
+  highlightSegment: null,
   defaultLayerId: undefined,
   hideLayerSelector: false,
   mode: 'detail',
@@ -105,6 +107,7 @@ const mapContainer = ref<HTMLElement>()
 const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
+const highlightPolyline = ref<L.Polyline | null>(null)  // 路径段高亮图层
 
 // 轨迹数据 - detail 模式使用（合并所有轨迹）
 const trackPoints: Ref<Point[]> = ref([])
@@ -1760,6 +1763,36 @@ function drawTracks() {
     polylineLayers.value.set(track.id, polyline)
   }
 
+  // 绘制路径段高亮（detail 模式）
+  if (props.mode === 'detail' && props.highlightSegment && trackPoints.value.length > 0) {
+    console.log('[LeafletMap] 绘制路径段高亮:', props.highlightSegment)
+    console.log('[LeafletMap] trackPath 长度:', trackPath.value.length)
+    const { start, end } = props.highlightSegment
+    // 确保索引在有效范围内
+    if (start >= 0 && end < trackPath.value.length && start <= end) {
+      const segmentPath = trackPath.value.slice(start, end + 1)
+      console.log('[LeafletMap] 路径段长度:', segmentPath.length)
+      if (segmentPath.length > 0) {
+        const segmentLatLngs: L.LatLngExpression[] = segmentPath.map(([lng, lat]) => [lat, lng])
+        highlightPolyline.value = L.polyline(segmentLatLngs, {
+          color: '#409eff',  // 蓝色高亮
+          weight: 7,
+          opacity: 0.9,
+        })
+        highlightPolyline.value.addTo(map.value as L.Map)
+        console.log('[LeafletMap] 高亮已绘制')
+      }
+    } else {
+      console.log('[LeafletMap] 索引超出范围:', start, end, trackPath.value.length)
+    }
+  } else {
+    console.log('[LeafletMap] 跳过高亮绘制:', {
+      mode: props.mode,
+      hasSegment: !!props.highlightSegment,
+      trackPointsLength: trackPoints.value.length,
+    })
+  }
+
   // 自动适应视图
   if (bounds.isValid()) {
     map.value.fitBounds(bounds, { padding: [0, 0] })
@@ -1772,6 +1805,12 @@ function clearTracks() {
     map.value!.removeLayer(polyline)
   })
   polylineLayers.value.clear()
+
+  // 清除路径段高亮
+  if (highlightPolyline.value) {
+    map.value!.removeLayer(highlightPolyline.value)
+    highlightPolyline.value = null
+  }
 
   markers.value.forEach((marker) => {
     map.value!.removeLayer(marker)
@@ -1790,6 +1829,10 @@ watch(() => props.tracks, () => {
 })
 
 watch(() => props.highlightTrackId, () => {
+  updateTracks()
+})
+
+watch(() => props.highlightSegment, () => {
   updateTracks()
 })
 

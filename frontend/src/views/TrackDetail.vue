@@ -1,5 +1,5 @@
 <template>
-  <div class="track-detail-container">
+  <div ref="containerRef" class="track-detail-container">
     <el-header>
       <div class="header-left">
         <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
@@ -99,7 +99,9 @@
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
+                    :highlight-segment="highlightedSegment"
                     @point-hover="handleMapPointHover"
+                    @clear-segment-highlight="clearSegmentHighlight"
                   />
                 </div>
               </template>
@@ -254,6 +256,7 @@
                         default-expand-all
                         :expand-on-click-node="false"
                         node-key="id"
+                        @node-click="handleRegionNodeClick"
                       >
                         <template #default="{ data }">
                           <div class="region-tree-node">
@@ -297,7 +300,9 @@
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
+                    :highlight-segment="highlightedSegment"
                     @point-hover="handleMapPointHover"
+                    @clear-segment-highlight="clearSegmentHighlight"
                   />
                 </div>
               </template>
@@ -450,6 +455,7 @@
                     default-expand-all
                     :expand-on-click-node="false"
                     node-key="id"
+                    @node-click="handleRegionNodeClick"
                   >
                     <template #default="{ node, data }">
                       <div class="region-tree-node">
@@ -656,6 +662,7 @@ import {
   Setting,
   SwitchButton,
   LocationFilled,
+  Close,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
@@ -686,6 +693,7 @@ const points = ref<TrackPoint[]>([])
 const trackId = ref<number>(parseInt(route.params.id as string))
 const highlightedPointIndex = ref<number>(-1)
 
+const containerRef = ref<HTMLElement>()
 const mapRef = ref()
 const mapWrapperRef = ref<HTMLElement>()
 const chartRef = ref<HTMLElement>()
@@ -720,6 +728,9 @@ const regionStats = ref<{ province: number; city: number; district: number; road
   district: 0,
   road: 0,
 })
+
+// 路径段高亮相关
+const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
 
 // 导出相关
 const exportPointsDialogVisible = ref(false)
@@ -892,6 +903,26 @@ function formatTimeRange(start: string | null, end: string | null): string {
     }
   }
   return formatTime(startDate)
+}
+
+// 处理区域节点点击（高亮对应路径段）
+function handleRegionNodeClick(node: RegionNode) {
+  if (node.start_index >= 0 && node.end_index >= 0) {
+    highlightedSegment.value = {
+      start: node.start_index,
+      end: node.end_index,
+      nodeName: node.name,
+    }
+    // 移动端：滚动到地图位置
+    if (screenWidth.value <= 1366) {
+      containerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+}
+
+// 清除路径段高亮
+function clearSegmentHighlight() {
+  highlightedSegment.value = null
 }
 
 // 渲染海拔和速度合并图表
