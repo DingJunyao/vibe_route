@@ -9,6 +9,14 @@ import router from './router'
 
 import 'leaflet/dist/leaflet.css'
 
+// 移动端调试工具（开发环境）
+// if (import.meta.env.DEV) {
+//   import('eruda').then((eruda) => {
+//     eruda.default?.init()
+//     console.log('Eruda 调试工具已启用')
+//   })
+// }
+
 const app = createApp(App)
 
 app.use(createPinia())

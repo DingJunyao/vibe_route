@@ -189,19 +189,6 @@
               </div>
             </div>
           </div>
-
-          <!-- 分页 -->
-          <div class="pagination">
-            <el-pagination
-              v-model:current-page="currentPage"
-              v-model:page-size="pageSize"
-              :page-sizes="[10, 20, 50, 100]"
-              :total="total"
-              :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
-              @current-change="loadTracks"
-              @size-change="loadTracks"
-            />
-          </div>
         </template>
 
         <!-- 空状态 -->
@@ -211,6 +198,19 @@
           </el-button>
         </el-empty>
       </el-card>
+
+      <!-- 分页 -->
+      <div class="pagination" v-if="tracks.length > 0">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="total"
+          :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
+          @current-change="loadTracks"
+          @size-change="loadTracks"
+        />
+      </div>
     </el-main>
   </el-container>
 </template>
@@ -241,11 +241,13 @@ const authStore = useAuthStore()
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
+const screenHeight = ref(window.innerHeight)
 const isMobile = computed(() => screenWidth.value <= 768)
 
 // 监听窗口大小变化
 function handleResize() {
   screenWidth.value = window.innerWidth
+  screenHeight.value = window.innerHeight
 }
 
 const loading = ref(false)
@@ -456,9 +458,11 @@ onUnmounted(() => {
 <style scoped>
 .track-list-container {
   height: 100vh;
-  overflow-y: auto;
   background: #f5f7fa;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .track-list-container > .el-header {
@@ -476,7 +480,11 @@ onUnmounted(() => {
 }
 
 .track-list-container > .el-main {
-  overflow: visible;
+  flex: 1;
+  overflow: hidden;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .header-left {
@@ -524,10 +532,17 @@ onUnmounted(() => {
   margin: 0 auto;
   padding: 20px;
   width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 
 .filter-card {
   margin-bottom: 20px;
+  flex-shrink: 0;
 }
 
 .sort-col {
@@ -551,7 +566,19 @@ onUnmounted(() => {
 }
 
 .list-card {
-  min-height: 400px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.list-card :deep(.el-card__body) {
+  height: 100%;
+  overflow-y: scroll;
+  padding: 0;
 }
 
 :deep(.el-table__row) {
@@ -600,6 +627,14 @@ onUnmounted(() => {
   margin-top: 20px;
   display: flex;
   justify-content: center;
+  flex-shrink: 0;
+  padding: 0 2px;
+  overflow-x: hidden;
+}
+
+.pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 /* 移动端卡片列表 - 默认隐藏 */
@@ -607,15 +642,57 @@ onUnmounted(() => {
   display: none;
 }
 
+/* PC 端表格样式 */
+.pc-table {
+  width: 100%;
+}
+
 .desktop-only {
   display: inline-block;
 }
 
+/* PC 端显示表格，隐藏移动端卡片 */
+@media (min-width: 769px) {
+  .mobile-card-list {
+    display: none !important;
+  }
+
+  .pc-table {
+    display: table !important;
+  }
+}
+
 /* 移动端响应式 */
 @media (max-width: 768px) {
-  .el-header {
+  /* 容器固定，防止页面滚动 */
+  .track-list-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+    background: #f5f7fa;
+  }
+
+  /* 导航栏固定在顶部 */
+  .track-list-container > .el-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
     flex-wrap: wrap;
     padding: 10px;
+    background: white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  /* 主内容区添加顶部内边距，避免被固定导航栏遮挡 */
+  .track-list-container > .el-main {
+    padding-top: 80px;
+    height: 100%;
+    background: #f5f7fa;
   }
 
   .header-left {
@@ -636,7 +713,23 @@ onUnmounted(() => {
   }
 
   .main {
-    padding: 10px;
+    padding: 0;
+    background: #f5f7fa;
+  }
+
+  /* 确保 Element Plus 的主内容区也有正确的背景色 */
+  :deep(.el-main) {
+    background: #f5f7fa;
+  }
+
+  .filter-card {
+    margin-bottom: 10px;
+    flex-shrink: 0;
+    padding: 0 10px;
+  }
+
+  .filter-card :deep(.el-card__body) {
+    padding: 15px 10px;
   }
 
   .sort-col {
@@ -656,6 +749,57 @@ onUnmounted(() => {
 
   .track-stats {
     flex-wrap: wrap;
+  }
+
+  /* 移动端卡片列表滚动，底部留出分页器空间 */
+  .mobile-card-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 10px;
+    /* 为固定底部的分页器留出空间（分页器高度约 50px + 安全区域） */
+    padding-bottom: 70px;
+  }
+
+  /* 移动端列表卡片 */
+  .list-card {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .list-card :deep(.el-card__body) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+
+  /* 分页器固定在底部 */
+  .pagination {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: #f5f7fa;
+    padding: 10px;
+    /* 适配安全区域 */
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+    margin-top: 0;
+  }
+
+  .pagination :deep(.el-pagination) {
+    justify-content: center;
   }
 }
 
@@ -741,5 +885,34 @@ onUnmounted(() => {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+</style>
+
+<style>
+/* 非 scoped 样式：确保移动端 Safari 背景色正确延伸到地址栏区域 */
+@media (max-width: 768px) {
+  /* 使用伪元素创建一个背景层，确保覆盖整个视口 */
+  .track-list-container::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #f5f7fa;
+    z-index: -1;
+    /* 延伸到安全区域 */
+    height: 100vh;
+    height: -webkit-fill-available;
+  }
+
+  /* 确保 body 和 html 也有正确的背景色 */
+  body {
+    background: #f5f7fa !important;
+  }
+
+  #app {
+    background: #f5f7fa !important;
+  }
 }
 </style>

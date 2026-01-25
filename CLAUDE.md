@@ -269,6 +269,51 @@ onMounted(() => {
 
 所有地图组件（[`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue)、[`AMap.vue`](frontend/src/components/map/AMap.vue)、[`BMap.vue`](frontend/src/components/map/BMap.vue)、[`TencentMap.vue`](frontend/src/components/map/TencentMap.vue)）都暴露了 `resize()` 方法，通过 [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) 统一调用。
 
+#### 移动端分页器固定底部
+
+轨迹列表页（[`TrackList.vue`](frontend/src/views/TrackList.vue)）移动端需要固定分页器在底部，确保始终可见且不被浏览器地址栏遮挡。
+
+**问题背景**：不同移动浏览器的地址栏/工具栏高度差异很大：
+
+- iOS Safari: ~42px
+- iOS Edge: ~12px
+- Android Chrome: ~96px
+- Android Edge: ~115px
+
+由于页面采用 `position: fixed` 容器布局不可滚动，分页器一旦被遮挡就无法访问。
+
+**解决方案**：使用 `position: fixed` 将分页器固定在屏幕底部，并给列表添加底部 padding 防止内容被遮挡。
+
+```css
+@media (max-width: 768px) {
+  /* 列表底部留出分页器空间 */
+  .mobile-card-list {
+    padding-bottom: 70px;  /* 分页器高度 + 安全区域 */
+  }
+
+  /* 分页器固定在底部 */
+  .pagination {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: #f5f7fa;
+    padding: 10px;
+    /* 适配安全区域（刘海屏） */
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+  }
+}
+```
+
+**关键技术点**：
+
+1. **固定定位**：`position: fixed; bottom: 0` 确保分页器始终在视口底部
+2. **背景色**：添加 `background` 和 `box-shadow` 确保在滚动内容之上可见
+3. **安全区域适配**：`env(safe-area-inset-bottom)` 适配 iPhone 刘海屏
+4. **列表留白**：滚动容器添加 `padding-bottom` 防止最后一项被分页器遮挡
+
 ### 地图与图表双向同步
 
 轨迹详情页（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）实现了地图与图表的双向交互：
