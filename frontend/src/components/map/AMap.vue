@@ -282,6 +282,13 @@ function highlightPoint(index: number) {
 
   const AMap = (window as any).AMap
 
+  // 检查点是否在视野内，如果不在则平移地图到该点
+  const bounds = AMapInstance.getBounds()
+  const pointLngLat = new AMap.LngLat(position.lng, position.lat)
+  if (bounds && !bounds.contains(pointLngLat)) {
+    AMapInstance.panTo(pointLngLat)
+  }
+
   mouseMarker.setPosition(new AMap.LngLat(position.lng, position.lat))
   mouseMarker.setMap(AMapInstance)
 
@@ -631,72 +638,189 @@ async function initMap() {
     }
 
     // 移动端：点击地图显示轨迹信息
-    const isMobile = window.innerWidth <= 768
+    const isMobile = window.innerWidth <= 1366
     if (isMobile) {
       AMapInstance.on('click', (e: any) => {
         const lngLat = e.lnglat
         const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
+        const AMap = (window as any).AMap
 
-        if (trackPath.length < 2) {
-          hideMarker()
-          return
-        }
-
-        const zoom = AMapInstance.getZoom()
-        const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
-
-        let minDistance = Infinity
-        let nearestIndex = -1
-        let nearestPosition: [number, number] = [0, 0]
-
-        // 查找最近的点
-        for (let i = 0; i < trackPath.length - 1; i++) {
-          const p1 = [trackPath[i].lng, trackPath[i].lat] as [number, number]
-          const p2 = [trackPath[i + 1].lng, trackPath[i + 1].lat] as [number, number]
-          const closest = closestPointOnSegment(mouseLngLat, p1, p2)
-          const dist = distance(mouseLngLat, closest)
-
-          if (dist < minDistance) {
-            minDistance = dist
-            nearestPosition = closest
-            const distToP1 = distance(closest, p1)
-            const distToP2 = distance(closest, p2)
-            nearestIndex = distToP1 < distToP2 ? i : i + 1
+        if (props.mode === 'home') {
+          // home 模式：显示轨迹信息
+          if (tracksData.size === 0) {
+            hideMarker()
+            return
           }
-        }
 
-        const triggered = minDistance < dynamicDistance
+          const zoom = AMapInstance.getZoom()
+          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
 
-        if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
-          const point = trackPoints[nearestIndex]
-          const AMap = (window as any).AMap
+          let minDistance = Infinity
+          let nearestTrackId: number | null = null
+          let nearestPosition: [number, number] = [0, 0]
 
-          mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-          mouseMarker.setMap(AMapInstance)
+          // 遍历所有轨迹，找到最近的轨迹
+          for (const [trackId, data] of tracksData) {
+            if (data.path.length < 2) continue
 
-          const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
-          const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
-          const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-          const location = formatLocationInfo(point)
+            for (let i = 0; i < data.path.length - 1; i++) {
+              const p1 = [data.path[i].lng, data.path[i].lat] as [number, number]
+              const p2 = [data.path[i + 1].lng, data.path[i + 1].lat] as [number, number]
+              const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+              const dist = distance(mouseLngLat, closest)
 
-          const content = `
-            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-              ${location ? `<div style="color: #666;">${location}</div>` : ''}
-              <div style="color: #666;">时间: ${timeStr}</div>
-              <div style="color: #666;">速度: ${speed}</div>
-              <div style="color: #666;">海拔: ${elevation}</div>
-            </div>
-          `
+              if (dist < minDistance) {
+                minDistance = dist
+                nearestPosition = closest
+                nearestTrackId = trackId
+              }
+            }
+          }
 
-          tooltip.setContent(content)
-          tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-          tooltip.open(AMapInstance)
+          const triggered = minDistance < dynamicDistance
 
-          lastHoverIndex = nearestIndex
-          emit('point-hover', point, nearestIndex)
+          if (triggered && nearestTrackId !== null) {
+            const trackData = tracksData.get(nearestTrackId)
+            if (!trackData) return
+
+            const track = trackData.track
+            lastHoverIndex = nearestTrackId
+
+            // 更新标记位置并显示
+            mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+            mouseMarker.setMap(AMapInstance)
+
+            // 格式化时间和里程
+            const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+              if (!time) return '-'
+              const date = new Date(time)
+              if (endDate) {
+                return date.toLocaleString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              }
+              return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
+
+            const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+              if (!start || !end) return false
+              const startDate = new Date(start)
+              const endDate = new Date(end)
+              return startDate.getFullYear() === endDate.getFullYear() &&
+                     startDate.getMonth() === endDate.getMonth() &&
+                     startDate.getDate() === endDate.getDate()
+            }
+
+            const formatTimeRange = () => {
+              const startTime = formatTime(track.start_time, false)
+              const endTime = isSameDay(track.start_time, track.end_time)
+                ? formatTime(track.end_time, true)
+                : formatTime(track.end_time, false)
+              return `${startTime} ~ ${endTime}`
+            }
+
+            const formatDistance = (meters: number | undefined) => {
+              if (meters === undefined) return '-'
+              if (meters < 1000) return `${meters.toFixed(1)} m`
+              return `${(meters / 1000).toFixed(2)} km`
+            }
+
+            const formatDuration = (seconds: number | undefined) => {
+              if (seconds === undefined) return '-'
+              const hours = Math.floor(seconds / 3600)
+              const minutes = Math.floor((seconds % 3600) / 60)
+              if (hours > 0) {
+                return `${hours}小时${minutes}分钟`
+              }
+              return `${minutes}分钟`
+            }
+
+            const content = `
+              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+                <div style="color: #666;">时间: ${formatTimeRange()}</div>
+                <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+                <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              </div>
+            `
+
+            tooltip.setContent(content)
+            tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+            tooltip.open(AMapInstance)
+
+            emit('track-hover', nearestTrackId)
+          } else {
+            hideMarker()
+          }
         } else {
-          hideMarker()
+          // detail 模式：显示点信息
+          if (trackPath.length < 2) {
+            hideMarker()
+            return
+          }
+
+          const zoom = AMapInstance.getZoom()
+          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+          let minDistance = Infinity
+          let nearestIndex = -1
+          let nearestPosition: [number, number] = [0, 0]
+
+          // 查找最近的点
+          for (let i = 0; i < trackPath.length - 1; i++) {
+            const p1 = [trackPath[i].lng, trackPath[i].lat] as [number, number]
+            const p2 = [trackPath[i + 1].lng, trackPath[i + 1].lat] as [number, number]
+            const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+            const dist = distance(mouseLngLat, closest)
+
+            if (dist < minDistance) {
+              minDistance = dist
+              nearestPosition = closest
+              const distToP1 = distance(closest, p1)
+              const distToP2 = distance(closest, p2)
+              nearestIndex = distToP1 < distToP2 ? i : i + 1
+            }
+          }
+
+          const triggered = minDistance < dynamicDistance
+
+          if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
+            const point = trackPoints[nearestIndex]
+
+            mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+            mouseMarker.setMap(AMapInstance)
+
+            const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+            const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+            const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+            const location = formatLocationInfo(point)
+
+            const content = `
+              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+                ${location ? `<div style="color: #666;">${location}</div>` : ''}
+                <div style="color: #666;">时间: ${timeStr}</div>
+                <div style="color: #666;">速度: ${speed}</div>
+                <div style="color: #666;">海拔: ${elevation}</div>
+              </div>
+            `
+
+            tooltip.setContent(content)
+            tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+            tooltip.open(AMapInstance)
+
+            lastHoverIndex = nearestIndex
+            emit('point-hover', point, nearestIndex)
+          } else {
+            hideMarker()
+          }
         }
       })
     }

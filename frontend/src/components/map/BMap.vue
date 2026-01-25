@@ -90,6 +90,8 @@ const mapContainer = ref<HTMLElement>()
 let BMapInstance: any = null
 let polylines: any[] = []
 let mouseMarker: any = null
+let customTooltip: HTMLElement | null = null  // 自定义 tooltip 元素
+let currentHighlightPoint: { index: number; position: { lng: number; lat: number }; point: Point } | null = null
 let trackPoints: Point[] = []
 let trackPath: { lng: number; lat: number }[] = []
 let lastHoverIndex = -1
@@ -254,56 +256,107 @@ function createMouseMarker() {
   mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(0, 0))
 }
 
-// 创建信息提示框
-function createTooltip() {
-  // 百度地图的 InfoWindow 每次都创建新实例，不需要预创建
+// 创建自定义 tooltip 元素
+function createCustomTooltip() {
+  if (!mapContainer.value) return
+  const tooltipDiv = document.createElement('div')
+  tooltipDiv.className = 'custom-map-tooltip'
+  tooltipDiv.style.cssText = `
+    position: absolute;
+    z-index: 1000;
+    pointer-events: none;
+    display: none;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+  `
+  mapContainer.value.appendChild(tooltipDiv)
+  customTooltip = tooltipDiv
 }
 
-// 显示 tooltip（每次都创建新的 InfoWindow 实例）
-function showTooltip(nearestIndex: number, point: Point, position: { lng: number; lat: number }) {
-  if (!BMapInstance) return
+// 将经纬度转换为容器像素坐标
+function lngLatToContainerPoint(lng: number, lat: number): { x: number; y: number } | null {
+  if (!BMapInstance || !mapContainer.value) return null
 
   const BMapGL = (window as any).BMapGL
+  const point = new BMapGL.Point(lng, lat)
+  const pixel = BMapInstance.pointToOverlayPixel(point)
+
+  if (!pixel) return null
+
+  // 获取容器的位置信息
+  const containerRect = mapContainer.value.getBoundingClientRect()
+
+  // 计算相对于容器的坐标
+  return {
+    x: pixel.x,
+    y: pixel.y,
+  }
+}
+
+// 更新自定义 tooltip 的位置和内容
+function updateCustomTooltip(content: string, pointPixel: { x: number; y: number }, containerSize: { x: number; y: number }) {
+  if (!customTooltip) return
+  const tooltip = customTooltip
+  tooltip.innerHTML = content
+  tooltip.style.display = 'block'
+
+  const tooltipRect = tooltip.getBoundingClientRect()
+  const tooltipWidth = tooltipRect.width
+  const tooltipHeight = tooltipRect.height
+  const padding = 10
+
+  let positionX = pointPixel.x
+  let positionY = pointPixel.y - tooltipHeight - 10  // 默认显示在点上方
+
+  // 检查上方空间是否足够
+  if (pointPixel.y - tooltipHeight < padding) {
+    if (pointPixel.y + tooltipHeight + 10 < containerSize.y - padding) {
+      positionY = pointPixel.y + 10  // 显示在点下方
+    }
+  }
+
+  // 检查左右空间
+  if (pointPixel.x - tooltipWidth / 2 < padding) {
+    positionX = padding + tooltipWidth / 2
+  } else if (pointPixel.x + tooltipWidth / 2 > containerSize.x - padding) {
+    positionX = containerSize.x - padding - tooltipWidth / 2
+  }
+
+  tooltip.style.left = `${positionX - tooltipWidth / 2}px`
+  tooltip.style.top = `${positionY}px`
+}
+
+// 显示 tooltip（使用自定义 HTML 元素）
+function showTooltip(nearestIndex: number, point: Point, position: { lng: number; lat: number }) {
+  if (!BMapInstance || !customTooltip || !mapContainer.value) return
 
   const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
   const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
   const location = formatLocationInfo(point)
 
-  // 合并为单一内容（与 Leaflet 和 AMap 保持一致）
-  const title = `
-  <div style="padding: 8px 12px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-  <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-  <div>
-  `
   const content = `
-    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-      <!--div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div-->
-      ${location ? `<div style="color: #666;">${location}</div>` : ''}
-      <div style="color: #666;">时间: ${timeStr}</div>
-      <div style="color: #666;">速度: ${speed}</div>
-      <div style="color: #666;">海拔: ${elevation}</div>
-    </div>
+    <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+    ${location ? `<div style="color: #666;">${location}</div>` : ''}
+    <div style="color: #666;">时间: ${timeStr}</div>
+    <div style="color: #666;">速度: ${speed}</div>
+    <div style="color: #666;">海拔: ${elevation}</div>
   `
 
-  // 每次创建新的 InfoWindow 实例
-  const newTooltip = new BMapGL.InfoWindow(content, {
-    width: 200,
-    height: 0,
-    offset: new BMapGL.Size(0, 0),
-    title: title,
-  })
+  // 保存当前高亮的点信息
+  currentHighlightPoint = { index: nearestIndex, position, point }
 
-  const bmapPoint = new BMapGL.Point(position.lng, position.lat)
-
-  // 先关闭当前的 InfoWindow，然后使用 setTimeout 确保关闭完成后再打开新的
-  // 百度地图 InfoWindow 有状态管理问题，连续调用 openInfoWindow 可能不生效
-  BMapInstance.closeInfoWindow()
-
-  // 使用 setTimeout 确保在下一个事件循环中打开，避免状态冲突
-  setTimeout(() => {
-    BMapInstance.openInfoWindow(newTooltip, bmapPoint)
-  }, 0)
+  // 计算点的屏幕坐标
+  const pointPixel = lngLatToContainerPoint(position.lng, position.lat)
+  if (pointPixel) {
+    const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
+    updateCustomTooltip(content, pointPixel, containerSize)
+  }
 }
 
 // 从外部高亮指定点（由图表触发）
@@ -323,6 +376,13 @@ function highlightPoint(index: number) {
   if (!BMapInstance || !mouseMarker || !point || !position) return
 
   const BMapGL = (window as any).BMapGL
+
+  // 检查点是否在视野内，如果不在则平移地图到该点
+  const bounds = BMapInstance.getBounds()
+  const pointBMapPoint = new BMapGL.Point(position.lng, position.lat)
+  if (bounds && !bounds.containsPoint(pointBMapPoint)) {
+    BMapInstance.panTo(pointBMapPoint)
+  }
 
   // 先移除旧覆盖物（如果存在）
   try {
@@ -344,6 +404,8 @@ function hideMarker() {
   if (lastHoverIndex === -1) return
 
   lastHoverIndex = -1
+  currentHighlightPoint = null
+
   if (mouseMarker && BMapInstance) {
     try {
       BMapInstance.removeOverlay(mouseMarker)
@@ -351,9 +413,12 @@ function hideMarker() {
       // ignore
     }
   }
-  if (BMapInstance) {
-    BMapInstance.closeInfoWindow()
+
+  // 隐藏自定义 tooltip
+  if (customTooltip) {
+    customTooltip.style.display = 'none'
   }
+
   if (props.mode === 'home') {
     emit('track-hover', null)
   } else {
@@ -392,9 +457,33 @@ async function initMap() {
     const scaleCtrl = new BMapGL.ScaleControl()
     BMapInstance.addControl(scaleCtrl)
 
-    // 创建标记和提示框
+    // 创建标记和自定义 tooltip
     createMouseMarker()
-    createTooltip()
+    createCustomTooltip()
+
+    // 监听地图移动事件，在地图平移时更新 tooltip 位置
+    BMapInstance.addEventListener('moveend', () => {
+      if (currentHighlightPoint && customTooltip && mapContainer.value) {
+        const pointPixel = lngLatToContainerPoint(currentHighlightPoint.position.lng, currentHighlightPoint.position.lat)
+        if (pointPixel) {
+          const timeStr = currentHighlightPoint.point.time ? new Date(currentHighlightPoint.point.time).toLocaleTimeString('zh-CN') : '-'
+          const elevation = currentHighlightPoint.point.elevation != null ? `${currentHighlightPoint.point.elevation.toFixed(1)} m` : '-'
+          const speed = currentHighlightPoint.point.speed != null ? `${(currentHighlightPoint.point.speed * 3.6).toFixed(1)} km/h` : '-'
+          const location = formatLocationInfo(currentHighlightPoint.point)
+
+          const content = `
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${currentHighlightPoint.index}</div>
+            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            <div style="color: #666;">时间: ${timeStr}</div>
+            <div style="color: #666;">速度: ${speed}</div>
+            <div style="color: #666;">海拔: ${elevation}</div>
+          `
+
+          const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
+          updateCustomTooltip(content, pointPixel, containerSize)
+        }
+      }
+    })
 
     // 统一的鼠标处理函数
     const handleMouseMove = (e: any) => {
@@ -601,31 +690,21 @@ async function initMap() {
           return `${minutes}分钟`
         }
 
-        const title = `
-          <div style="padding: 8px 12px; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-          <div>
-        `
         const content = `
-          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-            <div style="color: #666;">时间: ${formatTimeRange()}</div>
-            <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-            <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
-          </div>
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div style="color: #666;">时间: ${formatTimeRange()}</div>
+          <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+          <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
         `
 
-        const newTooltip = new BMapGL.InfoWindow(content, {
-          width: 200,
-          height: 0,
-          offset: new BMapGL.Size(0, 0),
-          title: title,
-        })
-
-        const bmapPoint = new BMapGL.Point(nearestPosition.lng, nearestPosition.lat)
-        BMapInstance.closeInfoWindow()
-        setTimeout(() => {
-          BMapInstance.openInfoWindow(newTooltip, bmapPoint)
-        }, 0)
+        // 使用自定义 tooltip
+        if (customTooltip && mapContainer.value) {
+          const pointPixel = lngLatToContainerPoint(nearestPosition.lng, nearestPosition.lat)
+          if (pointPixel) {
+            const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
+            updateCustomTooltip(content, pointPixel, containerSize)
+          }
+        }
 
         // 发射事件
         emit('track-hover', nearestTrackId)
@@ -638,7 +717,7 @@ async function initMap() {
     BMapInstance.addEventListener('mousemove', handleMouseMove)
 
     // 移动端：点击地图显示轨迹信息
-    const isMobile = window.innerWidth <= 768
+    const isMobile = window.innerWidth <= 1366
     if (isMobile) {
       BMapInstance.addEventListener('click', (e: any) => {
         // 百度地图事件对象可能有多种属性名，尝试不同的方式获取坐标
@@ -661,60 +740,196 @@ async function initMap() {
 
         if (lng === undefined || lat === undefined) return
 
-        if (trackPath.length < 2) {
-          hideMarker()
-          return
-        }
-
-        const zoom = BMapInstance.getZoom()
-        const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
-
-        let minDistance = Infinity
-        let nearestIndex = -1
-        let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
-
-        // 查找最近的点
-        for (let i = 0; i < trackPath.length - 1; i++) {
-          const p1: [number, number] = [trackPath[i].lng, trackPath[i].lat]
-          const p2: [number, number] = [trackPath[i + 1].lng, trackPath[i + 1].lat]
-          const closest = closestPointOnSegment([lng, lat], p1, p2)
-          const dist = distance([lng, lat], closest)
-
-          if (dist < minDistance) {
-            minDistance = dist
-            nearestPosition = { lng: closest[0], lat: closest[1] }
-            const distToP1 = distance(closest, p1)
-            const distToP2 = distance(closest, p2)
-            nearestIndex = distToP1 < distToP2 ? i : i + 1
+        // 根据模式处理不同的逻辑
+        if (props.mode === 'home') {
+          // home 模式：显示轨迹信息
+          if (tracksData.size === 0) {
+            hideMarker()
+            return
           }
-        }
 
-        const triggered = minDistance < dynamicDistance
+          const zoom = BMapInstance.getZoom()
+          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
 
-        if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
-          const point = trackPoints[nearestIndex]
+          let minDistance = Infinity
+          let nearestTrackId: number | null = null
+          let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
 
-          // 先移除旧覆盖物
-          if (mouseMarker) {
-            try {
-              BMapInstance.removeOverlay(mouseMarker)
-            } catch (e) {
-              // ignore
+          // 遍历所有轨迹，找到最近的轨迹
+          for (const [trackId, data] of tracksData) {
+            if (data.path.length < 2) continue
+
+            for (let i = 0; i < data.path.length - 1; i++) {
+              const p1: [number, number] = [data.path[i].lng, data.path[i].lat]
+              const p2: [number, number] = [data.path[i + 1].lng, data.path[i + 1].lat]
+              const closest = closestPointOnSegment([lng, lat], p1, p2)
+              const dist = distance([lng, lat], closest)
+
+              if (dist < minDistance) {
+                minDistance = dist
+                nearestPosition = { lng: closest[0], lat: closest[1] }
+                nearestTrackId = trackId
+              }
             }
           }
 
-          // 创建新覆盖物实例并添加到地图
-          const MouseMarkerOverlay = createMouseMarkerOverlay()
-          mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
-          BMapInstance.addOverlay(mouseMarker)
+          const triggered = minDistance < dynamicDistance
 
-          // 显示 tooltip（每次创建新实例）
-          showTooltip(nearestIndex, point, nearestPosition)
+          if (triggered && nearestTrackId !== null) {
+            const trackData = tracksData.get(nearestTrackId)
+            if (!trackData) return
 
-          lastHoverIndex = nearestIndex
-          emit('point-hover', point, nearestIndex)
+            const track = trackData.track
+
+            // 如果是同一条轨迹，跳过更新
+            if (nearestTrackId === lastHoverIndex) return
+
+            lastHoverIndex = nearestTrackId
+
+            // 先移除旧覆盖物
+            if (mouseMarker) {
+              try {
+                BMapInstance.removeOverlay(mouseMarker)
+              } catch (e) {
+                // ignore
+              }
+            }
+
+            // 创建新覆盖物实例并添加到地图
+            const MouseMarkerOverlay = createMouseMarkerOverlay()
+            mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+            BMapInstance.addOverlay(mouseMarker)
+
+            // 格式化时间和里程
+            const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+              if (!time) return '-'
+              const date = new Date(time)
+              if (endDate) {
+                return date.toLocaleString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              }
+              return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
+
+            const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+              if (!start || !end) return false
+              const startDate = new Date(start)
+              const endDate = new Date(end)
+              return startDate.getFullYear() === endDate.getFullYear() &&
+                     startDate.getMonth() === endDate.getMonth() &&
+                     startDate.getDate() === endDate.getDate()
+            }
+
+            const formatTimeRange = () => {
+              const startTime = formatTime(track.start_time, false)
+              const endTime = isSameDay(track.start_time, track.end_time)
+                ? formatTime(track.end_time, true)
+                : formatTime(track.end_time, false)
+              return `${startTime} ~ ${endTime}`
+            }
+
+            const formatDistance = (meters: number | undefined) => {
+              if (meters === undefined) return '-'
+              if (meters < 1000) return `${meters.toFixed(1)} m`
+              return `${(meters / 1000).toFixed(2)} km`
+            }
+
+            const formatDuration = (seconds: number | undefined) => {
+              if (seconds === undefined) return '-'
+              const hours = Math.floor(seconds / 3600)
+              const minutes = Math.floor((seconds % 3600) / 60)
+              if (hours > 0) {
+                return `${hours}小时${minutes}分钟`
+              }
+              return `${minutes}分钟`
+            }
+
+            const content = `
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="color: #666;">时间: ${formatTimeRange()}</div>
+              <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+              <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+            `
+
+            // 使用自定义 tooltip
+            if (customTooltip && mapContainer.value) {
+              const pointPixel = lngLatToContainerPoint(nearestPosition.lng, nearestPosition.lat)
+              if (pointPixel) {
+                const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
+                updateCustomTooltip(content, pointPixel, containerSize)
+              }
+            }
+
+            // 发射事件
+            emit('track-hover', nearestTrackId)
+          } else {
+            hideMarker()
+          }
         } else {
-          hideMarker()
+          // detail 模式：显示点信息
+          if (trackPath.length < 2) {
+            hideMarker()
+            return
+          }
+
+          const zoom = BMapInstance.getZoom()
+          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+          let minDistance = Infinity
+          let nearestIndex = -1
+          let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
+
+          // 查找最近的点
+          for (let i = 0; i < trackPath.length - 1; i++) {
+            const p1: [number, number] = [trackPath[i].lng, trackPath[i].lat]
+            const p2: [number, number] = [trackPath[i + 1].lng, trackPath[i + 1].lat]
+            const closest = closestPointOnSegment([lng, lat], p1, p2)
+            const dist = distance([lng, lat], closest)
+
+            if (dist < minDistance) {
+              minDistance = dist
+              nearestPosition = { lng: closest[0], lat: closest[1] }
+              const distToP1 = distance(closest, p1)
+              const distToP2 = distance(closest, p2)
+              nearestIndex = distToP1 < distToP2 ? i : i + 1
+            }
+          }
+
+          const triggered = minDistance < dynamicDistance
+
+          if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
+            const point = trackPoints[nearestIndex]
+
+            // 先移除旧覆盖物
+            if (mouseMarker) {
+              try {
+                BMapInstance.removeOverlay(mouseMarker)
+              } catch (e) {
+                // ignore
+              }
+            }
+
+            // 创建新覆盖物实例并添加到地图
+            const MouseMarkerOverlay = createMouseMarkerOverlay()
+            mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+            BMapInstance.addOverlay(mouseMarker)
+
+            // 显示 tooltip（每次创建新实例）
+            showTooltip(nearestIndex, point, nearestPosition)
+
+            lastHoverIndex = nearestIndex
+            emit('point-hover', point, nearestIndex)
+          } else {
+            hideMarker()
+          }
         }
       })
     }

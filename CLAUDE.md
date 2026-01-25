@@ -142,7 +142,7 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 
 ### 响应式设计
 
-- 移动端断点：`screenWidth <= 768px`
+- 移动端断点：`screenWidth <= 1366px`
 - 桌面端隐藏类：`.desktop-only`
 - 移动端使用卡片列表替代表格
 - viewport 配置禁止页面缩放：`maximum-scale=1.0, user-scalable=no`
@@ -182,7 +182,7 @@ hashed_password = pwd_context.hash(sha256_password_from_frontend)
 ```typescript
 const screenWidth = ref(window.innerWidth)
 const screenHeight = ref(window.innerHeight)
-const isMobile = computed(() => screenWidth.value <= 768)
+const isMobile = computed(() => screenWidth.value <= 1366)
 const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
 
 function handleResize() {
@@ -242,9 +242,26 @@ onUnmounted(() => {
 
 **移动端布局**：
 
-- 单列流式布局
+- 单列流式布局，所有卡片垂直排列（不分左右区域）
 - 地图：30vh（最小 200px）
 - 图表：20vh（最小 150px）
+
+#### 轨迹详情页"轨迹信息"卡片结构
+
+轨迹详情页的"轨迹信息"卡片（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）整合了多项轨迹信息：
+
+1. **起止时间**（卡片顶部）：
+   - 时间大字显示（18px 粗体）
+   - 日期小字显示（12px）
+   - 起止日期相同时，日期显示在中间分隔线上替代时钟图标
+   - 移动端保持水平排列（不分行）
+
+2. **统计信息**（中间部分，2x2 网格）：
+   - 总里程、总时长、总爬升、总下降
+
+3. **备注**（卡片底部）：
+   - 仅在有备注时显示
+   - 使用分隔线与上方内容分隔
 
 #### 地图响应式重绘
 
@@ -285,7 +302,7 @@ onMounted(() => {
 **解决方案**：使用 `position: fixed` 将分页器固定在屏幕底部，并给列表添加底部 padding 防止内容被遮挡。
 
 ```css
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   /* 列表底部留出分页器空间 */
   .mobile-card-list {
     padding-bottom: 70px;  /* 分页器高度 + 安全区域 */
@@ -428,6 +445,236 @@ onMounted(() => {
    }
    ```
 
+##### 自定义 Tooltip 实现
+
+为了避免原生地图 InfoWindow/Popup 的闪烁问题，Leaflet 和百度地图组件实现了自定义 HTML tooltip。
+
+**问题背景**：
+
+- 百度地图：每次更新都创建新 InfoWindow 实例，导致明显闪烁
+- Leaflet 地图：Popup 在快速更新时也会出现闪烁和位置问题
+
+**解决方案**：使用自定义 HTML 元素替代原生 InfoWindow/Popup
+
+**Leaflet 地图** ([`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue))：
+
+```typescript
+// 自定义 tooltip 元素
+const customTooltip = ref<HTMLElement | null>(null)
+const currentHighlightPoint = ref<{ index: number; position: [number, number] } | null>(null)
+
+// 创建自定义 tooltip
+function createCustomTooltip() {
+  if (!mapContainer.value) return
+  const tooltipDiv = document.createElement('div')
+  tooltipDiv.className = 'custom-map-tooltip'
+  tooltipDiv.style.cssText = `
+    position: absolute;
+    z-index: 1000;
+    pointer-events: none;
+    display: none;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.95);
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: nowrap;
+  `
+  mapContainer.value.appendChild(tooltipDiv)
+  customTooltip.value = tooltipDiv
+}
+
+// 智能更新 tooltip 位置（避免超出视口）
+function updateCustomTooltip(content: string, pointPixel: L.Point, containerSize: { x: number; y: number }) {
+  if (!customTooltip.value) return
+  const tooltip = customTooltip.value
+  tooltip.innerHTML = content
+  tooltip.style.display = 'block'
+
+  const tooltipRect = tooltip.getBoundingClientRect()
+  const tooltipWidth = tooltipRect.width
+  const tooltipHeight = tooltipRect.height
+  const padding = 10
+
+  let positionX = pointPixel.x
+  let positionY = pointPixel.y - tooltipHeight - 10  // 默认在上方
+
+  // 检查上方空间，不足则显示在下方
+  if (pointPixel.y - tooltipHeight < padding) {
+    if (pointPixel.y + tooltipHeight + 10 < containerSize.y - padding) {
+      positionY = pointPixel.y + 10
+    }
+  }
+
+  // 检查左右空间，防止超出边界
+  if (pointPixel.x - tooltipWidth / 2 < padding) {
+    positionX = padding + tooltipWidth / 2
+  } else if (pointPixel.x + tooltipWidth / 2 > containerSize.x - padding) {
+    positionX = containerSize.x - padding - tooltipWidth / 2
+  }
+
+  tooltip.style.left = `${positionX - tooltipWidth / 2}px`
+  tooltip.style.top = `${positionY}px`
+}
+
+// 地图移动时更新 tooltip 位置（保持同步）
+map.value.on('move', () => {
+  if (currentHighlightPoint.value && customTooltip.value) {
+    // 重新计算 tooltip 位置并更新
+  }
+})
+```
+
+**百度地图** ([`BMap.vue`](frontend/src/components/map/BMap.vue))：
+
+```typescript
+let customTooltip: HTMLElement | null = null
+let currentHighlightPoint: { index: number; position: { lng: number; lat: number }; point: Point } | null = null
+
+// 坐标转换：经纬度 → 容器像素
+function lngLatToContainerPoint(lng: number, lat: number): { x: number; y: number } | null {
+  if (!BMapInstance || !mapContainer.value) return null
+  const BMapGL = (window as any).BMapGL
+  const point = new BMapGL.Point(lng, lat)
+  const pixel = BMapInstance.pointToOverlayPixel(point)
+  if (!pixel) return null
+  return { x: pixel.x, y: pixel.y }
+}
+
+// 监听地图移动事件
+BMapInstance.addEventListener('moveend', () => {
+  if (currentHighlightPoint && customTooltip && mapContainer.value) {
+    const pointPixel = lngLatToContainerPoint(currentHighlightPoint.position.lng, currentHighlightPoint.position.lat)
+    if (pointPixel) {
+      // 重新生成内容并更新位置
+    }
+  }
+})
+```
+
+**关键技术点**：
+
+1. **自定义 HTML 元素**：使用绝对定位的 `div`，`pointer-events: none` 防止干扰鼠标事件
+2. **智能定位**：根据视口边界自动调整 tooltip 显示位置（上下左右）
+3. **移动同步**：监听地图 `move`/`moveend` 事件，地图平移时实时更新 tooltip 位置
+4. **避免闪烁**：只更新现有元素的内容和位置，不创建/销毁 DOM 元素
+5. **坐标转换**：
+
+   - Leaflet: `map.latLngToContainerPoint(latlng)`
+   - 百度: `map.pointToOverlayPixel(point)`
+
+**高德地图无需修改**：高德地图使用单个 InfoWindow 实例配合 `setContent()` 更新内容，不存在闪烁问题。
+
+### 首页地图轨迹信息显示模式
+
+首页地图使用不同的交互模式，显示轨迹信息而非单点信息。
+
+#### 模式区分
+
+地图组件支持两种模式，通过 `mode` prop 控制：
+
+- **`home`模式**（首页）：悬停/点击轨迹时显示轨迹信息
+  - 轨迹名称
+  - 时间起止（同一天时终止时间只显示时间）
+  - 里程
+  - 历时
+
+- **`detail`模式**（轨迹详情页）：悬停/点击时显示点信息
+  - 位置信息
+  - 海拔
+  - 时间
+  - 速度
+
+#### Track 接口扩展
+
+```typescript
+interface Track {
+  id: number
+  points: Point[]
+  name?: string           // 轨迹名称
+  start_time?: string | null   // 开始时间
+  end_time?: string | null     // 结束时间
+  distance?: number          // 里程（米）
+  duration?: number          // 历时（秒）
+}
+```
+
+#### 事件处理
+
+- **home 模式**：发射 `track-hover` 事件，参数为 `trackId`
+- **detail 模式**：发射 `point-hover` 事件，参数为 `(point, pointIndex)`
+
+#### 移动端特殊处理
+
+在移动端，所有地图引擎的点击事件处理器都会检查 `props.mode`：
+
+```typescript
+if (props.mode === 'home') {
+  // 显示轨迹信息
+} else {
+  // 显示点信息
+}
+```
+
+#### 腾讯地图移动端修复
+
+腾讯地图在移动端有以下特殊处理：
+
+1. **移除 mouseout 监听器**（仅桌面端添加）：移动端的 `touchend` 会触发 `mouseout` 事件，导致刚显示的 InfoWindow 被立即关闭
+
+   ```javascript
+   const isMobile = window.innerWidth <= 1366
+   if (!isMobile) {
+     TMapInstance.on('mouseout', () => {
+       hideMarker()
+     })
+   }
+   ```
+
+2. **防抖标志**：防止 `touchend` 和 `click` 重复触发
+
+   ```javascript
+   let isClickProcessing = false
+
+   // click 事件
+   if (isClickProcessing) return
+
+   // touchend 事件
+   e.preventDefault()
+   isClickProcessing = true
+   setTimeout(() => {
+     isClickProcessing = false
+   }, 300)
+   ```
+
+3. **InfoWindow 参数**：创建时必须指定 `map`、`offset` 和 `enableCustom` 参数
+
+   ```javascript
+   infoWindow = new TMap.InfoWindow({
+     map: TMapInstance,
+     position: nearestPosition,
+     content: content,
+     offset: { x: 0, y: -40 },
+     enableCustom: true,
+   })
+   ```
+
+#### Leaflet 地图切换底图修复
+
+切换底图时需要清除提示框，避免残留：
+
+```javascript
+function addTileLayer(layerId: string) {
+  if (!map.value) return
+
+  // 切换底图时清除提示框和标记
+  hideMarker()
+
+  // ... 切换底图逻辑
+}
+```
+
 #### 涉及文件
 
 - [`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图组件（支持 OSM、天地图等）
@@ -436,6 +683,7 @@ onMounted(() => {
 - [`TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图组件
 - [`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图引擎包装器
 - [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页
+- [`Home.vue`](frontend/src/views/Home.vue) - 首页（使用 `mode="home"`）
 
 ## File Structure Highlights
 

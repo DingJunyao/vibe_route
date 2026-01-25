@@ -131,8 +131,30 @@
                 <!-- 统计信息 -->
                 <el-card class="stats-card" shadow="never">
                   <template #header>
-                    <span>轨迹统计</span>
+                    <span>轨迹信息</span>
                   </template>
+                  <!-- 起止时间 -->
+                  <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                    <div class="time-range-item">
+                      <div class="time-range-content">
+                        <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                        <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
+                      </div>
+                    </div>
+                    <div class="time-range-divider">
+                      <template v-if="isSameDay(track.start_time, track.end_time)">
+                        <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                      </template>
+                      <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                    </div>
+                    <div class="time-range-item">
+                      <div class="time-range-content">
+                        <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                        <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <el-divider style="margin: 16px 0;"></el-divider>
                   <el-row :gutter="20">
                     <el-col :span="12">
                       <div class="stat-item">
@@ -171,30 +193,11 @@
                       </div>
                     </el-col>
                   </el-row>
-                </el-card>
-
-                <!-- 轨迹信息 -->
-                <el-card class="info-card" shadow="never">
-                  <template #header>
-                    <span>轨迹信息</span>
-                  </template>
-                  <el-descriptions :column="1" border>
-                    <el-descriptions-item label="文件名">
-                      {{ track.original_filename }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="坐标系">
-                      <el-tag size="small">{{ track.original_crs.toUpperCase() }}</el-tag>
-                    </el-descriptions-item>
-                    <el-descriptions-item label="开始时间">
-                      {{ formatDateTime(track.start_time) }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="结束时间">
-                      {{ formatDateTime(track.end_time) }}
-                    </el-descriptions-item>
-                    <el-descriptions-item label="备注">
-                      <span class="description-text">{{ track.description || '无' }}</span>
-                    </el-descriptions-item>
-                  </el-descriptions>
+                  <!-- 备注 -->
+                  <div v-if="track.description" class="description-section">
+                    <el-divider style="margin: 16px 0;"></el-divider>
+                    <div class="description-text">{{ track.description }}</div>
+                  </div>
                 </el-card>
 
                 <!-- 经过的区域 - 树形展示 -->
@@ -324,8 +327,30 @@
             <!-- 统计信息 -->
             <el-card class="stats-card" shadow="never">
               <template #header>
-                <span>轨迹统计</span>
+                <span>轨迹信息</span>
               </template>
+              <!-- 起止时间 -->
+              <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                <div class="time-range-item">
+                  <div class="time-range-content">
+                    <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                    <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
+                  </div>
+                </div>
+                <div class="time-range-divider">
+                  <template v-if="isSameDay(track.start_time, track.end_time)">
+                    <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                  </template>
+                  <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                </div>
+                <div class="time-range-item">
+                  <div class="time-range-content">
+                    <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                    <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
+                  </div>
+                </div>
+              </div>
+              <el-divider style="margin: 16px 0;"></el-divider>
               <el-row :gutter="20">
                 <el-col :span="12">
                   <div class="stat-item">
@@ -364,30 +389,11 @@
                   </div>
                 </el-col>
               </el-row>
-            </el-card>
-
-            <!-- 轨迹信息 -->
-            <el-card class="info-card" shadow="never">
-              <template #header>
-                <span>轨迹信息</span>
-              </template>
-              <el-descriptions :column="1" border>
-                <el-descriptions-item label="文件名">
-                  {{ track.original_filename }}
-                </el-descriptions-item>
-                <el-descriptions-item label="坐标系">
-                  <el-tag size="small">{{ track.original_crs.toUpperCase() }}</el-tag>
-                </el-descriptions-item>
-                <el-descriptions-item label="开始时间">
-                  {{ formatDateTime(track.start_time) }}
-                </el-descriptions-item>
-                <el-descriptions-item label="结束时间">
-                  {{ formatDateTime(track.end_time) }}
-                </el-descriptions-item>
-                <el-descriptions-item label="备注">
-                  <span class="description-text">{{ track.description || '无' }}</span>
-                </el-descriptions-item>
-              </el-descriptions>
+              <!-- 备注 -->
+              <div v-if="track.description" class="description-section">
+                <el-divider style="margin: 16px 0;"></el-divider>
+                <div class="description-text">{{ track.description }}</div>
+              </div>
             </el-card>
 
             <!-- 经过的区域 - 树形展示 -->
@@ -662,7 +668,7 @@ const authStore = useAuthStore()
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
-const isMobile = computed(() => screenWidth.value <= 768)
+const isMobile = computed(() => screenWidth.value <= 1366)
 
 // 响应式：判断是否为高屏（用于固定布局，仅电脑端）
 const screenHeight = ref(window.innerHeight)
@@ -896,7 +902,7 @@ function renderChart() {
   chartInstance = chart  // 保存图表实例
 
   // 判断是否为移动端
-  const isMobile = window.innerWidth <= 768
+  const isMobile = window.innerWidth <= 1366
 
   // 移动端数据采样
   let sampledPoints = points.value
@@ -1471,6 +1477,24 @@ function formatDateTime(dateStr: string | null): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatTimeOnly(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
 function formatTime(dateStr: string | null): string {
   if (!dateStr) return '-'
   const date = new Date(dateStr)
@@ -1478,6 +1502,16 @@ function formatTime(dateStr: string | null): string {
   const minutes = date.getMinutes().toString().padStart(2, '0')
   const seconds = date.getSeconds().toString().padStart(2, '0')
   return `${hours}:${minutes}:${seconds}`
+}
+
+// 判断两个日期是否为同一天（本地时区）
+function isSameDay(dateStr1: string | null, dateStr2: string | null): boolean {
+  if (!dateStr1 || !dateStr2) return false
+  const date1 = new Date(dateStr1)
+  const date2 = new Date(dateStr2)
+  return date1.getFullYear() === date2.getFullYear() &&
+    date1.getMonth() === date2.getMonth() &&
+    date1.getDate() === date2.getDate()
 }
 
 onMounted(async () => {
@@ -1704,6 +1738,92 @@ onUnmounted(() => {
 .stat-label {
   font-size: 12px;
   color: #999;
+}
+
+/* 起止时间样式 */
+.time-range-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+
+.time-range-item {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.time-range-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 36px;
+  justify-content: center;
+}
+
+.time-range-time {
+  font-size: 18px;
+  font-weight: bold;
+  color: #333;
+  line-height: 1.2;
+}
+
+.time-range-date {
+  font-size: 12px;
+  color: #999;
+  line-height: 1.2;
+}
+
+.time-range-divider {
+  position: relative;
+  flex: 1;
+  height: 1px;
+  background: #e4e4e7;
+  margin: 0 16px;
+}
+
+.time-range-divider-icon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 14px;
+  color: #999;
+  background: white;
+  padding: 0 4px;
+}
+
+.time-range-divider-date {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: #999;
+  background: white;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* 同一天时隐藏两边日期 */
+.time-range-section.same-day .time-range-date {
+  display: none;
+}
+
+/* 备注样式 */
+.description-section {
+  margin-top: 8px;
+}
+
+.description-section .description-text {
+  color: #606266;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .chart {
@@ -1936,14 +2056,8 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.description-text {
-  color: #606266;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
 /* 移动端响应式 */
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   .el-header {
     flex-wrap: wrap;
     padding: 10px;
@@ -1968,6 +2082,14 @@ onUnmounted(() => {
 
   .main {
     padding: 10px;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .main-fixed {
+    padding: 10px !important;
+    height: auto !important;
+    overflow: visible !important;
   }
 
   .map-card :deep(.el-card__body),
@@ -1993,9 +2115,77 @@ onUnmounted(() => {
     font-size: 11px;
   }
 
+  .time-range-section {
+    gap: 8px;
+  }
+
+  .time-range-item {
+    width: 100%;
+  }
+
+  .time-range-time {
+    font-size: 16px;
+  }
+
+  .time-range-date {
+    font-size: 11px;
+  }
+
+  .time-range-divider {
+    margin: 0 8px;
+  }
+
   /* 移动端保持流式布局，整个页面可滚动 */
   .normal-layout {
     flex-direction: column;
+    height: auto;
+    display: block;
+  }
+
+  .normal-left,
+  .normal-right {
+    width: 100%;
+    overflow: visible;
+    padding: 0;
+  }
+
+  .normal-left > *,
+  .normal-right > * {
+    margin-bottom: 15px;
+  }
+
+  /* 固定布局改为单列流式 */
+  .fixed-layout {
+    flex-direction: column;
+    height: auto;
+    display: block;
+  }
+
+  .fixed-left {
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    flex: none;
+  }
+
+  .fixed-left .map-card {
+    flex: none;
+    margin-bottom: 15px;
+  }
+
+  .fixed-left .map-card :deep(.el-card__body) {
+    height: auto;
+  }
+
+  .map-wrapper {
+    height: 30vh;
+    min-height: 200px;
+  }
+
+  .scrollable-right {
+    width: 100%;
+    overflow: visible;
+    padding: 0;
   }
 }
 
@@ -2077,7 +2267,7 @@ onUnmounted(() => {
 }
 
 /* 常规布局样式（仅电脑端高度 < 800px 时使用独立滚动） */
-@media (min-width: 769px) {
+@media (min-width: 1367px) {
   .normal-layout {
     display: flex;
     gap: 20px;

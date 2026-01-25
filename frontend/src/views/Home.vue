@@ -147,7 +147,7 @@ const authStore = useAuthStore()
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
 const screenHeight = ref(window.innerHeight)
-const isMobile = computed(() => screenWidth.value <= 768)
+const isMobile = computed(() => screenWidth.value <= 1366)
 
 // 标记组件是否已挂载，用于避免卸载后更新状态
 let isMounted = true
@@ -410,7 +410,7 @@ onUnmounted(() => {
 }
 
 /* 移动端响应式 */
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   .header {
     flex-wrap: wrap;
     padding: 10px;
@@ -541,7 +541,7 @@ onUnmounted(() => {
 }
 
 /* 移动端响应式 */
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   .header {
     flex-wrap: wrap;
     padding: 10px;

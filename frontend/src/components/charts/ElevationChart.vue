@@ -47,7 +47,7 @@ function updateChart() {
   if (!chart || !props.data || props.data.length === 0) return
 
   // 判断是否为移动端
-  const isMobile = window.innerWidth <= 768
+  const isMobile = window.innerWidth <= 1366
 
   // 移动端数据采样：数据点过多时进行降采样
   let sampledData = props.data

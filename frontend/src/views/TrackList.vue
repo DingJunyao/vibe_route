@@ -242,7 +242,7 @@ const authStore = useAuthStore()
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
 const screenHeight = ref(window.innerHeight)
-const isMobile = computed(() => screenWidth.value <= 768)
+const isMobile = computed(() => screenWidth.value <= 1366)
 
 // 监听窗口大小变化
 function handleResize() {
@@ -652,7 +652,7 @@ onUnmounted(() => {
 }
 
 /* PC 端显示表格，隐藏移动端卡片 */
-@media (min-width: 769px) {
+@media (min-width: 1367px) {
   .mobile-card-list {
     display: none !important;
   }
@@ -663,7 +663,7 @@ onUnmounted(() => {
 }
 
 /* 移动端响应式 */
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   /* 容器固定，防止页面滚动 */
   .track-list-container {
     position: fixed;
@@ -890,7 +890,7 @@ onUnmounted(() => {
 
 <style>
 /* 非 scoped 样式：确保移动端 Safari 背景色正确延伸到地址栏区域 */
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   /* 使用伪元素创建一个背景层，确保覆盖整个视口 */
   .track-list-container::before {
     content: '';

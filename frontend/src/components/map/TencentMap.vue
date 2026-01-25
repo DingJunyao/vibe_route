@@ -101,6 +101,7 @@ const tracksData = new Map<number, { points: Point[]; path: any[]; track: Track 
 
 // 节流和缓存
 let lastHoverIndex = -1  // 上次悬停的点索引
+let isClickProcessing = false  // 防止移动端 touchend 和 click 重复触发
 
 // 计算两点距离
 function distance(p1: [number, number], p2: [number, number]): number {
@@ -527,6 +528,7 @@ async function initMap() {
           mouseMarker.setGeometries([
             {
               id: 'hover-marker',
+              styleId: 'blue-dot',
               position: nearestPosition,
             },
           ])
@@ -599,8 +601,11 @@ async function initMap() {
         }
 
         infoWindow = new TMap.InfoWindow({
-          content: content,
+          map: TMapInstance,
           position: nearestPosition,
+          content: content,
+          offset: { x: 0, y: -40 },
+          enableCustom: true,
         })
 
         infoWindow.open()
@@ -621,16 +626,20 @@ async function initMap() {
       }
     })
 
-    // 鼠标离开地图时隐藏标记
-    TMapInstance.on('mouseout', () => {
-      hideMarker()
-    })
+    // 鼠标离开地图时隐藏标记（仅桌面端）
+    // 移动端不需要此监听器，因为 touchend 后会触发 mouseout 导致提示框被关闭
+    const isMobile = window.innerWidth <= 1366
+    if (!isMobile) {
+      TMapInstance.on('mouseout', () => {
+        hideMarker()
+      })
+    }
 
     // 点击地图显示轨迹信息（同时支持桌面端和移动端）
     // 使用 DOM 容器监听，确保事件能被捕获
     if (mapContainer.value) {
       const clickHandler = (e: Event) => {
-        if (!TMapInstance || trackPath.length < 2) return
+        if (!TMapInstance) return
 
         const TMap = (window as any).TMap
 
@@ -672,44 +681,190 @@ async function initMap() {
         const zoom = TMapInstance.getZoom()
         const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
 
-        let minDistance = Infinity
-        let nearestIndex = -1
-        let nearestPosition: any = null
-
-        // 查找最近的点
-        for (let i = 0; i < trackPath.length - 1; i++) {
-          const p1 = [trackPath[i].lng, trackPath[i].lat] as [number, number]
-          const p2 = [trackPath[i + 1].lng, trackPath[i + 1].lat] as [number, number]
-          const closest = closestPointOnSegment([lng, lat], p1, p2)
-          const dist = distance([lng, lat], closest)
-
-          if (dist < minDistance) {
-            minDistance = dist
-            nearestPosition = new TMap.LatLng(closest[1], closest[0])
-            const distToP1 = distance(closest, p1)
-            const distToP2 = distance(closest, p2)
-            nearestIndex = distToP1 < distToP2 ? i : i + 1
+        if (props.mode === 'home') {
+          // home 模式：显示轨迹信息
+          if (tracksData.size === 0) {
+            hideMarker()
+            return
           }
-        }
 
-        const triggered = minDistance < dynamicDistance
+          let minDistance = Infinity
+          let nearestTrackId: number | null = null
+          let nearestPosition: any = null
 
-        if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
-          const point = trackPoints[nearestIndex]
-          updateMarker({ point, index: nearestIndex, position: nearestPosition })
+          // 遍历所有轨迹，找到最近的轨迹
+          for (const [trackId, data] of tracksData) {
+            if (data.path.length < 2) continue
+
+            for (let i = 0; i < data.path.length - 1; i++) {
+              const p1 = [data.path[i].lng, data.path[i].lat] as [number, number]
+              const p2 = [data.path[i + 1].lng, data.path[i + 1].lat] as [number, number]
+              const closest = closestPointOnSegment([lng, lat], p1, p2)
+              const dist = distance([lng, lat], closest)
+
+              if (dist < minDistance) {
+                minDistance = dist
+                nearestPosition = new TMap.LatLng(closest[1], closest[0])
+                nearestTrackId = trackId
+              }
+            }
+          }
+
+          const triggered = minDistance < dynamicDistance
+
+          if (triggered && nearestTrackId !== null) {
+            const trackData = tracksData.get(nearestTrackId)
+            if (!trackData) return
+
+            const track = trackData.track
+            lastHoverIndex = nearestTrackId
+
+            // 更新标记位置并显示
+            if (mouseMarker) {
+              mouseMarker.setGeometries([
+                {
+                  id: 'hover-marker',
+                  styleId: 'blue-dot',
+                  position: nearestPosition,
+                },
+              ])
+              mouseMarker.setMap(TMapInstance)
+            }
+
+            // 格式化时间和里程
+            const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+              if (!time) return '-'
+              const date = new Date(time)
+              if (endDate) {
+                return date.toLocaleString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              }
+              return date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
+
+            const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+              if (!start || !end) return false
+              const startDate = new Date(start)
+              const endDate = new Date(end)
+              return startDate.getFullYear() === endDate.getFullYear() &&
+                     startDate.getMonth() === endDate.getMonth() &&
+                     startDate.getDate() === endDate.getDate()
+            }
+
+            const formatTimeRange = () => {
+              const startTime = formatTime(track.start_time, false)
+              const endTime = isSameDay(track.start_time, track.end_time)
+                ? formatTime(track.end_time, true)
+                : formatTime(track.end_time, false)
+              return `${startTime} ~ ${endTime}`
+            }
+
+            const formatDistance = (meters: number | undefined) => {
+              if (meters === undefined) return '-'
+              if (meters < 1000) return `${meters.toFixed(1)} m`
+              return `${(meters / 1000).toFixed(2)} km`
+            }
+
+            const formatDuration = (seconds: number | undefined) => {
+              if (seconds === undefined) return '-'
+              const hours = Math.floor(seconds / 3600)
+              const minutes = Math.floor((seconds % 3600) / 60)
+              if (hours > 0) {
+                return `${hours}小时${minutes}分钟`
+              }
+              return `${minutes}分钟`
+            }
+
+            const content = `
+              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+                <div style="color: #666;">时间: ${formatTimeRange()}</div>
+                <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+                <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              </div>
+            `
+
+            if (infoWindow) {
+              infoWindow.close()
+            }
+
+            infoWindow = new TMap.InfoWindow({
+              map: TMapInstance,
+              position: nearestPosition,
+              content: content,
+              offset: { x: 0, y: -40 },
+              enableCustom: true,
+            })
+
+            infoWindow.open()
+
+            emit('track-hover', nearestTrackId)
+          } else {
+            hideMarker()
+          }
         } else {
-          hideMarker()
+          // detail 模式：显示点信息
+          if (trackPath.length < 2) {
+            hideMarker()
+            return
+          }
+
+          let minDistance = Infinity
+          let nearestIndex = -1
+          let nearestPosition: any = null
+
+          // 查找最近的点
+          for (let i = 0; i < trackPath.length - 1; i++) {
+            const p1 = [trackPath[i].lng, trackPath[i].lat] as [number, number]
+            const p2 = [trackPath[i + 1].lng, trackPath[i + 1].lat] as [number, number]
+            const closest = closestPointOnSegment([lng, lat], p1, p2)
+            const dist = distance([lng, lat], closest)
+
+            if (dist < minDistance) {
+              minDistance = dist
+              nearestPosition = new TMap.LatLng(closest[1], closest[0])
+              const distToP1 = distance(closest, p1)
+              const distToP2 = distance(closest, p2)
+              nearestIndex = distToP1 < distToP2 ? i : i + 1
+            }
+          }
+
+          const triggered = minDistance < dynamicDistance
+
+          if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
+            const point = trackPoints[nearestIndex]
+            updateMarker({ point, index: nearestIndex, position: nearestPosition })
+          } else {
+            hideMarker()
+          }
         }
       }
 
-      // 监听点击事件
-      mapContainer.value.addEventListener('click', clickHandler, true)
+      // 监听点击事件（桌面端）
+      mapContainer.value.addEventListener('click', (e: Event) => {
+        // 移动端：如果刚处理完 touchend，跳过 click 事件
+        if (isClickProcessing) return
+        clickHandler(e)
+      }, true)
 
       // 同时监听触摸事件（移动端）
       mapContainer.value.addEventListener('touchend', (e: Event) => {
         // 防止 touchend 后立即触发 click 导致重复处理
         e.preventDefault()
+        isClickProcessing = true
         clickHandler(e)
+        // 300ms 后清除标志（防止影响后续点击）
+        setTimeout(() => {
+          isClickProcessing = false
+        }, 300)
       }, true)
     }
 

@@ -298,7 +298,7 @@ defineExpose({
   width: 100px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1366px) {
   .desktop-layer-selector {
     display: none;
   }
