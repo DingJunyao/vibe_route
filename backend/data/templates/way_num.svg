@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_图层_1" data-name="图层 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 200">
+  <rect class="background" width="400" height="200" rx="40" ry="40" style="fill: red; stroke-width: 0px;"/>
+  <rect class="stroke" x="10" y="10" width="380" height="180" rx="30" ry="30" style="fill: #fff; stroke-width: 0px;"/>
+  <rect class="background" x="20" y="20" width="360" height="160" rx="20" ry="20" style="fill: red; stroke-width: 0px;"/>
+</svg>

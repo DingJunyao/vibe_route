@@ -79,6 +79,10 @@ frontend/dist/
 frontend/.vite/
 frontend/node_modules/
 
+# Road sign fonts (user provided)
+backend/data/fonts/*
+backend/data/road_signs/*
+
 # claude code
 .claude/
 tmpclaude*

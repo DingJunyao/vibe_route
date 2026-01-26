@@ -204,6 +204,22 @@
                   </template>
                 </div>
 
+                <!-- 道路标志缓存 -->
+                <div class="form-section">
+                  <div class="section-title">道路标志缓存</div>
+                  <el-form-item label="清除缓存">
+                    <el-button @click="clearRoadSignCache('way')" :loading="clearingWayCache">
+                      清除普通道路缓存
+                    </el-button>
+                    <el-button @click="clearRoadSignCache('expwy')" :loading="clearingExpwyCache">
+                      清除高速公路缓存
+                    </el-button>
+                    <el-button type="danger" @click="clearRoadSignCache()" :loading="clearingAllCache">
+                      清除全部缓存
+                    </el-button>
+                  </el-form-item>
+                </div>
+
                 <el-form-item>
                   <el-button type="primary" @click="saveConfig" :loading="saving">保存配置</el-button>
                   <el-button @click="loadConfig">重置</el-button>
@@ -597,13 +613,153 @@
               />
             </div>
           </el-tab-pane>
+
+          <!-- 字体管理 -->
+          <el-tab-pane label="字体管理" name="fonts">
+            <!-- 激活字体选择 -->
+            <el-card v-loading="loadingFonts" shadow="never" style="margin-bottom: 16px;">
+              <template #header>
+                <span>激活字体选择</span>
+              </template>
+              <el-row :gutter="16">
+                <el-col :xs="24" :sm="8">
+                  <div class="font-selector-item">
+                    <div class="font-selector-label">A 型字体</div>
+                    <div class="font-selector-desc">用于中文标题（如"国家高速"、"京"）</div>
+                    <el-select
+                      :model-value="activeFonts.font_a"
+                      @change="(val) => setActiveFont('a', val)"
+                      placeholder="选择 A 型字体"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="font in fonts"
+                        :key="font.filename"
+                        :label="font.filename"
+                        :value="font.filename"
+                      />
+                    </el-select>
+                  </div>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <div class="font-selector-item">
+                    <div class="font-selector-label">B 型字体</div>
+                    <div class="font-selector-desc">用于主数字（如"G5"、"45"）</div>
+                    <el-select
+                      :model-value="activeFonts.font_b"
+                      @change="(val) => setActiveFont('b', val)"
+                      placeholder="选择 B 型字体"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="font in fonts"
+                        :key="font.filename"
+                        :label="font.filename"
+                        :value="font.filename"
+                      />
+                    </el-select>
+                  </div>
+                </el-col>
+                <el-col :xs="24" :sm="8">
+                  <div class="font-selector-item">
+                    <div class="font-selector-label">C 型字体</div>
+                    <div class="font-selector-desc">用于小数字（如"01"）</div>
+                    <el-select
+                      :model-value="activeFonts.font_c"
+                      @change="(val) => setActiveFont('c', val)"
+                      placeholder="选择 C 型字体"
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="font in fonts"
+                        :key="font.filename"
+                        :label="font.filename"
+                        :value="font.filename"
+                      />
+                    </el-select>
+                  </div>
+                </el-col>
+              </el-row>
+              <el-alert
+                v-if="!activeFonts.font_a || !activeFonts.font_b || !activeFonts.font_c"
+                type="warning"
+                :closable="false"
+                style="margin-top: 12px;"
+              >
+                字体未完整配置，道路标志生成功能将被禁用
+              </el-alert>
+            </el-card>
+
+            <!-- 字体文件列表 -->
+            <el-card v-loading="loadingFonts" shadow="never">
+              <template #header>
+                <div class="card-header">
+                  <span>字体文件列表</span>
+                  <el-upload
+                    :auto-upload="false"
+                    :show-file-list="false"
+                    :on-change="handleFontUpload"
+                    accept=".ttf,.otf,.ttc"
+                  >
+                    <el-button type="primary" :icon="Plus">上传字体</el-button>
+                  </el-upload>
+                </div>
+              </template>
+
+              <!-- 桌面端表格 -->
+              <el-table :data="fonts" class="pc-table" style="width: 100%">
+                <el-table-column prop="filename" label="文件名" min-width="200" />
+                <el-table-column label="大小" width="120">
+                  <template #default="{ row }">
+                    {{ formatFileSize(row.size) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="150" fixed="right">
+                  <template #default="{ row }">
+                    <el-button
+                      type="danger"
+                      size="small"
+                      text
+                      @click="deleteFont(row)"
+                    >
+                      删除
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <!-- 移动端卡片列表 -->
+              <div class="mobile-card-list">
+                <div v-for="font in fonts" :key="font.filename" class="mobile-font-card">
+                  <div class="mobile-card-header">
+                    <span class="mobile-card-title">{{ font.filename }}</span>
+                  </div>
+                  <div class="mobile-card-body">
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">大小</span>
+                      <span class="mobile-card-value">{{ formatFileSize(font.size) }}</span>
+                    </div>
+                  </div>
+                  <div class="mobile-card-actions">
+                    <el-button
+                      type="danger"
+                      size="small"
+                      @click="deleteFont(font)"
+                    >
+                      删除
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </el-card>
+          </el-tab-pane>
         </el-tabs>
       </el-main>
     </el-container>
 
     <!-- 创建邀请码对话框 -->
-    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" width="500px">
-      <el-form :model="inviteCodeForm" label-width="120px">
+    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" width="500px" class="responsive-dialog">
+      <el-form :model="inviteCodeForm" label-width="120px" class="dialog-form">
         <el-form-item label="邀请码">
           <el-input v-model="inviteCodeForm.code" placeholder="留空自动生成" />
           <span class="form-tip">留空则自动生成随机邀请码</span>
@@ -625,8 +781,8 @@
     </el-dialog>
 
     <!-- 重置密码对话框 -->
-    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="450px">
-      <el-form :model="resetPasswordForm" label-width="100px">
+    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="500px" class="responsive-dialog">
+      <el-form :model="resetPasswordForm" label-width="100px" class="dialog-form">
         <el-form-item label="用户名">
           <el-input :value="resetPasswordForm.username" disabled />
         </el-form-item>
@@ -665,7 +821,8 @@ import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Plus, Rank, ArrowUp, ArrowDown, Search } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
-import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType } from '@/api/admin'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig } from '@/api/admin'
+import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { hashPassword } from '@/utils/crypto'
@@ -693,8 +850,15 @@ const activeTab = ref('config')
 const loadingConfig = ref(false)
 const loadingUsers = ref(false)
 const loadingInviteCodes = ref(false)
+const loadingFonts = ref(false)
 const saving = ref(false)
 const creatingInviteCode = ref(false)
+const uploadingFont = ref(false)
+
+// 道路标志缓存清除状态
+const clearingWayCache = ref(false)
+const clearingExpwyCache = ref(false)
+const clearingAllCache = ref(false)
 
 // 用户管理分页
 const usersTotal = ref(0)
@@ -762,6 +926,10 @@ const inviteCodeForm = reactive({
   expires_in_days: undefined as number | undefined,
 })
 
+// 字体列表
+const fonts = ref<FontInfo[]>([])
+const activeFonts = ref<FontConfig>({ font_a: undefined, font_b: undefined, font_c: undefined })
+
 // 检测系统配置是否有未保存的更改
 function hasUnsavedConfigChanges(): boolean {
   if (!originalConfig.value) return false
@@ -804,6 +972,44 @@ async function loadConfig() {
     // 错误已在拦截器中处理
   } finally {
     loadingConfig.value = false
+  }
+}
+
+// 清除道路标志缓存
+async function clearRoadSignCache(signType?: 'way' | 'expwy') {
+  // 确认操作
+  const typeText = signType === 'way' ? '普通道路' : signType === 'expwy' ? '高速公路' : '全部'
+  try {
+    await ElMessageBox.confirm(
+      `确定要清除${typeText}的道路标志缓存吗？这将删除所有已生成的标志文件。`,
+      '确认清除',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  // 设置对应的加载状态
+  if (signType === 'way') {
+    clearingWayCache.value = true
+  } else if (signType === 'expwy') {
+    clearingExpwyCache.value = true
+  } else {
+    clearingAllCache.value = true
+  }
+
+  try {
+    const result = await roadSignApi.clearCache(signType)
+    ElMessage.success(`已清除 ${result.count} 个缓存`)
+  } finally {
+    // 重置加载状态
+    clearingWayCache.value = false
+    clearingExpwyCache.value = false
+    clearingAllCache.value = false
   }
 }
 
@@ -1168,6 +1374,75 @@ function formatDateTime(dateStr: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+// 格式化文件大小
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+// ========== 字体管理 ==========
+
+// 加载字体列表
+async function loadFonts() {
+  loadingFonts.value = true
+  try {
+    const response = await adminApi.getFonts()
+    fonts.value = response.fonts
+    activeFonts.value = response.active_fonts
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    loadingFonts.value = false
+  }
+}
+
+// 设置激活字体
+async function setActiveFont(fontType: 'a' | 'b' | 'c', filename: string) {
+  try {
+    await adminApi.setActiveFont(fontType, filename)
+    activeFonts.value[`font_${fontType}`] = filename
+    // 刷新配置，使主页能及时更新按钮显示状态
+    await configStore.refreshConfig()
+    ElMessage.success('字体设置成功')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  }
+}
+
+// 处理字体上传
+async function handleFontUpload(file: any) {
+  const rawFile = file.raw
+  if (!rawFile) return
+
+  uploadingFont.value = true
+  try {
+    await adminApi.uploadFont(rawFile)
+    ElMessage.success('字体上传成功')
+    await loadFonts()
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    uploadingFont.value = false
+  }
+}
+
+// 删除字体
+async function deleteFont(font: FontInfo) {
+  try {
+    await ElMessageBox.confirm(`确定要删除字体 "${font.filename}" 吗？`, '确认删除', {
+      type: 'warning',
+    })
+    await adminApi.deleteFont(font.filename)
+    ElMessage.success('删除成功')
+    await loadFonts()
+  } catch (error) {
+    // 用户取消或错误已在拦截器中处理
+  }
+}
+
 // 监听 tab 切换，如果有未保存的配置更改则提示
 watch(activeTab, async (newTab, oldTab) => {
   if (oldTab === 'config' && hasUnsavedConfigChanges()) {
@@ -1231,6 +1506,7 @@ onMounted(async () => {
   await loadConfig()
   await loadUsers()
   await loadInviteCodes()
+  await loadFonts()
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
@@ -1974,6 +2250,47 @@ onUnmounted(() => {
     position: static;
     box-shadow: none;
     padding: 12px 0;
+  }
+}
+
+/* 字体选择器样式 */
+.font-selector-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.font-selector-label {
+  font-size: 14px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.font-selector-desc {
+  font-size: 12px;
+  color: #909399;
+  margin-top: -4px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 1366px) {
+  .font-selector-item {
+    margin-bottom: 12px;
+  }
+
+  /* 对话框移动端样式 */
+  .responsive-dialog {
+    width: 95% !important;
+  }
+
+  .responsive-dialog .el-dialog__body {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .dialog-form :deep(.el-form-item__label) {
+    width: 80px !important;
+    font-size: 14px;
   }
 }
 </style>

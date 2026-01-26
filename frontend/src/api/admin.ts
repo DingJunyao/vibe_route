@@ -43,6 +43,27 @@ export interface SystemConfig {
     }
   }
   map_layers: Record<string, MapLayerConfig>
+  font_config?: FontConfig
+}
+
+// 字体配置
+export interface FontConfig {
+  font_a?: string
+  font_b?: string
+  font_c?: string
+}
+
+// 字体文件信息
+export interface FontInfo {
+  filename: string
+  size: number
+  font_type?: string
+}
+
+// 字体列表响应
+export interface FontListResponse {
+  fonts: FontInfo[]
+  active_fonts: FontConfig
 }
 
 export interface ConfigUpdateData {
@@ -66,6 +87,7 @@ export interface ConfigUpdateData {
     }
   }
   map_layers?: Record<string, Partial<MapLayerConfig>>
+  font_config?: FontConfig
 }
 
 // 分页响应
@@ -156,5 +178,31 @@ export const adminApi = {
   // 删除邀请码
   deleteInviteCode(inviteCodeId: number): Promise<{ message: string }> {
     return http.delete(`/admin/invite-codes/${inviteCodeId}`)
+  },
+
+  // ========== 字体管理 ==========
+
+  // 获取字体列表
+  getFonts(): Promise<FontListResponse> {
+    return http.get('/admin/fonts')
+  },
+
+  // 设置激活字体
+  setActiveFont(fontType: string, filename: string): Promise<{ message: string }> {
+    return http.post(`/admin/fonts/${fontType}/set-active?filename=${filename}`)
+  },
+
+  // 上传字体
+  uploadFont(file: File): Promise<{ message: string; filename: string }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    return http.post('/admin/fonts/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  // 删除字体
+  deleteFont(filename: string): Promise<{ message: string }> {
+    return http.delete(`/admin/fonts/${filename}`)
   },
 }

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_国家高速四位-背景" data-name="国家高速四位-背景" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1000">
+  <rect class="stroke" width="1700" height="1000" rx="110" ry="110" style="fill: #fff; stroke-width: 0px;"/>
+  <path class="banner" d="m110,30h1480c44.15,0,80,35.85,80,80v120H30v-120c0-44.15,35.85-80,80-80Z" style="fill: red; stroke-width: 0px;"/>
+  <path class="background" d="m30,230h1640v660c0,44.15-35.85,80-80,80H110c-44.15,0-80-35.85-80-80V230h0Z" style="fill: #39b54a; stroke-width: 0px;"/>
+</svg>

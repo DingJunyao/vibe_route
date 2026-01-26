@@ -44,6 +44,22 @@ class GeocodingProvider(str):
     BAIDU = "baidu"
 
 
+# ========== 道路标志字体配置 ==========
+
+class FontConfig(BaseModel):
+    """字体配置 schema"""
+    font_a: Optional[str] = Field(None, description="A 型字体路径（中文标题）")
+    font_b: Optional[str] = Field(None, description="B 型字体路径（主数字）")
+    font_c: Optional[str] = Field(None, description="C 型字体路径（小数字）")
+
+
+class FontInfo(BaseModel):
+    """字体文件信息 schema"""
+    filename: str = Field(..., description="文件名")
+    size: int = Field(..., description="文件大小（字节）")
+    font_type: Optional[str] = Field(None, description="字体类型（A/B/C）")
+
+
 class ConfigResponse(BaseModel):
     """系统配置响应 schema"""
     registration_enabled: bool
@@ -52,6 +68,7 @@ class ConfigResponse(BaseModel):
     geocoding_provider: str
     geocoding_config: dict
     map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
+    font_config: FontConfig = Field(default_factory=FontConfig)
 
     class Config:
         from_attributes = True
@@ -65,6 +82,7 @@ class ConfigUpdate(BaseModel):
     geocoding_provider: Optional[str] = None
     geocoding_config: Optional[dict] = None
     map_layers: Optional[Dict[str, Dict]] = None
+    font_config: Optional[FontConfig] = None
 
 
 class PublicConfigResponse(BaseModel):
@@ -73,6 +91,7 @@ class PublicConfigResponse(BaseModel):
     map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
     invite_code_required: bool
     registration_enabled: bool
+    font_config: FontConfig = Field(default_factory=FontConfig)
 
 
 class InviteCodeCreate(BaseModel):
@@ -102,3 +121,10 @@ class InviteCodeResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# 字体列表响应（包含激活状态）
+class FontListResponse(BaseModel):
+    """字体列表响应 schema"""
+    fonts: List[FontInfo]
+    active_fonts: FontConfig  # 当前激活的字体配置

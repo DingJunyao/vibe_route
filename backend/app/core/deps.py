@@ -30,9 +30,6 @@ async def get_current_user(
     # 获取 Authorization header
     authorization = request.headers.get("authorization")
 
-    # 调试日志
-    print(f"DEBUG: Authorization header = {authorization}")
-
     if authorization is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -42,17 +39,13 @@ async def get_current_user(
     # 解析 Bearer token
     parts = authorization.split()
     if parts[0].lower() != "bearer" or len(parts) != 2:
-        print(f"DEBUG: Invalid auth format, parts = {parts}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效的认证格式",
         )
 
     token = parts[1]
-    print(f"DEBUG: Token = {token[:50]}...")
-
     payload = decode_access_token(token)
-    print(f"DEBUG: Payload = {payload}")
 
     if payload is None:
         raise HTTPException(

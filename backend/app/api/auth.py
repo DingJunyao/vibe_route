@@ -152,9 +152,17 @@ async def get_public_config(
     只返回地图相关配置，不返回管理相关配置
     """
     configs = await config_service.get_all_configs(db)
+
+    # 获取字体配置
+    font_config = configs.get("font_config", {})
+    if isinstance(font_config, str):
+        import json
+        font_config = json.loads(font_config)
+
     return PublicConfigResponse(
         default_map_provider=configs.get("default_map_provider", "osm"),
         map_layers=configs.get("map_layers", {}),
         invite_code_required=configs.get("invite_code_required", False),
         registration_enabled=configs.get("registration_enabled", True),
+        font_config=FontConfig(**font_config) if font_config else FontConfig(),
     )

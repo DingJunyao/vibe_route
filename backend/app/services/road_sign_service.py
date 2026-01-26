@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.road_sign import RoadSignCache
 from app.gpxutil_wrapper.svg_gen import generate_road_sign
 from app.core.config import settings
+from app.services.config_service import config_service
 from loguru import logger
 
 
@@ -18,7 +19,7 @@ class RoadSignService:
 
     def _get_cache_dir(self) -> str:
         """获取缓存目录"""
-        cache_dir = os.path.join(settings.BASE_DIR, "data", "road_signs")
+        cache_dir = settings.ROAD_SIGN_DIR
         os.makedirs(cache_dir, exist_ok=True)
         return cache_dir
 
@@ -75,6 +76,10 @@ class RoadSignService:
             except Exception as e:
                 logger.warning(f"Failed to read cached sign {cache_key}: {e}")
 
+        # 获取字体配置
+        configs = await config_service.get_all_configs(db)
+        font_config = configs.get('font_config')
+
         # 生成新的 SVG
         try:
             svg_content = generate_road_sign(
@@ -82,6 +87,7 @@ class RoadSignService:
                 code=code,
                 province=province,
                 name=name,
+                font_config=font_config,
                 output_path=svg_path
             )
 

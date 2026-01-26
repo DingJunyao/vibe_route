@@ -7,6 +7,15 @@
         <el-button @click="$router.push('/tracks')" :icon="List" class="desktop-only">轨迹列表</el-button>
       </div>
       <div class="header-right">
+        <el-button
+          v-if="fontsConfigured"
+          type="success"
+          :icon="Flag"
+          @click="showRoadSignDialog"
+          class="desktop-only"
+        >
+          道路标志
+        </el-button>
         <el-button type="primary" :icon="Upload" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
@@ -25,6 +34,10 @@
               <el-dropdown-item command="upload" v-if="isMobile">
                 <el-icon><Upload /></el-icon>
                 上传轨迹
+              </el-dropdown-item>
+              <el-dropdown-item command="roadSign" v-if="isMobile && fontsConfigured">
+                <el-icon><Flag /></el-icon>
+                道路标志
               </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
@@ -121,11 +134,93 @@
         </el-empty>
       </el-card>
     </el-main>
+
+    <!-- 道路标志对话框 -->
+    <el-dialog v-model="roadSignDialogVisible" title="生成道路标志" width="600px" class="road-sign-dialog">
+      <el-form :model="roadSignForm" label-width="100px" class="road-sign-form">
+        <!-- 道路类型 -->
+        <el-form-item label="道路类型">
+          <el-radio-group v-model="roadSignForm.sign_type">
+            <el-radio value="way">普通道路</el-radio>
+            <el-radio value="expwy">高速公路</el-radio>
+          </el-radio-group>
+        </el-form-item>
+
+        <!-- 高速公路选项 -->
+        <template v-if="roadSignForm.sign_type === 'expwy'">
+          <el-form-item label="高速类型">
+            <el-radio-group v-model="roadSignForm.is_provincial">
+              <el-radio :value="false">国家高速</el-radio>
+              <el-radio :value="true">省级高速</el-radio>
+            </el-radio-group>
+          </el-form-item>
+
+          <!-- 道路编号 -->
+          <el-form-item label="道路编号">
+            <!-- 国家高速 -->
+            <template v-if="!roadSignForm.is_provincial">
+              <el-input
+                v-model="roadSignForm.expwyCode"
+                placeholder="如 5, 45, 4511"
+                @input="onExpwyCodeInput"
+              >
+                <template #prepend>G</template>
+              </el-input>
+            </template>
+            <!-- 省级高速 -->
+            <template v-else>
+              <el-input
+                v-model="roadSignForm.expwyCode"
+                placeholder="如 1, 11, A, A1, A12"
+                @input="onExpwyCodeInput"
+              >
+                <template #prepend>
+                  <div class="prepend-content">
+                    <el-select v-model="roadSignForm.province" placeholder="省份">
+                      <el-option v-for="prov in provinces" :key="prov.value" :label="prov.value" :value="prov.value" />
+                    </el-select>
+                    <span class="prefix-separator">S</span>
+                  </div>
+                </template>
+              </el-input>
+            </template>
+          </el-form-item>
+
+          <el-form-item label="带名称">
+            <el-switch v-model="roadSignForm.has_name" />
+          </el-form-item>
+
+          <el-form-item label="道路名称" v-if="roadSignForm.has_name">
+            <el-input v-model="roadSignForm.name" placeholder="如 连霍高速" />
+          </el-form-item>
+        </template>
+
+        <!-- 普通道路编号 -->
+        <el-form-item label="道路编号" v-if="roadSignForm.sign_type === 'way'">
+          <el-input
+            v-model="roadSignForm.code"
+            placeholder="如 G318, S221, X001"
+            @input="onRoadNumberInput"
+          />
+        </el-form-item>
+
+        <!-- SVG 预览 -->
+        <el-form-item label="预览" v-if="generatedSvg">
+          <div class="svg-preview" v-html="generatedSvg"></div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="roadSignDialogVisible = false">取消</el-button>
+        <el-button @click="generateRoadSign" :loading="generating">生成</el-button>
+        <el-button type="primary" @click="downloadSvg" v-if="generatedSvg">下载</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, onBeforeUnmount } from 'vue'
+import { ref, onMounted, onUnmounted, computed, onBeforeUnmount, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -140,18 +235,25 @@ import {
   Upload,
   List,
   Loading,
+  Flag,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 import { trackApi, type Track, type TrackPoint } from '@/api/track'
+import { roadSignApi } from '@/api/roadSign'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
 const screenHeight = ref(window.innerHeight)
 const isMobile = computed(() => screenWidth.value <= 1366)
+
+// 检查字体是否已配置
+const fontsConfigured = computed(() => configStore.areFontsConfigured())
 
 // 标记组件是否已挂载，用于避免卸载后更新状态
 let isMounted = true
@@ -187,6 +289,229 @@ const tracksWithPoints = computed(() => {
   }))
 })
 
+// 道路标志对话框
+const roadSignDialogVisible = ref(false)
+const generating = ref(false)
+const generatedSvg = ref('')
+
+// 省份列表
+const provinces = [
+  { value: '京', label: '北京 (京)' },
+  { value: '津', label: '天津 (津)' },
+  { value: '冀', label: '河北 (冀)' },
+  { value: '晋', label: '山西 (晋)' },
+  { value: '蒙', label: '内蒙古 (蒙)' },
+  { value: '辽', label: '辽宁 (辽)' },
+  { value: '吉', label: '吉林 (吉)' },
+  { value: '黑', label: '黑龙江 (黑)' },
+  { value: '沪', label: '上海 (沪)' },
+  { value: '苏', label: '江苏 (苏)' },
+  { value: '浙', label: '浙江 (浙)' },
+  { value: '皖', label: '安徽 (皖)' },
+  { value: '闽', label: '福建 (闽)' },
+  { value: '赣', label: '江西 (赣)' },
+  { value: '鲁', label: '山东 (鲁)' },
+  { value: '豫', label: '河南 (豫)' },
+  { value: '鄂', label: '湖北 (鄂)' },
+  { value: '湘', label: '湖南 (湘)' },
+  { value: '粤', label: '广东 (粤)' },
+  { value: '桂', label: '广西 (桂)' },
+  { value: '琼', label: '海南 (琼)' },
+  { value: '渝', label: '重庆 (渝)' },
+  { value: '川', label: '四川 (川)' },
+  { value: '贵', label: '贵州 (贵)' },
+  { value: '云', label: '云南 (云)' },
+  { value: '藏', label: '西藏 (藏)' },
+  { value: '陕', label: '陕西 (陕)' },
+  { value: '甘', label: '甘肃 (甘)' },
+  { value: '青', label: '青海 (青)' },
+  { value: '宁', label: '宁夏 (宁)' },
+  { value: '新', label: '新疆 (新)' },
+]
+
+// 道路标志表单
+const roadSignForm = reactive({
+  sign_type: 'way',
+  code: '',
+  expwyCode: '',  // 高速公路编号部分（不含前缀）
+  is_provincial: false,
+  has_name: false,
+  province: '',
+  name: '',
+})
+
+// 监听道路类型或高速类型变化，清空编号和预览
+watch(() => [roadSignForm.sign_type, roadSignForm.is_provincial], () => {
+  roadSignForm.code = ''
+  roadSignForm.expwyCode = ''
+  generatedSvg.value = ''
+})
+
+// 监听省份变化，更新完整编号并清空预览
+watch(() => roadSignForm.province, () => {
+  updateFullCode()
+  generatedSvg.value = ''
+})
+
+// 监听 expwyCode 变化，更新完整编号并清空预览
+watch(() => roadSignForm.expwyCode, () => {
+  updateFullCode()
+  generatedSvg.value = ''
+})
+
+// 监听普通道路编号变化，清空预览
+watch(() => roadSignForm.code, () => {
+  generatedSvg.value = ''
+})
+
+// 监听道路名称相关字段变化，清空预览
+watch(() => [roadSignForm.has_name, roadSignForm.name], () => {
+  generatedSvg.value = ''
+})
+
+// 普通道路编号输入处理（转大写）
+function onRoadNumberInput(value: string) {
+  const upperValue = value.toUpperCase()
+  if (upperValue !== value) {
+    roadSignForm.code = upperValue
+  }
+}
+
+// 高速公路编号输入处理（转大写）
+function onExpwyCodeInput(value: string) {
+  const upperValue = value.toUpperCase()
+  if (upperValue !== value) {
+    roadSignForm.expwyCode = upperValue
+  }
+  // 同时更新完整的 code（用于校验和提交）
+  updateFullCode()
+}
+
+// 更新完整的 code 值
+function updateFullCode() {
+  if (roadSignForm.sign_type === 'expwy') {
+    const prefix = roadSignForm.is_provincial ? 'S' : 'G'
+    roadSignForm.code = prefix + (roadSignForm.expwyCode || '')
+  }
+}
+
+function showRoadSignDialog() {
+  // 检查字体是否已配置
+  if (!configStore.areFontsConfigured()) {
+    ElMessageBox.alert(
+      '道路标志功能需要管理员先配置 A、B、C 三种字体。请在后台管理的"字体管理"页面中上传并选择相应的字体文件。',
+      '字体未配置',
+      { type: 'warning' }
+    )
+    return
+  }
+  roadSignDialogVisible.value = true
+}
+
+// 道路编号校验规则
+function validateRoadCode(code: string, signType: string, province?: string): { valid: boolean; message?: string } {
+  const trimmedCode = code.trim().toUpperCase()
+
+  if (!trimmedCode) {
+    return { valid: false, message: '请输入道路编号' }
+  }
+
+  if (signType === 'way') {
+    // 普通道路：字母 + 三位数字
+    if (!/^[A-Z]\d{3}$/.test(trimmedCode)) {
+      return {
+        valid: false,
+        message: '普通道路编号格式错误：应为字母 + 三位数字，如 G221、S221、X221'
+      }
+    }
+  } else if (signType === 'expwy') {
+    // 高速公路：国家高速或省级高速
+    if (trimmedCode.startsWith('G')) {
+      // 国家高速：G + 1-4位数字
+      if (!/^G\d{1,4}$/.test(trimmedCode)) {
+        return {
+          valid: false,
+          message: '国家高速编号格式错误：应为 G + 1-4位数字，如 G5、G45、G4511'
+        }
+      }
+    } else if (trimmedCode.startsWith('S')) {
+      // 省级高速：S + 纯数字(1-4位) 或 S + 字母 + 可选数字
+      // 字母格式仅限四川（川）
+      const letterFormatMatch = /^S[A-Z]\d{0,3}$/.exec(trimmedCode)
+      if (letterFormatMatch) {
+        // 字母格式，检查是否是四川
+        if (province !== '川') {
+          return {
+            valid: false,
+            message: '字母格式的省级高速编号仅限四川省使用，请选择四川或使用纯数字编号（如 S1、S11）'
+          }
+        }
+      } else if (!/^S\d{1,4}$/.test(trimmedCode)) {
+        return {
+          valid: false,
+          message: '省级高速编号格式错误：应为 S + 1-4位数字（如 S1、S11、S1111），或仅限四川使用 S + 字母 + 可选数字（如 SA、SC、SA1）'
+        }
+      }
+    } else {
+      return {
+        valid: false,
+        message: '高速公路编号应以 G（国家高速）或 S（省级高速）开头'
+      }
+    }
+  }
+
+  return { valid: true }
+}
+
+async function generateRoadSign() {
+  // 校验道路编号
+  const codeValidation = validateRoadCode(roadSignForm.code, roadSignForm.sign_type, roadSignForm.province)
+  if (!codeValidation.valid) {
+    ElMessage.warning(codeValidation.message || '请输入道路编号')
+    return
+  }
+
+  // 校验省份（省级高速必填）
+  if (roadSignForm.sign_type === 'expwy' && roadSignForm.is_provincial && !roadSignForm.province) {
+    ElMessage.warning('请选择省份')
+    return
+  }
+
+  // 校验道路名称（启用名称选项时必填）
+  if (roadSignForm.sign_type === 'expwy' && roadSignForm.has_name && !roadSignForm.name) {
+    ElMessage.warning('请填写道路名称')
+    return
+  }
+
+  generating.value = true
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: roadSignForm.sign_type,
+      code: roadSignForm.code.trim(),
+      province: roadSignForm.is_provincial ? roadSignForm.province : undefined,
+      name: roadSignForm.has_name ? roadSignForm.name : undefined,
+    })
+    generatedSvg.value = response.svg
+    ElMessage.success(response.cached ? '从缓存加载' : '生成成功')
+  } finally {
+    generating.value = false
+  }
+}
+
+function downloadSvg() {
+  if (!generatedSvg.value) return
+  const blob = new Blob([generatedSvg.value], { type: 'image/svg+xml' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${roadSignForm.code || 'road-sign'}.svg`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+  ElMessage.success('下载成功')
+}
+
 function handleCommand(command: string) {
   if (command === 'logout') {
     ElMessageBox.confirm('确定要退出登录吗？', '提示', {
@@ -204,6 +529,8 @@ function handleCommand(command: string) {
     router.push('/tracks')
   } else if (command === 'upload') {
     router.push('/upload')
+  } else if (command === 'roadSign') {
+    showRoadSignDialog()
   }
 }
 
@@ -627,5 +954,80 @@ onUnmounted(() => {
   .map-header span {
     font-size: 14px;
   }
+
+  /* 对话框移动端样式 */
+  .road-sign-dialog {
+    width: 95% !important;
+  }
+
+  .road-sign-dialog .el-dialog__body {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .road-sign-form :deep(.el-form-item__label) {
+    width: 80px !important;
+    font-size: 14px;
+  }
+
+  .road-sign-form :deep(.el-radio),
+  .road-sign-form :deep(.el-radio__label) {
+    font-size: 14px;
+  }
+}
+
+/* 道路标志 SVG 预览 */
+.svg-preview {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  min-height: 200px;
+  max-height: 400px;
+  overflow: auto;
+}
+
+.svg-preview :deep(svg) {
+  width: auto !important;
+  height: auto !important;
+  max-width: 100% !important;
+  max-height: 360px !important;
+  object-fit: contain;
+}
+
+/* 复合输入框 prepend 内容样式 */
+.prepend-content {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  height: 100%;
+}
+
+.prepend-content .el-select {
+  width: 80px;
+}
+
+.prepend-content .el-select .el-input__wrapper {
+  padding-right: 0;
+  background-color: transparent;
+  box-shadow: none;
+  height: 32px;
+}
+
+.prepend-content .el-select .el-input__wrapper .el-input__suffix {
+  display: none;
+}
+
+.prefix-separator {
+  padding: 0 0 0 32px;
+}
+
+/* 统一 prepend 的背景色和文字颜色 */
+.el-input__prepend {
+  background-color: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font-weight: 500;
 }
 </style>

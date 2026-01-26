@@ -838,6 +838,209 @@ function addTileLayer(layerId: string) {
    const padding = Math.round(Math.max(width, height) * 0.05)
    ```
 
+### 道路标志生成功能
+
+首页提供道路标志 SVG 生成功能，支持普通道路和高速公路标志。
+
+#### 功能说明
+
+- **普通道路**（`way`）：字母 + 三位数字，如 G221（国道-红）、S221（省道-黄）、X221（县道-白）
+- **高速公路**（`expwy`）：
+  - 国家高速：G + 1-4位数字，如 G5、G45、G4511
+  - 省级高速：S + 纯数字(1-4位) 或 S + 字母 + 可选数字（**仅限四川省**）
+    - 如 S1、S11、S1111（通用格式）
+    - 或 SA、SC、SA1、SA12（四川省专用格式）
+
+#### 对话框响应式宽度
+
+所有对话框采用统一的响应式宽度模式：
+
+```vue
+<!-- 桌面端固定宽度 -->
+<el-dialog width="500px">
+  <!-- 道路标志对话框稍宽，因为表单较复杂 -->
+  <el-dialog width="600px">
+```
+
+```css
+/* 移动端自适应 */
+@media (max-width: 1366px) {
+  .responsive-dialog {
+    width: 95% !important;
+  }
+}
+```
+
+**涉及文件**：
+
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)：4 个对话框
+- [`Home.vue`](frontend/src/views/Home.vue)：1 个对话框（道路标志生成，600px）
+- [`Admin.vue`](frontend/src/views/Admin.vue)：2 个对话框
+
+#### 单选按钮说明文字模式
+
+当单选按钮文本较长时，采用简化标签 + 动态说明的模式：
+
+```vue
+<el-form-item label="匹配方式">
+  <el-radio-group v-model="importMatchMode">
+    <el-radio value="index">索引</el-radio>
+    <el-radio value="time">时间</el-radio>
+  </el-radio-group>
+  <div class="radio-hint">
+    <template v-if="importMatchMode === 'index'">
+      匹配 index 列的值
+    </template>
+    <template v-else>
+      匹配 time_date/time_time 或 time 列的值
+    </template>
+  </div>
+</el-form-item>
+```
+
+```css
+/* 单选按钮说明文字 */
+.radio-hint {
+  display: block;
+  width: 100%;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+```
+
+**关键技术点**：
+
+1. 使用 `display: block; width: 100%` 确保说明文字始终在单选组下方
+2. 根据 `v-model` 的值动态显示对应的说明内容
+3. 说明文字使用次要颜色，视觉上与选项区分
+
+#### 表单变更自动清除预览
+
+道路标志生成对话框中，任何表单字段变更都会清除 SVG 预览：
+
+```typescript
+// 监听道路类型或高速类型变化，清空编号和预览
+watch(() => [roadSignForm.sign_type, roadSignForm.is_provincial], () => {
+  roadSignForm.code = ''
+  roadSignForm.expwyCode = ''
+  generatedSvg.value = ''
+})
+
+// 监听省份变化，更新完整编号并清空预览
+watch(() => roadSignForm.province, () => {
+  updateFullCode()
+  generatedSvg.value = ''
+})
+
+// 监听 expwyCode 变化，更新完整编号并清空预览
+watch(() => roadSignForm.expwyCode, () => {
+  updateFullCode()
+  generatedSvg.value = ''
+})
+
+// 监听普通道路编号变化，清空预览
+watch(() => roadSignForm.code, () => {
+  generatedSvg.value = ''
+})
+
+// 监听道路名称相关字段变化，清空预览
+watch(() => [roadSignForm.has_name, roadSignForm.name], () => {
+  generatedSvg.value = ''
+})
+```
+
+#### 四川省字母格式限制
+
+省级高速的字母格式编号（SA、SC、SA1 等）仅限四川省使用。
+
+**前端验证** ([`Home.vue`](frontend/src/views/Home.vue))：
+
+```typescript
+function validateRoadCode(code: string, signType: string, province?: string): { valid: boolean; message?: string } {
+  // ... 其他验证 ...
+  } else if (signType === 'expwy') {
+    if (trimmedCode.startsWith('S')) {
+      // 字母格式仅限四川（川）
+      const letterFormatMatch = /^S[A-Z]\d{0,3}$/.exec(trimmedCode)
+      if (letterFormatMatch) {
+        if (province !== '川') {
+          return {
+            valid: false,
+            message: '字母格式的省级高速编号仅限四川省使用，请选择四川或使用纯数字编号（如 S1、S11）'
+          }
+        }
+      }
+    }
+  }
+  return { valid: true }
+}
+```
+
+**后端验证** ([`road_signs.py`](backend/app/api/road_signs.py))：
+
+使用 Pydantic 的 `model_validator` 进行多字段验证：
+
+```python
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+class RoadSignRequest(BaseModel):
+    sign_type: str
+    code: str
+    province: Optional[str] = None
+    name: Optional[str] = None
+
+    @field_validator('code')
+    @classmethod
+    def normalize_code(cls, v: str) -> str:
+        """规范化道路编号：转大写"""
+        return v.strip().upper()
+
+    @model_validator(mode='after')
+    def validate_road_sign(self) -> 'RoadSignRequest':
+        """校验道路编号（可访问多个字段）"""
+        code = self.code
+        sign_type = self.sign_type
+        province = self.province
+
+        if sign_type == 'expwy':
+            if code.startswith('S'):
+                # 字母格式仅限四川省
+                letter_format_match = re.match(r'^S([A-Z]\d{0,3})$', code)
+                if letter_format_match and province != '川':
+                    raise ValueError("字母格式的省级高速编号仅限四川省使用")
+
+        return self
+```
+
+**关键技术点**：
+
+1. **`model_validator` vs `field_validator`**：
+   - `field_validator` 只能访问当前字段的值
+   - `model_validator(mode='after')` 可以通过 `self` 访问所有字段
+   - 当验证需要跨字段检查时，必须使用 `model_validator`
+
+2. **验证顺序**：
+   - `field_validator` 先执行（如 `normalize_code` 转大写）
+   - `model_validator` 后执行（使用处理后的值进行跨字段验证）
+
+3. **前后端双重验证**：前端提供即时反馈，后端确保数据安全
+
+#### 相关文件
+
+**前端**：
+
+- [`Home.vue`](frontend/src/views/Home.vue)：道路标志生成对话框
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)：导入对话框（单选按钮说明模式）
+- [`Admin.vue`](frontend/src/views/Admin.vue)：后台管理对话框
+
+**后端**：
+
+- [`road_signs.py`](backend/app/api/road_signs.py)：道路标志 API 和验证逻辑
+- [`road_sign_service.py`](backend/app/services/road_sign_service.py)：道路标志服务
+- [`svg_gen.py`](backend/app/gpxutil_wrapper/svg_gen.py)：SVG 生成逻辑
+
 ## File Structure Highlights
 
 ```text

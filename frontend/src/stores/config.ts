@@ -39,6 +39,7 @@ export const useConfigStore = defineStore('config', () => {
             map_layers: data.map_layers,
             invite_code_required: data.invite_code_required,
             registration_enabled: data.registration_enabled,
+            font_config: data.font_config,
           }
           return data
         })
@@ -107,6 +108,12 @@ export const useConfigStore = defineStore('config', () => {
     return publicConfig.value?.registration_enabled ?? true
   }
 
+  // 检查字体是否已完整配置
+  function areFontsConfigured(): boolean {
+    const fc = publicConfig.value?.font_config
+    return !!(fc?.font_a && fc?.font_b && fc?.font_c)
+  }
+
   // 管理员方法：更新配置
   async function updateConfig(data: {
     registration_enabled?: boolean
@@ -115,12 +122,16 @@ export const useConfigStore = defineStore('config', () => {
     geocoding_provider?: string
     geocoding_config?: Record<string, unknown>
     map_layers?: Record<string, unknown>
+    font_config?: { font_a?: string; font_b?: string; font_c?: string }
   }): Promise<SystemConfig> {
     const result = await adminApi.updateConfig(data)
     adminConfig.value = result
     publicConfig.value = {
       default_map_provider: result.default_map_provider,
       map_layers: result.map_layers,
+      invite_code_required: result.invite_code_required,
+      registration_enabled: result.registration_enabled,
+      font_config: result.font_config,
     }
     return result
   }
@@ -140,6 +151,7 @@ export const useConfigStore = defineStore('config', () => {
     isMapLayerEnabled,
     isInviteCodeRequired,
     isRegistrationEnabled,
+    areFontsConfigured,
     updateConfig,
   }
 })

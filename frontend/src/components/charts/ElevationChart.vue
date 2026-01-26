@@ -53,7 +53,6 @@ function updateChart() {
   let sampledData = props.data
   let highlightOffset = 0
 
-  console.log('isMobile', isMobile)
   if (isMobile && props.data.length > 80) {
     // 移动端使用更激进的采样：目标约 40-50 个点
     const targetPoints = 45

@@ -2,7 +2,8 @@
 管理员相关 API 路由
 """
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -17,11 +18,18 @@ from app.schemas.config import (
     ConfigUpdate,
     InviteCodeCreate,
     InviteCodeResponse,
+    FontConfig,
+    FontInfo,
 )
 from app.services.user_service import user_service
 from app.services.config_service import config_service
+from app.core.config import settings
 
 router = APIRouter(prefix="/admin", tags=["管理员"])
+
+# 字体文件目录（与 svg_gen.py 中的路径保持一致）
+FONTS_DIR = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
+FONTS_DIR.mkdir(exist_ok=True, parents=True)
 
 
 # 分页响应模型
@@ -290,6 +298,13 @@ async def get_config(
     获取系统配置（管理员）
     """
     configs = await config_service.get_all_configs(db)
+
+    # 获取字体配置
+    font_config = configs.get("font_config", {})
+    if isinstance(font_config, str):
+        import json
+        font_config = json.loads(font_config)
+
     return ConfigResponse(
         registration_enabled=configs.get("registration_enabled", True),
         invite_code_required=configs.get("invite_code_required", False),
@@ -297,6 +312,7 @@ async def get_config(
         geocoding_provider=configs.get("geocoding_provider", "nominatim"),
         geocoding_config=configs.get("geocoding_config", {}),
         map_layers=configs.get("map_layers", {}),
+        font_config=FontConfig(**font_config) if font_config else FontConfig(),
     )
 
 
@@ -310,7 +326,19 @@ async def update_config(
     更新系统配置（管理员）
     """
     update_data = config_update.model_dump(exclude_unset=True)
+
+    # 处理字体配置
+    if "font_config" in update_data and update_data["font_config"]:
+        update_data["font_config"] = update_data["font_config"].model_dump()
+
     configs = await config_service.update_config(db, update_data, current_admin.id)
+
+    # 获取字体配置
+    font_config = configs.get("font_config", {})
+    if isinstance(font_config, str):
+        import json
+        font_config = json.loads(font_config)
+
     return ConfigResponse(
         registration_enabled=configs.get("registration_enabled", True),
         invite_code_required=configs.get("invite_code_required", False),
@@ -318,6 +346,7 @@ async def update_config(
         geocoding_provider=configs.get("geocoding_provider", "nominatim"),
         geocoding_config=configs.get("geocoding_config", {}),
         map_layers=configs.get("map_layers", {}),
+        font_config=FontConfig(**font_config) if font_config else FontConfig(),
     )
 
 
@@ -415,3 +444,180 @@ async def delete_invite_code(
 
     await config_service.delete_invite_code(db, invite_code, current_admin.id)
     return {"message": "邀请码已删除"}
+
+
+# ========== 道路标志字体管理 ==========
+
+@router.get("/fonts")
+async def get_fonts(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取字体文件列表（管理员）
+    返回所有字体文件和当前激活的字体配置
+    """
+    # 获取字体文件列表
+    fonts = []
+    for font_file in FONTS_DIR.iterdir():
+        if font_file.is_file():
+            stat = font_file.stat()
+            fonts.append(FontInfo(
+                filename=font_file.name,
+                size=stat.st_size,
+            ))
+
+    # 获取当前激活的字体配置
+    configs = await config_service.get_all_configs(db)
+    font_config = configs.get("font_config", {})
+    if isinstance(font_config, str):
+        import json
+        font_config = json.loads(font_config)
+
+    active_fonts = FontConfig(**font_config) if font_config else FontConfig()
+
+    return {
+        "fonts": fonts,
+        "active_fonts": active_fonts,
+    }
+
+
+@router.post("/fonts/{font_type}/set-active")
+async def set_active_font(
+    font_type: str,
+    filename: str,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    设置激活的字体文件
+    font_type: a (A型), b (B型), c (C型)
+    filename: 字体文件名（不含路径）
+    """
+    if font_type not in ("a", "b", "c"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="字体类型必须是 a, b 或 c",
+        )
+
+    # 验证文件存在
+    filename = Path(filename).name
+    file_path = FONTS_DIR / filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="字体文件不存在",
+        )
+
+    # 更新配置
+    configs = await config_service.get_all_configs(db)
+    font_config = configs.get("font_config", {})
+    if isinstance(font_config, str):
+        import json
+        font_config = json.loads(font_config)
+
+    # 设置激活字体
+    font_config[f"font_{font_type}"] = filename
+
+    await config_service.update_config(db, {"font_config": font_config}, current_admin.id)
+
+    return {"message": "字体设置成功"}
+
+
+@router.post("/fonts/upload")
+async def upload_font(
+    file: UploadFile = File(...),
+    current_admin: User = Depends(get_current_admin_user),
+):
+    """
+    上传字体文件（管理员）
+    文件保持原始名称，不添加类型前缀
+    """
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件名不能为空",
+        )
+
+    # 验证文件扩展名
+    allowed_extensions = {".ttf", ".otf", ".ttc"}
+    file_ext = Path(file.filename).suffix.lower() if file.filename else ""
+    if file_ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的文件格式，支持的格式: {', '.join(allowed_extensions)}",
+        )
+
+    # 使用原始文件名保存
+    filename = Path(file.filename).name
+    target_path = FONTS_DIR / filename
+
+    # 检查文件是否已存在
+    if target_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"文件 {filename} 已存在，请先删除旧文件或重命名后上传",
+        )
+
+    content = await file.read()
+
+    with open(target_path, "wb") as f:
+        f.write(content)
+
+    return {"message": "字体上传成功", "filename": filename}
+
+
+@router.delete("/fonts/{filename}")
+async def delete_font(
+    filename: str,
+    current_admin: User = Depends(get_current_admin_user),
+):
+    """
+    删除字体文件（管理员）
+    """
+    # 安全检查：确保文件名不包含路径
+    filename = Path(filename).name
+    file_path = FONTS_DIR / filename
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="字体文件不存在",
+        )
+
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无效的文件路径",
+        )
+
+    # 删除文件
+    file_path.unlink()
+
+    # 更新配置（如果删除的文件是激活字体，则清除该配置）
+    async for db in get_db():
+        try:
+            configs = await config_service.get_all_configs(db)
+            font_config = configs.get("font_config", {})
+            if isinstance(font_config, str):
+                import json
+                font_config = json.loads(font_config)
+
+            # 检查是否为激活字体，是则清除
+            if font_config.get("font_a") == filename:
+                font_config.pop("font_a", None)
+            if font_config.get("font_b") == filename:
+                font_config.pop("font_b", None)
+            if font_config.get("font_c") == filename:
+                font_config.pop("font_c", None)
+
+            await config_service.update_config(
+                db,
+                {"font_config": font_config},
+                current_admin.id,
+            )
+            break
+        finally:
+            await db.close()
+
+    return {"message": "字体已删除"}

@@ -890,9 +890,6 @@ class TrackService:
         递归聚合节点统计信息，让上级包含下级的数据
         返回 (distance, point_count, start_time, end_time)
         """
-        node_name = node.get('name', 'unknown')
-        print(f"[DEBUG] _aggregate_node_stats 开始: {node_name}, start={node.get('start_index')}, end={node.get('end_index')}, children={len(node.get('children', []))}")
-
         total_distance = node.get('own_distance', 0)
         total_points = node.get('own_point_count', 0)
         earliest_time = node.get('start_time')
@@ -917,7 +914,6 @@ class TrackService:
                 # 聚合索引范围（父节点包含所有子节点的范围）
                 child_start_index = child.get('start_index', -1)
                 child_end_index = child.get('end_index', -1)
-                print(f"[DEBUG]   子节点 {child.get('name')}: start={child_start_index}, end={child_end_index}")
                 if child_start_index >= 0:
                     if earliest_index < 0 or child_start_index < earliest_index:
                         earliest_index = child_start_index
@@ -933,9 +929,6 @@ class TrackService:
         if node.get('children'):
             node['start_index'] = earliest_index
             node['end_index'] = latest_index
-            print(f"[DEBUG] _aggregate_node_stats 结束: {node_name}, start={node['start_index']}, end={node['end_index']}")
-        else:
-            print(f"[DEBUG] _aggregate_node_stats 结束（叶子节点）: {node_name}, start={node.get('start_index')}, end={node.get('end_index')}")
 
         return total_distance, total_points, earliest_time, latest_time
 
@@ -973,8 +966,6 @@ class TrackService:
             .order_by(TrackPoint.point_index)
         )
         points = list(result.scalars().all())
-
-        print(f"[DEBUG] 轨迹 {track_id} 共有 {len(points)} 个点")
 
         if not points:
             return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
@@ -1036,13 +1027,10 @@ class TrackService:
                 # 先结束所有下层节点的索引范围
                 if current_road is not None and prev_point:
                     current_road[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 省级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
                 if current_district is not None and prev_point:
                     current_district[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 省级切换: 结束区级节点 {current_district[1]['name']}: end_index={prev_point.point_index}")
                 if current_city is not None and prev_point:
                     current_city[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 省级切换: 结束市级节点 {current_city[1]['name']}: end_index={prev_point.point_index}")
                 # 结束旧省级节点的索引范围
                 if current_province is not None and prev_point:
                     current_province[1]['end_index'] = prev_point.point_index
@@ -1062,10 +1050,8 @@ class TrackService:
                 # 先结束所有下层节点的索引范围
                 if current_road is not None and prev_point:
                     current_road[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 市级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
                 if current_district is not None and prev_point:
                     current_district[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 市级切换: 结束区级节点 {current_district[1]['name']}: end_index={prev_point.point_index}")
                 # 结束旧市级节点的索引范围
                 if current_city is not None and prev_point:
                     current_city[1]['end_index'] = prev_point.point_index
@@ -1084,7 +1070,6 @@ class TrackService:
                 # 先结束所有下层节点的索引范围
                 if current_road is not None and prev_point:
                     current_road[1]['end_index'] = prev_point.point_index
-                    print(f"[DEBUG] 区级切换: 结束道路节点 {current_road[1]['name']}: end_index={prev_point.point_index}")
                 # 结束旧区级节点的索引范围
                 if current_district is not None and prev_point:
                     current_district[1]['end_index'] = prev_point.point_index
@@ -1109,14 +1094,12 @@ class TrackService:
                 if current_road is not None and prev_point:
                     old_end = prev_point.point_index
                     current_road[1]['end_index'] = old_end
-                    print(f"[DEBUG] 结束道路节点 {current_road[1]['name']}: end_index={old_end}")
                 # 创建新道路节点并设置起始索引
                 if road_name:
                     new_road = create_node(road_name, 'road', road_number)
                 else:
                     new_road = create_node('（无名）', 'road', road_number)
                 new_road['start_index'] = idx
-                print(f"[DEBUG] 创建道路节点 {new_road['name']}: start_index={idx}")
                 district_node['children'].append(new_road)
                 current_road = (road_key, new_road)
 
@@ -1153,11 +1136,9 @@ class TrackService:
         # 设置所有活跃节点的结束索引（使用最后一个点的索引）
         if prev_point:
             last_index = prev_point.point_index
-            print(f"[DEBUG] 循环结束: 最后一个点索引={last_index}")
 
             if current_road is not None:
                 current_road[1]['end_index'] = last_index
-                print(f"[DEBUG] 设置最后道路节点 {current_road[1]['name']}: end_index={last_index}")
             if current_district is not None:
                 current_district[1]['end_index'] = last_index
             if current_city is not None:
@@ -1168,17 +1149,6 @@ class TrackService:
         # 后处理：聚合统计信息，让上级包含下级
         for node in root_nodes:
             self._aggregate_node_stats(node)
-
-        # 打印所有道路节点的索引范围用于调试
-        def print_node_indices(node: dict, depth: int = 0):
-            indent = "  " * depth
-            print(f"{indent}{node['name']} ({node['type']}): start_index={node['start_index']}, end_index={node['end_index']}")
-            for child in node.get('children', []):
-                print_node_indices(child, depth + 1)
-
-        print("[DEBUG] 聚合后节点索引范围:")
-        for node in root_nodes:
-            print_node_indices(node)
 
         return {
             'regions': root_nodes,
@@ -1589,8 +1559,6 @@ class TrackService:
                         logger.info(f"  Found match: ts={ts}, diff={diff:.3f}s")
                     return p
 
-            if row_count[0] < 3:
-                logger.debug(f"  No match found (checked {len(points_by_time)} points)")
             return None
 
         def parse_time_from_row(row: dict, headers: set | list | None = None) -> datetime | None:

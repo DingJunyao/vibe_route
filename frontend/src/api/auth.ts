@@ -1,5 +1,5 @@
 import { http } from './request'
-import type { MapLayerConfig } from './admin'
+import type { MapLayerConfig, FontConfig } from './admin'
 
 // 类型定义
 export interface User {
@@ -35,6 +35,7 @@ export interface PublicConfig {
   map_layers: Record<string, MapLayerConfig>
   invite_code_required: boolean
   registration_enabled: boolean
+  font_config: FontConfig
 }
 
 // API 方法

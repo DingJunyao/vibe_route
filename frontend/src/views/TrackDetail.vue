@@ -518,8 +518,8 @@
     </el-main>
 
     <!-- 编辑对话框 -->
-    <el-dialog v-model="editDialogVisible" title="编辑轨迹" width="500px">
-      <el-form :model="editForm" label-width="80px">
+    <el-dialog v-model="editDialogVisible" title="编辑轨迹" width="500px" class="responsive-dialog">
+      <el-form :model="editForm" label-width="80px" class="dialog-form">
         <el-form-item label="名称">
           <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
         </el-form-item>
@@ -539,8 +539,8 @@
     </el-dialog>
 
     <!-- 下载对话框 -->
-    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" width="400px">
-      <el-form label-width="100px">
+    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" width="500px" class="responsive-dialog">
+      <el-form label-width="100px" class="dialog-form">
         <el-form-item label="坐标系">
           <el-radio-group v-model="downloadCRS">
             <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
@@ -557,8 +557,8 @@
     </el-dialog>
 
     <!-- 导出数据对话框 -->
-    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" width="400px">
-      <el-form label-width="100px">
+    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" width="500px" class="responsive-dialog">
+      <el-form label-width="100px" class="dialog-form">
         <el-form-item label="文件格式">
           <el-radio-group v-model="exportFormat">
             <el-radio value="csv">CSV (Excel)</el-radio>
@@ -576,13 +576,21 @@
     </el-dialog>
 
     <!-- 导入数据对话框 -->
-    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" width="500px">
-      <el-form label-width="100px">
+    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" width="500px" class="responsive-dialog">
+      <el-form label-width="100px" class="dialog-form">
         <el-form-item label="匹配方式">
           <el-radio-group v-model="importMatchMode">
-            <el-radio value="index">索引 (index 列)</el-radio>
-            <el-radio value="time">时间 (time_date/time_time 或 time 列)</el-radio>
+            <el-radio value="index">索引</el-radio>
+            <el-radio value="time">时间</el-radio>
           </el-radio-group>
+          <div class="radio-hint">
+            <template v-if="importMatchMode === 'index'">
+              匹配 index 列的值
+            </template>
+            <template v-else>
+              匹配 time_date/time_time 或 time 列的值
+            </template>
+          </div>
         </el-form-item>
         <el-form-item v-if="importMatchMode === 'time'" label="文件时区">
           <el-select v-model="importTimezone" placeholder="选择导入文件的时间戳时区">
@@ -2087,6 +2095,16 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
+/* 单选按钮说明文字 */
+.radio-hint {
+  display: block;
+  width: 100%;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+
 /* 移动端响应式 */
 @media (max-width: 1366px) {
   .el-header {
@@ -2364,6 +2382,21 @@ onUnmounted(() => {
   .normal-right .info-card,
   .normal-right .areas-card {
     margin-bottom: 20px;
+  }
+
+  /* 对话框移动端样式 */
+  .responsive-dialog {
+    width: 95% !important;
+  }
+
+  .responsive-dialog .el-dialog__body {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .dialog-form :deep(.el-form-item__label) {
+    width: 80px !important;
+    font-size: 14px;
   }
 }
 </style>
