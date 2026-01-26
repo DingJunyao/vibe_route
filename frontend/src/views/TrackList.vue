@@ -74,7 +74,7 @@
             <el-table-column prop="name" label="轨迹名称" min-width="200">
               <template #default="{ row }">
                 <div class="track-name-cell">
-                  <el-link :underline="false" @click.stop="viewTrack(row)">
+                  <el-link underline="never" @click.stop="viewTrack(row)">
                     {{ row.name }}
                   </el-link>
                   <template v-if="getTrackProgress(row.id)">
