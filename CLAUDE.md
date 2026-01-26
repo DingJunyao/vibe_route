@@ -897,3 +897,123 @@ frontend/
 6. **地图 z-index**: 导航栏 `z-index: 1000`，地图容器 `z-index: 1`
 7. **首用户管理员**: [`config.py:81`](backend/app/core/config.py) 配置 `FIRST_USER_IS_ADMIN = True`
 8. **移动端 viewport**: `maximum-scale=1.0, user-scalable=no` 防止页面缩放
+
+### 后台管理页面
+
+后台管理页面（[`Admin.vue`](frontend/src/views/Admin.vue)）提供用户管理和系统配置功能。
+
+#### 功能特性
+
+1. **用户管理**：
+   - 分页用户列表
+   - 搜索用户名或邮箱
+   - 按创建时间/用户名/邮箱排序
+   - 按角色（管理员/普通用户）和状态（正常/已禁用）筛选
+   - 设置管理员、禁用/启用用户、重置密码、删除用户
+
+2. **系统配置**：
+   - 注册开关控制
+   - 邀请码要求设置
+   - 地图提供商配置
+   - 地图层启用/禁用和排序
+
+3. **邀请码管理**：
+   - 创建邀请码
+   - 分页查看邀请码列表
+   - 删除邀请码
+
+#### 用户保护规则
+
+后端 ([`admin.py`](backend/app/api/admin.py)) 实施了以下保护规则：
+
+1. **不能操作自己**：不能修改自己的管理员状态、不能禁用自己、不能删除自己、不能重置自己的密码
+2. **保护首位用户**：不能取消首位用户的管理员状态、不能禁用首位用户、不能删除首位用户、不能重置首位用户的密码
+3. **保留至少一位管理员**：取消用户管理员身份或删除管理员时，系统至少需要保留一位管理员
+
+#### Axios 数组参数序列化
+
+**问题**：Axios 默认将数组序列化为 `roles[0]=admin&roles[1]=user`，但 FastAPI 期望 `roles=admin&roles=user` 格式（重复键名）。
+
+**解决方案**：在 [`request.ts`](frontend/src/api/request.ts) 中配置 `paramsSerializer`：
+
+```typescript
+const request: AxiosInstance = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  paramsSerializer: {
+    indexes: null, // 数组序列化为 roles=a&roles=b 而不是 roles[0]=a&roles[1]=b
+  },
+})
+```
+
+#### 筛选按钮视觉反馈
+
+当筛选项不是默认值时，筛选按钮会高亮显示（`type="primary"`）：
+
+```typescript
+const hasActiveFilters = computed(() => {
+  const roleFilterActive = userRoleFilters.value.length !== 2  // 默认全选
+  const statusFilterActive = userStatusFilters.value.length !== 1 || userStatusFilters.value[0] !== 'active'  // 默认只选"正常"
+  return roleFilterActive || statusFilterActive
+})
+```
+
+```vue
+<el-button :type="hasActiveFilters ? 'primary' : ''">
+  筛选
+  <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+</el-button>
+```
+
+#### 移动端响应式布局
+
+后台管理页面移动端布局 ([`Admin.vue`](frontend/src/views/Admin.vue))：
+
+**用户筛选卡片**：
+
+- 搜索框：全宽（`:xs="24"`）
+- 排序按钮 + 筛选按钮：同一行，各占半宽（`:xs="12"`）
+- 搜索框和按钮行之间有 8px 间距
+- 排序按钮防止换行（`flex-wrap: nowrap`），缩小字体和内边距
+
+```css
+@media (max-width: 1366px) {
+  /* 搜索框和按钮之间的间距 */
+  .filter-card .el-row .el-col:nth-child(2),
+  .filter-card .el-row .el-col:nth-child(3) {
+    margin-top: 8px;
+  }
+
+  /* 排序按钮防止换行 */
+  .sort-buttons {
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .sort-buttons .el-button {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+}
+```
+
+**地图层列表移动端排序按钮**：
+
+- 桌面端使用拖拽手柄（`.desktop-only`）
+- 移动端隐藏拖拽手柄，显示上下箭头按钮
+
+```vue
+<!-- 桌面端拖拽手柄 -->
+<el-icon class="drag-handle desktop-only">
+  <Rank />
+</el-icon>
+
+<!-- 移动端排序按钮 -->
+<div class="mobile-sort-buttons">
+  <el-button :icon="ArrowUp" @click="moveLayerUp(layer)" />
+  <el-button :icon="ArrowDown" @click="moveLayerDown(layer)" />
+</div>
+```

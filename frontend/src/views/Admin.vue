@@ -12,8 +12,9 @@
         <el-tabs v-model="activeTab" type="border-card">
           <!-- 系统配置 -->
           <el-tab-pane label="系统配置" name="config">
-            <el-card v-loading="loadingConfig" shadow="never">
-              <el-form :model="config" label-width="150px">
+            <div class="config-tab-content">
+              <el-card v-loading="loadingConfig" shadow="never">
+                <el-form :model="config" label-width="150px" class="config-form">
                 <!-- 注册设置 -->
                 <div class="form-section">
                   <div class="section-title">注册设置</div>
@@ -31,98 +32,119 @@
                 <div class="form-section">
                   <div class="section-title">
                     地图设置
-                    <span class="section-tip">选择单选按钮设为默认地图，使用开关启用/禁用地图，拖拽调整显示顺序</span>
+                    <span class="section-tip desktop-only">选择单选按钮设为默认地图，使用开关启用/禁用地图，拖拽调整显示顺序</span>
                   </div>
                   <draggable
                     v-model="allMapLayers"
                     item-key="id"
                     handle=".drag-handle"
                     @end="onDragEnd"
+                    class="map-layers-list"
                   >
                     <template #item="{ element: layer }">
                       <div
                         class="map-layer-item"
                         :class="{ 'is-default': layer.id === config.default_map_provider }"
                       >
-                        <el-icon class="drag-handle">
-                          <Rank />
-                        </el-icon>
-                        <el-radio
-                          :model-value="config.default_map_provider"
-                          :value="layer.id"
-                          @change="config.default_map_provider = layer.id"
-                          :disabled="!layer.enabled"
-                        >
-                          <span class="layer-name">{{ layer.name }}</span>
-                          <span class="layer-id">({{ layer.id }})</span>
-                        </el-radio>
-                        <!-- 天地图 tk 输入框 -->
-                        <el-input
-                          v-if="layer.id === 'tianditu'"
-                          v-model="layer.tk"
-                          placeholder="请输入天地图 tk"
-                          size="small"
-                          style="width: 200px"
-                          clearable
-                          show-password
-                        />
-                        <!-- 高德地图 JS API Key 和安全密钥输入框 -->
-                        <div v-if="layer.id === 'amap'" class="amap-inputs">
+                        <!-- 第一行：拖拽手柄、名称、开关、状态 -->
+                        <div class="map-layer-main">
+                          <el-icon class="drag-handle desktop-only">
+                            <Rank />
+                          </el-icon>
+                          <!-- 移动端排序按钮 -->
+                          <div class="mobile-sort-buttons">
+                            <el-button
+                              type="primary"
+                              :icon="ArrowUp"
+                              size="small"
+                              text
+                              :disabled="isFirstLayer(layer)"
+                              @click="moveLayerUp(layer)"
+                            />
+                            <el-button
+                              type="primary"
+                              :icon="ArrowDown"
+                              size="small"
+                              text
+                              :disabled="isLastLayer(layer)"
+                              @click="moveLayerDown(layer)"
+                            />
+                          </div>
+                          <div class="layer-info">
+                            <el-radio
+                              :model-value="config.default_map_provider"
+                              :value="layer.id"
+                              @change="config.default_map_provider = layer.id"
+                              :disabled="!layer.enabled"
+                            >
+                              <span class="layer-name">{{ layer.name }}</span>
+                              <span class="layer-id">({{ layer.id }})</span>
+                            </el-radio>
+                          </div>
+                          <el-switch
+                            v-model="layer.enabled"
+                            @change="onMapLayerToggle(layer)"
+                            :disabled="layer.id === config.default_map_provider && layer.enabled"
+                          />
+                          <span class="layer-status">
+                            <template v-if="layer.id === config.default_map_provider">
+                              <el-tag size="small" type="success">默认</el-tag>
+                            </template>
+                            <template v-else-if="layer.enabled">
+                              <el-tag size="small" type="info">已启用</el-tag>
+                            </template>
+                            <template v-else>
+                              <el-tag size="small" type="warning">已禁用</el-tag>
+                            </template>
+                          </span>
+                        </div>
+                        <!-- 第二行：API 配置输入框 -->
+                        <div class="map-layer-config">
+                          <!-- 天地图 tk 输入框 -->
                           <el-input
+                            v-if="layer.id === 'tianditu'"
+                            v-model="layer.tk"
+                            placeholder="请输入天地图 Token (tk)"
+                            clearable
+                            show-password
+                            class="config-input"
+                          />
+                          <!-- 高德地图 JS API Key 和安全密钥输入框 -->
+                          <template v-if="layer.id === 'amap'">
+                            <el-input
+                              v-model="layer.api_key"
+                              placeholder="API Key（必填）"
+                              clearable
+                              show-password
+                              class="config-input"
+                            />
+                            <el-input
+                              v-model="layer.security_js_code"
+                              placeholder="安全密钥（可选）"
+                              clearable
+                              show-password
+                              class="config-input"
+                            />
+                          </template>
+                          <!-- 腾讯地图 API Key 输入框 -->
+                          <el-input
+                            v-if="layer.id === 'tencent'"
                             v-model="layer.api_key"
                             placeholder="API Key（必填）"
-                            size="small"
-                            style="width: 180px"
                             clearable
                             show-password
+                            class="config-input"
                           />
+                          <!-- 百度地图 API Key 输入框 -->
                           <el-input
-                            v-model="layer.security_js_code"
-                            placeholder="安全密钥（可选）"
-                            size="small"
-                            style="width: 160px"
-                            clearable
-                            show-password
-                          />
-                        </div>
-                        <!-- 腾讯地图 API Key 输入框 -->
-                        <div v-if="layer.id === 'tencent'" class="tencent-inputs">
-                          <el-input
+                            v-if="layer.id === 'baidu'"
                             v-model="layer.api_key"
                             placeholder="API Key（必填）"
-                            size="small"
-                            style="width: 200px"
                             clearable
                             show-password
+                            class="config-input"
                           />
                         </div>
-                        <!-- 百度地图 API Key 输入框 -->
-                        <div v-if="layer.id === 'baidu'" class="baidu-inputs">
-                          <el-input
-                            v-model="layer.api_key"
-                            placeholder="API Key（必填）"
-                            size="small"
-                            style="width: 200px"
-                            clearable
-                            show-password
-                          />
-                        </div>
-                        <el-switch
-                          v-model="layer.enabled"
-                          @change="onMapLayerToggle(layer)"
-                          :disabled="layer.id === config.default_map_provider && layer.enabled"
-                        />
-                        <span class="layer-status">
-                          <template v-if="layer.id === config.default_map_provider">
-                            <el-tag size="small" type="success">默认</el-tag>
-                          </template>
-                          <template v-else-if="layer.enabled">
-                            <el-tag size="small" type="info">已启用</el-tag>
-                          </template>
-                          <template v-else>
-                            <el-tag size="small" type="warning">已禁用</el-tag>
-                          </template>
-                        </span>
                       </div>
                     </template>
                   </draggable>
@@ -188,12 +210,80 @@
                 </el-form-item>
               </el-form>
             </el-card>
+            </div>
           </el-tab-pane>
 
           <!-- 用户管理 -->
           <el-tab-pane label="用户管理" name="users">
-            <el-card v-loading="loadingUsers" shadow="never">
-              <el-table :data="users" style="width: 100%">
+            <!-- 搜索、排序、筛选栏 -->
+            <el-card shadow="never" class="filter-card">
+              <el-row :gutter="12">
+                <!-- 搜索 -->
+                <el-col :xs="24" :sm="12" :md="8">
+                  <el-input
+                    v-model="userSearchQuery"
+                    placeholder="搜索用户名或邮箱..."
+                    :prefix-icon="Search"
+                    clearable
+                    @input="handleUserSearch"
+                  />
+                </el-col>
+                <!-- 排序 -->
+                <el-col :xs="12" :sm="12" :md="8">
+                  <div class="sort-buttons">
+                    <el-button
+                      v-for="item in userSortOptions"
+                      :key="item.value"
+                      :type="userSortBy === item.value ? 'primary' : ''"
+                      @click="handleUserSortClick(item.value)"
+                    >
+                      {{ item.label }}
+                      <el-icon v-if="userSortBy === item.value" class="sort-icon">
+                        <component :is="userSortOrder === 'desc' ? ArrowDown : ArrowUp" />
+                      </el-icon>
+                    </el-button>
+                  </div>
+                </el-col>
+                <!-- 筛选 -->
+                <el-col :xs="12" :sm="12" :md="8">
+                  <div class="filter-buttons">
+                    <el-popover placement="bottom-end" :width="260" trigger="click">
+                      <template #reference>
+                        <el-button :type="hasActiveFilters ? 'primary' : ''">
+                          筛选
+                          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                        </el-button>
+                      </template>
+                      <div class="filter-popover-content">
+                        <div class="filter-section">
+                          <span class="filter-label">角色：</span>
+                          <el-checkbox-group v-model="userRoleFilters" @change="loadUsersImmediate">
+                            <el-checkbox-button label="admin">管理员</el-checkbox-button>
+                            <el-checkbox-button label="user">普通用户</el-checkbox-button>
+                          </el-checkbox-group>
+                        </div>
+                        <el-divider style="margin: 12px 0" />
+                        <div class="filter-section">
+                          <span class="filter-label">状态：</span>
+                          <el-checkbox-group v-model="userStatusFilters" @change="loadUsersImmediate">
+                            <el-checkbox-button label="active">正常</el-checkbox-button>
+                            <el-checkbox-button label="inactive">已禁用</el-checkbox-button>
+                          </el-checkbox-group>
+                        </div>
+                        <el-divider style="margin: 12px 0" />
+                        <div class="filter-actions">
+                          <el-button size="small" style="width: 100%" @click="resetFiltersAndClose">重置筛选</el-button>
+                        </div>
+                      </div>
+                    </el-popover>
+                  </div>
+                </el-col>
+              </el-row>
+            </el-card>
+
+            <el-card v-loading="loadingUsers" class="list-card" shadow="never">
+              <!-- 桌面端表格 -->
+              <el-table :data="users" class="pc-table" style="width: 100%">
                 <el-table-column prop="id" label="ID" width="80" />
                 <el-table-column prop="username" label="用户名" min-width="150" />
                 <el-table-column prop="email" label="邮箱" min-width="200">
@@ -220,10 +310,10 @@
                     {{ formatDateTime(row.created_at) }}
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="200" fixed="right">
+                <el-table-column label="操作" width="280" fixed="right">
                   <template #default="{ row }">
                     <el-button
-                      v-if="!row.is_admin"
+                      v-if="!row.is_admin && !isCurrentUser(row) && !isFirstUser(row)"
                       type="primary"
                       size="small"
                       text
@@ -236,12 +326,12 @@
                       type="info"
                       size="small"
                       text
-                      disabled
+                      :disabled="isCurrentUser(row) || isFirstUser(row)"
                     >
-                      已是管理员
+                      {{ row.is_admin ? '已是管理员' : '不可操作' }}
                     </el-button>
                     <el-button
-                      v-if="row.is_active"
+                      v-if="row.is_active && !isCurrentUser(row) && !isFirstUser(row)"
                       type="warning"
                       size="small"
                       text
@@ -250,7 +340,7 @@
                       禁用
                     </el-button>
                     <el-button
-                      v-else
+                      v-else-if="!row.is_active && !isCurrentUser(row) && !isFirstUser(row)"
                       type="success"
                       size="small"
                       text
@@ -259,6 +349,25 @@
                       启用
                     </el-button>
                     <el-button
+                      v-else
+                      type="info"
+                      size="small"
+                      text
+                      disabled
+                    >
+                      {{ row.is_active ? '不可操作' : '不可操作' }}
+                    </el-button>
+                    <el-button
+                      v-if="!isCurrentUser(row) && !isFirstUser(row)"
+                      type="info"
+                      size="small"
+                      text
+                      @click="showResetPasswordDialog(row)"
+                    >
+                      重置密码
+                    </el-button>
+                    <el-button
+                      v-if="!isCurrentUser(row) && !isFirstUser(row)"
                       type="danger"
                       size="small"
                       text
@@ -266,15 +375,118 @@
                     >
                       删除
                     </el-button>
+                    <el-button
+                      v-else
+                      type="info"
+                      size="small"
+                      text
+                      disabled
+                    >
+                      不可操作
+                    </el-button>
                   </template>
                 </el-table-column>
               </el-table>
+
+              <!-- 移动端卡片列表 -->
+              <div class="mobile-card-list">
+                <div v-for="user in users" :key="user.id" class="mobile-user-card">
+                  <div class="mobile-card-header">
+                    <span class="mobile-card-title">{{ user.username }}</span>
+                    <div>
+                      <el-tag :type="user.is_admin ? 'danger' : 'primary'" size="small">
+                        {{ user.is_admin ? '管理员' : '普通用户' }}
+                      </el-tag>
+                      <el-tag :type="user.is_active ? 'success' : 'info'" size="small" style="margin-left: 4px">
+                        {{ user.is_active ? '正常' : '已禁用' }}
+                      </el-tag>
+                    </div>
+                  </div>
+                  <div class="mobile-card-body">
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">ID</span>
+                      <span class="mobile-card-value">{{ user.id }}</span>
+                    </div>
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">邮箱</span>
+                      <span class="mobile-card-value">{{ user.email || '-' }}</span>
+                    </div>
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">创建时间</span>
+                      <span class="mobile-card-value">{{ formatDateTime(user.created_at) }}</span>
+                    </div>
+                  </div>
+                  <div class="mobile-card-actions">
+                    <el-button
+                      v-if="!user.is_admin && !isCurrentUser(user) && !isFirstUser(user)"
+                      type="primary"
+                      size="small"
+                      @click="toggleUserAdmin(user)"
+                    >
+                      设为管理员
+                    </el-button>
+                    <el-button
+                      v-if="user.is_active && !isCurrentUser(user) && !isFirstUser(user)"
+                      type="warning"
+                      size="small"
+                      @click="toggleUserActive(user)"
+                    >
+                      禁用
+                    </el-button>
+                    <el-button
+                      v-else-if="!user.is_active && !isCurrentUser(user) && !isFirstUser(user)"
+                      type="success"
+                      size="small"
+                      @click="toggleUserActive(user)"
+                    >
+                      启用
+                    </el-button>
+                    <el-button
+                      v-if="!isCurrentUser(user) && !isFirstUser(user)"
+                      type="info"
+                      size="small"
+                      @click="showResetPasswordDialog(user)"
+                    >
+                      重置密码
+                    </el-button>
+                    <el-button
+                      v-if="!isCurrentUser(user) && !isFirstUser(user)"
+                      type="danger"
+                      size="small"
+                      @click="deleteUser(user)"
+                    >
+                      删除
+                    </el-button>
+                    <el-button
+                      v-if="isCurrentUser(user) || isFirstUser(user)"
+                      type="info"
+                      size="small"
+                      disabled
+                    >
+                      不可操作
+                    </el-button>
+                  </div>
+                </div>
+              </div>
             </el-card>
+
+            <!-- 分页 -->
+            <div class="pagination" v-if="users.length > 0">
+              <el-pagination
+                v-model:current-page="usersCurrentPage"
+                v-model:page-size="usersPageSize"
+                :page-sizes="[10, 20, 50, 100]"
+                :total="usersTotal"
+                :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
+                @current-change="loadUsers"
+                @size-change="loadUsers"
+              />
+            </div>
           </el-tab-pane>
 
           <!-- 邀请码管理 -->
           <el-tab-pane label="邀请码" name="invite-codes">
-            <el-card v-loading="loadingInviteCodes" shadow="never">
+            <el-card v-loading="loadingInviteCodes" class="list-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>邀请码列表</span>
@@ -284,7 +496,8 @@
                 </div>
               </template>
 
-              <el-table :data="inviteCodes" style="width: 100%">
+              <!-- 桌面端表格 -->
+              <el-table :data="inviteCodes" class="pc-table" style="width: 100%">
                 <el-table-column prop="id" label="ID" width="80" />
                 <el-table-column prop="code" label="邀请码" min-width="150">
                   <template #default="{ row }">
@@ -330,7 +543,59 @@
                   </template>
                 </el-table-column>
               </el-table>
+
+              <!-- 移动端卡片列表 -->
+              <div class="mobile-card-list">
+                <div v-for="inviteCode in inviteCodes" :key="inviteCode.id" class="mobile-invite-card">
+                  <div class="mobile-card-header">
+                    <span class="invite-code-display">{{ inviteCode.code }}</span>
+                    <el-tag :type="getInviteCodeStatus(inviteCode).type" size="small">
+                      {{ getInviteCodeStatus(inviteCode).text }}
+                    </el-tag>
+                  </div>
+                  <div class="mobile-card-body">
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">使用情况</span>
+                      <span class="mobile-card-value">{{ inviteCode.used_count }} / {{ inviteCode.max_uses }}</span>
+                    </div>
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">过期时间</span>
+                      <span class="mobile-card-value">{{ inviteCode.expires_at ? formatDateTime(inviteCode.expires_at) : '永久有效' }}</span>
+                    </div>
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">创建时间</span>
+                      <span class="mobile-card-value">{{ formatDateTime(inviteCode.created_at) }}</span>
+                    </div>
+                  </div>
+                  <div class="mobile-card-actions">
+                    <el-button
+                      v-if="inviteCode.is_valid"
+                      type="danger"
+                      size="small"
+                      @click="deleteInviteCode(inviteCode)"
+                    >
+                      删除
+                    </el-button>
+                    <el-button v-else type="info" size="small" disabled>
+                      已删除
+                    </el-button>
+                  </div>
+                </div>
+              </div>
             </el-card>
+
+            <!-- 分页 -->
+            <div class="pagination" v-if="inviteCodes.length > 0">
+              <el-pagination
+                v-model:current-page="inviteCodesCurrentPage"
+                v-model:page-size="inviteCodesPageSize"
+                :page-sizes="[10, 20, 50, 100]"
+                :total="inviteCodesTotal"
+                :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
+                @current-change="loadInviteCodes"
+                @size-change="loadInviteCodes"
+              />
+            </div>
           </el-tab-pane>
         </el-tabs>
       </el-main>
@@ -358,18 +623,52 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 重置密码对话框 -->
+    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="450px">
+      <el-form :model="resetPasswordForm" label-width="100px">
+        <el-form-item label="用户名">
+          <el-input :value="resetPasswordForm.username" disabled />
+        </el-form-item>
+        <el-form-item label="新密码">
+          <el-input
+            v-model="resetPasswordForm.new_password"
+            type="password"
+            placeholder="请输入新密码（至少 6 位）"
+            show-password
+            clearable
+          />
+        </el-form-item>
+        <el-form-item label="确认密码">
+          <el-input
+            v-model="resetPasswordForm.confirm_password"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resetPasswordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="resettingPassword" @click="confirmResetPassword">
+          确认重置
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus, Rank } from '@element-plus/icons-vue'
+import { ArrowLeft, Plus, Rank, ArrowUp, ArrowDown, Search } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType } from '@/api/admin'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
+import { hashPassword } from '@/utils/crypto'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -381,12 +680,54 @@ if (!authStore.user?.is_admin) {
   router.push('/')
 }
 
+// 响应式：判断是否为移动端
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 1366)
+
+// 监听窗口大小变化
+function handleResize() {
+  screenWidth.value = window.innerWidth
+}
+
 const activeTab = ref('config')
 const loadingConfig = ref(false)
 const loadingUsers = ref(false)
 const loadingInviteCodes = ref(false)
 const saving = ref(false)
 const creatingInviteCode = ref(false)
+
+// 用户管理分页
+const usersTotal = ref(0)
+const usersCurrentPage = ref(1)
+const usersPageSize = ref(20)
+
+// 邀请码管理分页
+const inviteCodesTotal = ref(0)
+const inviteCodesCurrentPage = ref(1)
+const inviteCodesPageSize = ref(20)
+
+// 用户搜索、排序、筛选
+const userSearchQuery = ref('')
+const adminCount = ref(0)  // 管理员数量统计
+const userSortBy = ref('created_at')
+const userSortOrder = ref<'asc' | 'desc'>('desc')  // 默认降序（最新在前）
+const userSortOptions = [
+  { label: '创建时间', value: 'created_at' },
+  { label: '用户名', value: 'username' },
+  { label: '邮箱', value: 'email' },
+]
+const userRoleFilters = ref<string[]>(['admin', 'user'])  // 默认全选
+const userStatusFilters = ref<string[]>(['active'])  // 默认正常状态
+
+// 重置密码
+const resetPasswordDialogVisible = ref(false)
+const resettingPassword = ref(false)
+const resetPasswordForm = reactive({
+  user_id: 0,
+  username: '',
+  new_password: '',
+  confirm_password: '',
+})
 
 // 系统配置
 const config = reactive<SystemConfig>({
@@ -470,6 +811,46 @@ function onDragEnd() {
   })
 }
 
+// 判断是否为第一个地图层
+function isFirstLayer(layer: MapLayerConfig): boolean {
+  return allMapLayers.value[0]?.id === layer.id
+}
+
+// 判断是否为最后一个地图层
+function isLastLayer(layer: MapLayerConfig): boolean {
+  return allMapLayers.value[allMapLayers.value.length - 1]?.id === layer.id
+}
+
+// 上移地图层
+function moveLayerUp(layer: MapLayerConfig) {
+  const index = allMapLayers.value.findIndex((l: MapLayerConfig) => l.id === layer.id)
+  if (index > 0) {
+    // 交换位置
+    const temp = allMapLayers.value[index - 1]
+    allMapLayers.value[index - 1] = allMapLayers.value[index]
+    allMapLayers.value[index] = temp
+    // 更新 order 值
+    allMapLayers.value.forEach((l: MapLayerConfig, i: number) => {
+      l.order = i
+    })
+  }
+}
+
+// 下移地图层
+function moveLayerDown(layer: MapLayerConfig) {
+  const index = allMapLayers.value.findIndex((l: MapLayerConfig) => l.id === layer.id)
+  if (index < allMapLayers.value.length - 1) {
+    // 交换位置
+    const temp = allMapLayers.value[index + 1]
+    allMapLayers.value[index + 1] = allMapLayers.value[index]
+    allMapLayers.value[index] = temp
+    // 更新 order 值
+    allMapLayers.value.forEach((l: MapLayerConfig, i: number) => {
+      l.order = i
+    })
+  }
+}
+
 // 地图层切换事件
 function onMapLayerToggle(layer: MapLayerConfig) {
   if (!layer.enabled) {
@@ -516,7 +897,19 @@ function onGeocodingProviderChange() {
 async function loadUsers() {
   loadingUsers.value = true
   try {
-    users.value = await adminApi.getUsers({ limit: 100 })
+    const response = await adminApi.getUsers({
+      page: usersCurrentPage.value,
+      page_size: usersPageSize.value,
+      search: userSearchQuery.value || undefined,
+      sort_by: userSortBy.value,
+      sort_order: userSortOrder.value,
+      roles: userRoleFilters.value.length === 2 ? undefined : userRoleFilters.value,
+      statuses: userStatusFilters.value.length === 2 ? undefined : userStatusFilters.value,
+    })
+    users.value = response.items
+    usersTotal.value = response.total
+    // 统计管理员数量
+    adminCount.value = response.items.filter((u: User) => u.is_admin).length
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -524,8 +917,81 @@ async function loadUsers() {
   }
 }
 
+// 立即加载用户（用于筛选，无需防抖）
+function loadUsersImmediate() {
+  usersCurrentPage.value = 1  // 筛选时重置到第一页
+  loadUsers()
+}
+
+// 判断是否有激活的筛选条件
+const hasActiveFilters = computed(() => {
+  const roleFilterActive = userRoleFilters.value.length !== 2
+  const statusFilterActive = userStatusFilters.value.length !== 1 || userStatusFilters.value[0] !== 'active'
+  return roleFilterActive || statusFilterActive
+})
+
+// 用户搜索防抖
+let userSearchTimeout: ReturnType<typeof setTimeout> | null = null
+function handleUserSearch() {
+  if (userSearchTimeout) {
+    clearTimeout(userSearchTimeout)
+  }
+  userSearchTimeout = setTimeout(() => {
+    usersCurrentPage.value = 1  // 搜索时重置到第一页
+    loadUsers()
+  }, 500)
+}
+
+// 用户排序点击
+function handleUserSortClick(value: string) {
+  if (userSortBy.value === value) {
+    // 点击当前排序字段，切换排序方向
+    userSortOrder.value = userSortOrder.value === 'desc' ? 'asc' : 'desc'
+  } else {
+    // 切换到新的排序字段
+    userSortBy.value = value
+    // 对于创建时间和用户名，使用 desc（倒序，最新/字母序）
+    // 对于邮箱，使用 asc（正序，字母序）
+    userSortOrder.value = value === 'email' ? 'asc' : 'desc'
+  }
+  loadUsers()
+}
+
+// 重置筛选
+function resetFilters() {
+  userRoleFilters.value = ['admin', 'user']
+  userStatusFilters.value = ['active']
+  loadUsersImmediate()
+}
+
+// 重置筛选并关闭 popover（需要手动触发 DOM 事件）
+function resetFiltersAndClose() {
+  resetFilters()
+  // 点击页面其他地方来关闭 popover
+  document.dispatchEvent(new MouseEvent('click'))
+}
+
+// 判断是否为当前用户
+function isCurrentUser(user: User): boolean {
+  return authStore.user?.id === user.id
+}
+
+// 判断是否为第一位用户（ID 最小的用户）
+function isFirstUser(user: User): boolean {
+  if (users.value.length === 0) return false
+  const firstUser = users.value.reduce((min: User | null, u: User) =>
+    !min || u.id < min.id ? u : min
+  , null)
+  return firstUser?.id === user.id
+}
+
 // 切换用户管理员状态
 async function toggleUserAdmin(user: User) {
+  // 检查：如果要取消管理员身份，确保至少还有一位管理员
+  if (user.is_admin && adminCount.value <= 1) {
+    ElMessage.warning('系统至少需要保留一位管理员')
+    return
+  }
   try {
     await adminApi.updateUser(user.id, { is_admin: !user.is_admin })
     ElMessage.success('操作成功')
@@ -564,11 +1030,55 @@ async function deleteUser(user: User) {
   }
 }
 
+// 显示重置密码对话框
+function showResetPasswordDialog(user: User) {
+  resetPasswordForm.user_id = user.id
+  resetPasswordForm.username = user.username
+  resetPasswordForm.new_password = ''
+  resetPasswordForm.confirm_password = ''
+  resetPasswordDialogVisible.value = true
+}
+
+// 确认重置密码
+async function confirmResetPassword() {
+  // 验证密码
+  if (!resetPasswordForm.new_password) {
+    ElMessage.warning('请输入新密码')
+    return
+  }
+  if (resetPasswordForm.new_password.length < 6) {
+    ElMessage.warning('密码长度至少为 6 位')
+    return
+  }
+  if (resetPasswordForm.new_password !== resetPasswordForm.confirm_password) {
+    ElMessage.warning('两次输入的密码不一致')
+    return
+  }
+
+  resettingPassword.value = true
+  try {
+    // 前端先对密码进行 SHA256 加密，与登录流程保持一致
+    const hashedPassword = await hashPassword(resetPasswordForm.new_password)
+    await adminApi.resetPassword(resetPasswordForm.user_id, hashedPassword)
+    ElMessage.success('密码重置成功')
+    resetPasswordDialogVisible.value = false
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    resettingPassword.value = false
+  }
+}
+
 // 加载邀请码列表
 async function loadInviteCodes() {
   loadingInviteCodes.value = true
   try {
-    inviteCodes.value = await adminApi.getInviteCodes({ limit: 100 })
+    const response = await adminApi.getInviteCodes({
+      page: inviteCodesCurrentPage.value,
+      page_size: inviteCodesPageSize.value,
+    })
+    inviteCodes.value = response.items
+    inviteCodesTotal.value = response.total
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -647,13 +1157,32 @@ onMounted(async () => {
   await loadConfig()
   await loadUsers()
   await loadInviteCodes()
+
+  // 添加窗口大小监听
+  window.addEventListener('resize', handleResize)
+})
+
+// 组件卸载时移除监听器
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 </script>
 
 <style scoped>
 .admin-container {
-  height: 100%;
+  height: 100vh;
   background: #f5f7fa;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+}
+
+.admin-container > .el-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
 }
 
 .el-header {
@@ -662,6 +1191,10 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   padding: 0 20px;
+  flex-shrink: 0;
+  height: 60px;
+  z-index: 100;
+  width: 100%;
 }
 
 .header-content {
@@ -669,19 +1202,181 @@ onMounted(async () => {
   align-items: center;
   gap: 20px;
   width: 100%;
+  overflow: hidden;
 }
 
 .header-content h1 {
   font-size: 20px;
   margin: 0;
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .main {
+  flex: 1;
+  min-height: 0;
   padding: 20px;
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+/* 标签页容器固定高度 */
+.main > .el-tabs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  overflow-x: hidden;
+  width: 100%;
+}
+
+.main :deep(.el-tabs__header) {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.main :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.main :deep(.el-tab-pane) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+/* 系统配置 tab 可滚动 */
+.config-tab-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 列表卡片固定高度，内部滚动 */
+.list-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-x: hidden;
+}
+
+.list-card :deep(.el-card__body) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+}
+
+/* 用户筛选卡片 */
+.filter-card {
+  flex-shrink: 0;
+  margin-bottom: 12px;
+}
+
+.filter-card :deep(.el-card__body) {
+  padding: 12px;
+}
+
+.sort-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sort-buttons .el-button {
+  flex-shrink: 0;
+}
+
+.sort-icon {
+  margin-left: 4px;
+}
+
+.filter-buttons {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.filter-label {
+  margin-right: 12px;
+  font-weight: 500;
+  color: #606266;
+}
+
+:deep(.el-checkbox-button) {
+  margin-right: 8px;
+}
+
+:deep(.el-dropdown-menu__item) {
+  padding: 8px 12px;
+}
+
+:deep(.el-dropdown-menu) {
+  min-width: 200px;
+}
+
+/* Popover 筛选样式 */
+.filter-popover-content {
+  padding: 8px 0;
+}
+
+.filter-section {
+  padding: 4px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-section .filter-label {
+  font-weight: 500;
+  color: #606266;
+  font-size: 14px;
+}
+
+.filter-section .el-checkbox-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-actions {
+  padding: 4px 12px;
+}
+
+/* PC 端表格样式 */
+.pc-table {
+  width: 100%;
+}
+
+/* 分页器样式 */
+.pagination {
+  flex-shrink: 0;
+  padding: 12px 0;
+  display: flex;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .form-section {
@@ -727,16 +1422,16 @@ onMounted(async () => {
 .map-layers-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 
 .map-layer-item {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 16px;
   background: #f5f7fa;
-  border-radius: 4px;
+  border-radius: 8px;
   transition: background-color 0.2s;
   cursor: grab;
 }
@@ -754,38 +1449,23 @@ onMounted(async () => {
   border: 1px solid #b3d8ff;
 }
 
-.map-layer-item.drag-over {
-  border: 2px dashed #409eff;
-  background: #ecf5ff;
+/* 主行布局（桌面端） */
+.map-layer-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.drag-handle {
-  cursor: grab;
-  color: #909399;
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-}
-
-/* vuedraggable 拖拽时的样式 */
-.map-layers-list :deep(.sortable-ghost) {
-  opacity: 0.5;
-  background: #ecf5ff;
-}
-
-.map-layers-list :deep(.sortable-drag) {
-  opacity: 0.8;
-}
-
-.map-layer-item :deep(.el-radio) {
-  margin: 0;
+.layer-info {
   flex: 1;
+  min-width: 0;
 }
 
-.map-layer-item :deep(.el-radio__label) {
+.layer-info :deep(.el-radio) {
+  margin: 0;
+}
+
+.layer-info :deep(.el-radio__label) {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -803,53 +1483,420 @@ onMounted(async () => {
 }
 
 .layer-status {
-  margin-left: auto;
   display: flex;
   align-items: center;
+  flex-shrink: 0;
+}
+
+/* 配置输入框区域 */
+.map-layer-config {
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  padding-left: 30px;
 }
 
-.map-layer-item :deep(.el-input) {
-  margin-left: 8px;
+.config-input {
+  flex: 1;
+  min-width: 200px;
 }
 
-.map-layer-item :deep(.el-input__wrapper) {
-  width: 200px;
+/* 拖拽手柄 */
+.drag-handle {
+  cursor: grab;
+  color: #909399;
+  font-size: 18px;
+  flex-shrink: 0;
 }
 
-/* 高德地图输入框组 */
-.amap-inputs {
-  display: flex;
-  gap: 6px;
-  margin-left: 8px;
+.drag-handle:active {
+  cursor: grabbing;
 }
 
-/* 腾讯地图输入框组 */
-.tencent-inputs {
-  display: flex;
-  gap: 6px;
-  margin-left: 8px;
+/* 移动端排序按钮 */
+.mobile-sort-buttons {
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-/* 百度地图输入框组 */
-.baidu-inputs {
-  display: flex;
-  gap: 6px;
-  margin-left: 8px;
+.mobile-sort-buttons .el-button {
+  padding: 4px;
+}
+
+/* vuedraggable 拖拽时的样式 */
+.map-layers-list :deep(.sortable-ghost) {
+  opacity: 0.5;
+  background: #ecf5ff;
+}
+
+.map-layers-list :deep(.sortable-drag) {
+  opacity: 0.8;
+}
+
+/* 默认隐藏桌面端专用元素 */
+.desktop-only {
+  display: none;
 }
 
 /* 移动端响应式 */
 @media (max-width: 1366px) {
-  .main {
+  .admin-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: hidden;
+    background: #f5f7fa;
+    width: 100vw;
+  }
+
+  .admin-container > .el-container {
+    height: 100%;
+    width: 100%;
+  }
+
+  .el-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    height: auto;
     padding: 10px;
+    width: 100%;
+    overflow: hidden;
+  }
+
+  .main {
+    padding-top: 70px;
+    padding-bottom: 0;
+    padding-left: 0;
+    padding-right: 0;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .main > .el-tabs {
+    width: 100%;
+    overflow-x: hidden;
   }
 
   .header-content h1 {
     font-size: 16px;
+    min-width: 0;
   }
 
-  :deep(.el-form-item__label) {
-    width: 120px !important;
+  /* 筛选卡片移动端样式 */
+  .filter-card {
+    margin-bottom: 8px;
+  }
+
+  /* 搜索框和按钮之间的间距 */
+  .filter-card .el-row .el-col:nth-child(2),
+  .filter-card .el-row .el-col:nth-child(3) {
+    margin-top: 8px;
+  }
+
+  /* Popover 筛选移动端样式 */
+  .filter-popover-content {
+    padding: 4px 0;
+  }
+
+  .filter-section {
+    padding: 4px 8px;
+  }
+
+  .filter-section .filter-label {
+    font-size: 13px;
+  }
+
+  .filter-actions {
+    padding: 4px 8px;
+  }
+
+  .filter-card :deep(.el-card__body) {
+    padding: 8px;
+  }
+
+  .sort-buttons {
+    gap: 4px;
+    flex-wrap: nowrap;
+  }
+
+  .sort-buttons .el-button {
+    font-size: 11px;
+    padding: 5px 8px;
+  }
+
+  /* 隐藏 PC 端表格，显示移动端卡片 */
+  .pc-table {
+    display: none !important;
+  }
+
+  .mobile-card-list {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+    /* 为固定底部的分页器留出空间 */
+    padding-bottom: 70px;
+  }
+
+  /* 移动端列表卡片 */
+  .list-card {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+  }
+
+  .list-card :deep(.el-card__body) {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    overflow-x: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+
+  /* 分页器固定在底部 */
+  .pagination {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    background: #f5f7fa;
+    padding: 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+    margin-top: 0;
+    overflow: hidden;
+  }
+
+  .pagination :deep(.el-pagination) {
+    justify-content: center;
+  }
+
+  /* 系统配置 tab 可滚动 */
+  .config-tab-content {
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0 10px;
+  }
+
+  /* 表单项上下布局 */
+  :deep(.config-form .el-form-item) {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+  }
+
+  :deep(.config-form .el-form-item__label-wrap) {
+    margin-left: 0 !important;
+  }
+
+  :deep(.config-form .el-form-item__label) {
+    width: auto !important;
+    min-width: auto !important;
+    text-align: left !important;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+    justify-content: flex-start !important;
+  }
+
+  :deep(.config-form .el-form-item__content) {
+    margin-left: 0 !important;
+    width: 100% !important;
+    text-align: left !important;
+  }
+
+  /* 地图设置区域移动端优化 */
+  .map-layer-config {
+    padding-left: 0;
+    flex-direction: column;
+  }
+
+  .config-input {
+    min-width: 100%;
+  }
+
+  .map-layer-main {
+    flex-wrap: nowrap;
+    align-items: flex-start;
+  }
+
+  .layer-info {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .layer-info :deep(.el-radio) {
+    align-items: center;
+    height: 32px;
+    display: inline-flex;
+    margin: 0 !important;
+  }
+
+  .layer-info :deep(.el-radio__input) {
+    margin: 0;
+  }
+
+  .layer-info :deep(.el-radio__label) {
+    align-items: center;
+    line-height: 32px;
+    padding-left: 8px;
+    margin: 0 !important;
+  }
+
+  /* 移动端隐藏拖拽手柄，显示排序按钮 */
+  .drag-handle {
+    display: none;
+  }
+
+  .mobile-sort-buttons {
+    display: flex;
+    height: 32px;
+  }
+
+  .mobile-sort-buttons :deep(.el-button) {
+    margin: 0;
+  }
+
+  .map-layer-main :deep(.el-switch) {
+    flex-shrink: 0;
+    align-self: center;
+    height: 32px;
+  }
+
+  /* 全局重置移动端单选框 margin-right */
+  :deep(.el-radio) {
+    margin-right: 0 !important;
+  }
+
+  .layer-status {
+    flex-shrink: 0;
+    align-self: center;
+  }
+
+  /* 地理编码设置 - 单选按钮垂直排列 */
+  :deep(.el-radio-group) {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  /* 表格隐藏，使用移动端卡片列表 */
+  .el-table {
+    display: none;
+  }
+
+  /* 移动端卡片列表样式 */
+  .mobile-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .mobile-user-card,
+  .mobile-invite-card {
+    background: white;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  .mobile-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #ebeef5;
+  }
+
+  .mobile-card-title {
+    font-weight: 500;
+    font-size: 16px;
+    color: #303133;
+  }
+
+  .mobile-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .mobile-card-row {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .mobile-card-label {
+    color: #909399;
+  }
+
+  .mobile-card-value {
+    color: #303133;
+    text-align: right;
+  }
+
+  .mobile-card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #ebeef5;
+  }
+
+  .mobile-card-actions .el-button {
+    flex: 1;
+  }
+
+  /* 邀请码卡片特殊样式 */
+  .invite-code-display {
+    font-family: monospace;
+    font-size: 16px;
+    background: #f5f7fa;
+    padding: 8px 12px;
+    border-radius: 4px;
+  }
+}
+
+/* 桌面端隐藏移动端卡片 */
+@media (min-width: 1367px) {
+  .mobile-card-list {
+    display: none !important;
+  }
+
+  .pc-table {
+    display: table !important;
+  }
+
+  .desktop-only {
+    display: inline;
+  }
+
+  .pagination {
+    position: static;
+    box-shadow: none;
+    padding: 12px 0;
   }
 }
 </style>

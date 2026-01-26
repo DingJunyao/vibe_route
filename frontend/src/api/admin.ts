@@ -68,6 +68,12 @@ export interface ConfigUpdateData {
   map_layers?: Record<string, Partial<MapLayerConfig>>
 }
 
+// 分页响应
+export interface PaginatedResponse<T> {
+  items: T[]
+  total: number
+}
+
 // 用户相关接口
 export interface User {
   id: number
@@ -109,8 +115,16 @@ export const adminApi = {
     return http.put('/admin/config', data)
   },
 
-  // 获取用户列表
-  getUsers(params?: { skip?: number; limit?: number }): Promise<User[]> {
+  // 获取用户列表（支持分页、搜索、排序、筛选）
+  getUsers(params?: {
+    page?: number
+    page_size?: number
+    search?: string
+    sort_by?: string
+    sort_order?: 'asc' | 'desc'
+    roles?: string[]
+    statuses?: string[]
+  }): Promise<PaginatedResponse<User>> {
     return http.get('/admin/users', { params })
   },
 
@@ -124,13 +138,18 @@ export const adminApi = {
     return http.delete(`/admin/users/${userId}`)
   },
 
+  // 重置用户密码
+  resetPassword(userId: number, new_password: string): Promise<{ message: string }> {
+    return http.post(`/admin/users/${userId}/reset-password`, { new_password })
+  },
+
   // 创建邀请码
   createInviteCode(data: CreateInviteCodeData): Promise<InviteCode> {
     return http.post('/admin/invite-codes', data)
   },
 
-  // 获取邀请码列表
-  getInviteCodes(params?: { skip?: number; limit?: number }): Promise<InviteCode[]> {
+  // 获取邀请码列表（支持分页）
+  getInviteCodes(params?: { page?: number; page_size?: number }): Promise<PaginatedResponse<InviteCode>> {
     return http.get('/admin/invite-codes', { params })
   },
 

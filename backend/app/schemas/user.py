@@ -31,6 +31,11 @@ class UserUpdate(BaseModel):
     is_admin: Optional[bool] = None
 
 
+class ResetPassword(BaseModel):
+    """重置密码 schema（管理员用）"""
+    new_password: str = Field(..., min_length=6, max_length=100)
+
+
 class UserResponse(UserBase):
     """用户响应 schema"""
     id: int

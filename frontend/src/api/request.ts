@@ -13,6 +13,9 @@ const request: AxiosInstance = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  paramsSerializer: {
+    indexes: null, // 数组序列化为 roles=a&roles=b 而不是 roles[0]=a&roles[1]=b
+  },
 })
 
 // 请求拦截器

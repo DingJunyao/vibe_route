@@ -149,5 +149,20 @@ class UserService:
         user.updated_at = datetime.now(timezone.utc)
         await db.commit()
 
+    async def reset_password(
+        self,
+        db: AsyncSession,
+        user: User,
+        new_password: str,
+        operator_id: int,
+    ) -> User:
+        """重置用户密码"""
+        user.hashed_password = get_password_hash(new_password)
+        user.updated_by = operator_id
+        user.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(user)
+        return user
+
 
 user_service = UserService()
