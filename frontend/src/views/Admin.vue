@@ -660,8 +660,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted, computed, onUnmounted, watch } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Plus, Rank, ArrowUp, ArrowDown, Search } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
@@ -747,6 +747,9 @@ const config = reactive<SystemConfig>({
 // 所有地图层列表（按固定顺序）
 const allMapLayers = ref<MapLayerConfig[]>([])
 
+// 原始配置（用于检测未保存的更改）
+const originalConfig = ref<SystemConfig | null>(null)
+
 // 用户列表
 const users = ref<User[]>([])
 
@@ -758,6 +761,14 @@ const inviteCodeForm = reactive({
   max_uses: 1,
   expires_in_days: undefined as number | undefined,
 })
+
+// 检测系统配置是否有未保存的更改
+function hasUnsavedConfigChanges(): boolean {
+  if (!originalConfig.value) return false
+  // 比较当前配置和原始配置
+  const currentConfig = JSON.parse(JSON.stringify(config))
+  return JSON.stringify(currentConfig) !== JSON.stringify(originalConfig.value)
+}
 
 // 初始化 geocoding_config
 function initGeocodingConfig() {
@@ -787,6 +798,8 @@ async function loadConfig() {
     initGeocodingConfig()
     // 初始化地图层列表（按固定顺序）
     initMapLayers()
+    // 保存原始配置（深拷贝），用于检测未保存的更改
+    originalConfig.value = JSON.parse(JSON.stringify(config))
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -881,6 +894,8 @@ async function saveConfig() {
     // 使用 configStore 的 updateConfig 方法，确保 publicConfig 也被更新
     await configStore.updateConfig(updateData)
     ElMessage.success('配置保存成功')
+    // 保存成功后更新原始配置
+    originalConfig.value = JSON.parse(JSON.stringify(config))
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -1153,6 +1168,65 @@ function formatDateTime(dateStr: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+// 监听 tab 切换，如果有未保存的配置更改则提示
+watch(activeTab, async (newTab, oldTab) => {
+  if (oldTab === 'config' && hasUnsavedConfigChanges()) {
+    try {
+      await ElMessageBox.confirm(
+        '系统配置有未保存的更改，确定要离开吗？',
+        '提示',
+        {
+          confirmButtonText: '离开',
+          cancelButtonText: '留在本页',
+          type: 'warning',
+        }
+      )
+      // 用户选择离开，重置为原始配置
+      if (originalConfig.value) {
+        Object.assign(config, originalConfig.value)
+        initGeocodingConfig()
+        initMapLayers()
+      }
+    } catch {
+      // 用户选择留在本页，切回原来的 tab
+      activeTab.value = oldTab
+      throw new Error('User cancelled') // 阻止 watch 继续
+    }
+  }
+})
+
+// 路由离开守卫
+onBeforeRouteLeave(async (to, from, next) => {
+  // 只有在系统配置 tab 且有未保存更改时才提示
+  if (activeTab.value === 'config' && hasUnsavedConfigChanges()) {
+    try {
+      await ElMessageBox.confirm(
+        '系统配置有未保存的更改，确定要离开吗？',
+        '提示',
+        {
+          confirmButtonText: '离开',
+          cancelButtonText: '留在本页',
+          type: 'warning',
+        }
+      )
+      next()
+    } catch {
+      next(false)
+    }
+  } else {
+    next()
+  }
+})
+
+// 浏览器刷新/关闭提示
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (activeTab.value === 'config' && hasUnsavedConfigChanges()) {
+    e.preventDefault()
+    e.returnValue = '' // Chrome 需要设置 returnValue
+    return ''
+  }
+}
+
 onMounted(async () => {
   await loadConfig()
   await loadUsers()
@@ -1160,11 +1234,14 @@ onMounted(async () => {
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
+  // 添加浏览器刷新/关闭提示
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 // 组件卸载时移除监听器
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 

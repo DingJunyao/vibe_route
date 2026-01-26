@@ -1017,3 +1017,107 @@ const hasActiveFilters = computed(() => {
   <el-button :icon="ArrowDown" @click="moveLayerDown(layer)" />
 </div>
 ```
+
+#### 系统配置未保存更改保护
+
+后台管理页面的系统配置 tab 实现了未保存更改的保护机制，防止用户意外丢失配置修改。
+
+**文件**: [`frontend/src/views/Admin.vue`](frontend/src/views/Admin.vue)
+
+##### 功能说明
+
+1. **Tab 切换保护**：当从"系统配置" tab 切换到其他 tab 时，如果有未保存的更改，会弹出确认对话框
+2. **路由离开保护**：使用 `onBeforeRouteLeave` 守卫，在用户尝试离开后台管理页面时检查是否有未保存的配置
+3. **浏览器刷新/关闭保护**：监听 `beforeunload` 事件，在刷新或关闭浏览器时显示原生确认对话框
+
+##### 实现要点
+
+```typescript
+// 1. 保存原始配置（深拷贝），用于检测未保存的更改
+const originalConfig = ref<SystemConfig | null>(null)
+
+// 2. 加载配置时保存原始状态
+async function loadConfig() {
+  const data = await adminApi.getConfig()
+  Object.assign(config, data)
+  // 保存原始配置（深拷贝）
+  originalConfig.value = JSON.parse(JSON.stringify(config))
+}
+
+// 3. 检测配置是否有未保存的更改
+function hasUnsavedConfigChanges(): boolean {
+  if (!originalConfig.value) return false
+  const currentConfig = JSON.parse(JSON.stringify(config))
+  return JSON.stringify(currentConfig) !== JSON.stringify(originalConfig.value)
+}
+
+// 4. 保存成功后更新原始配置
+async function saveConfig() {
+  await configStore.updateConfig(updateData)
+  ElMessage.success('配置保存成功')
+  originalConfig.value = JSON.parse(JSON.stringify(config))
+}
+
+// 5. 监听 tab 切换
+watch(activeTab, async (newTab, oldTab) => {
+  if (oldTab === 'config' && hasUnsavedConfigChanges()) {
+    try {
+      await ElMessageBox.confirm('系统配置有未保存的更改，确定要离开吗？', '提示', {
+        confirmButtonText: '离开',
+        cancelButtonText: '留在本页',
+        type: 'warning',
+      })
+      // 用户选择离开，重置为原始配置
+      if (originalConfig.value) {
+        Object.assign(config, originalConfig.value)
+      }
+    } catch {
+      // 用户选择留在本页，切回原来的 tab
+      activeTab.value = oldTab
+    }
+  }
+})
+
+// 6. 路由离开守卫
+onBeforeRouteLeave(async (to, from, next) => {
+  if (activeTab.value === 'config' && hasUnsavedConfigChanges()) {
+    try {
+      await ElMessageBox.confirm('系统配置有未保存的更改，确定要离开吗？', '提示', {
+        confirmButtonText: '离开',
+        cancelButtonText: '留在本页',
+        type: 'warning',
+      })
+      next()
+    } catch {
+      next(false)
+    }
+  } else {
+    next()
+  }
+})
+
+// 7. 浏览器刷新/关闭提示
+function handleBeforeUnload(e: BeforeUnloadEvent) {
+  if (activeTab.value === 'config' && hasUnsavedConfigChanges()) {
+    e.preventDefault()
+    e.returnValue = '' // Chrome 需要设置 returnValue
+    return ''
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('beforeunload', handleBeforeUnload)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('beforeunload', handleBeforeUnload)
+})
+```
+
+##### 关键技术点
+
+1. **深拷贝**：使用 `JSON.parse(JSON.stringify())` 进行深拷贝，确保原始配置不受后续修改影响
+2. **条件检查**：只在"系统配置" tab 且有未保存更改时才触发保护
+3. **配置重置**：用户选择离开时，将当前配置重置为原始配置，避免"假保存"状态
+4. **事件清理**：组件卸载时移除 `beforeunload` 监听器，避免内存泄漏
+5. **路由守卫**：只有当前在"系统配置" tab 时才检查，从其他 tab 离开不受影响
