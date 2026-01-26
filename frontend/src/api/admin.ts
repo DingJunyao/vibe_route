@@ -44,6 +44,7 @@ export interface SystemConfig {
   }
   map_layers: Record<string, MapLayerConfig>
   font_config?: FontConfig
+  show_road_sign_in_region_tree: boolean
 }
 
 // 字体配置
@@ -88,6 +89,7 @@ export interface ConfigUpdateData {
   }
   map_layers?: Record<string, Partial<MapLayerConfig>>
   font_config?: FontConfig
+  show_road_sign_in_region_tree?: boolean
 }
 
 // 分页响应

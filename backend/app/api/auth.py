@@ -165,4 +165,5 @@ async def get_public_config(
         invite_code_required=configs.get("invite_code_required", False),
         registration_enabled=configs.get("registration_enabled", True),
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
+        show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
     )

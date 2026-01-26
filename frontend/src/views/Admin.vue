@@ -28,6 +28,15 @@
                   </el-form-item>
                 </div>
 
+                <!-- 显示设置 -->
+                <div class="form-section">
+                  <div class="section-title">显示设置</div>
+                  <el-form-item label="道路编号显示标牌">
+                    <el-switch v-model="config.show_road_sign_in_region_tree" />
+                    <span class="form-tip">开启后，经过区域中的道路编号将显示为对应的道路标志 SVG</span>
+                  </el-form-item>
+                </div>
+
                 <!-- 地图设置 -->
                 <div class="form-section">
                   <div class="section-title">
@@ -897,13 +906,14 @@ const resetPasswordForm = reactive({
 const config = reactive<SystemConfig>({
   registration_enabled: true,
   invite_code_required: false,
+  show_road_sign_in_region_tree: true,
   default_map_provider: 'osm',
   geocoding_provider: 'nominatim',
   geocoding_config: {
     nominatim: { url: '', email: '' },
     gdf: { data_path: '' },
-    amap: { api_key: '' },
-    baidu: { api_key: '' },
+    amap: { api_key: '', freq: 3 },
+    baidu: { api_key: '', freq: 3, get_en_result: false },
   },
   map_layers: {},
 })

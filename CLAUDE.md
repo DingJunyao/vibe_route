@@ -838,6 +838,290 @@ function addTileLayer(layerId: string) {
    const padding = Math.round(Math.max(width, height) * 0.05)
    ```
 
+### 轨迹详情页"经过区域"道路编号转标牌功能
+
+轨迹详情页（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）的"经过区域"树中，道路编号可以自动转换为对应的道路标志 SVG。
+
+#### 功能说明
+
+- **道路编号转标牌**：将道路编号（如 G221、豫S88）转换为对应颜色的道路标志 SVG
+- **高度对齐**：标牌 SVG 高度与文字高度相同（`height: 1.2em`）
+- **多编号处理**：
+  - **开启标牌时**：逗号分隔的多个编号，标牌间用空格分隔
+  - **关闭标牌时**：多个编号用 ` / ` 分隔显示纯文本（如 "G221 / 豫S88 道路名称"）
+- **未转换回退**：无法转换的编号保持原文本显示
+- **开关控制**：后台管理页面提供配置开关（`show_road_sign_in_region_tree`）
+
+#### 道路编号解析规则
+
+数据库中的 `road_number` 格式可能包含省份前缀（省级高速必须有省份前缀以区分）：
+
+| 数据库格式 | 解析后类型 | sign_type | code | province |
+|-----------|----------|-----------|------|----------|
+| `G221` | 国道 | `way` | `G221` | - |
+| `豫S221` | 省道 | `way` | `S221` | `豫` |
+| `S221` | 省道 | `way` | `S221` | - |
+| `X001` | 县道 | `way` | `X001` | - |
+| `G5` | 国家高速 | `expwy` | `G5` | - |
+| `豫S88` | 省级高速 | `expwy` | `S88` | `豫` |
+| `川SA` | 四川省级高速 | `expwy` | `SA` | `川` |
+
+**判断顺序很重要**：
+
+1. **先匹配普通道路**（G/S/X + 三位数字）——最严格的格式
+2. **再匹配国家高速**（G + 1-4位数字）
+3. **再匹配四川省级高速**（S + 字母 + 可选数字，**仅限四川省**）
+4. **最后匹配省级高速**（S + 1-4位纯数字，**需省份前缀**）
+
+#### 前端实现
+
+**道路编号解析工具** ([`roadSignParser.ts`](frontend/src/utils/roadSignParser.ts)):
+
+```typescript
+export interface ParsedRoadNumber {
+  original: string      // 原始编号，如 "豫S88"
+  sign_type: 'way' | 'expwy'
+  code: string          // 规范化编号，如 "S88"
+  province?: string     // 省份简称，如 "豫"
+}
+
+// 省份简称列表
+const PROVINCES = ['京','津','冀','晋','蒙','辽','吉','黑','沪','苏','浙','皖','闽','赣','鲁','豫','鄂','湘','粤','桂','琼','渝','川','贵','云','藏','陕','甘','青','宁','新']
+
+export function parseRoadNumber(code: string): ParsedRoadNumber | null {
+  const trimmed = code.trim().toUpperCase()
+  if (!trimmed) return null
+
+  // 检查是否有省份前缀（中文省份 + 字母 + 数字）
+  // 关键：使用 [^\x00-\x7F] 匹配中文字符，不能用 [A-Z]
+  const provinceMatch = trimmed.match(/^([^\x00-\x7F])([A-Z])(.+)$/)
+  if (provinceMatch) {
+    const [_, province, letter, number] = provinceMatch
+    const fullCode = letter + number
+
+    if (!PROVINCES.includes(province)) {
+      return parseRoadNumberWithoutProvince(trimmed)
+    }
+
+    // 1. 普通道路：省份 + G/S/X + 三位数字
+    if (/^[GSX]\d{3}$/.test(fullCode)) {
+      return { original: code, sign_type: 'way', code: fullCode }
+    }
+
+    // 2. 四川省级高速（字母格式）
+    if (province === '川' && letter === 'S') {
+      const letterFormatMatch = fullCode.match(/^S([A-Z]\d{0,3})$/)
+      if (letterFormatMatch) {
+        return { original: code, sign_type: 'expwy', code: fullCode, province }
+      }
+    }
+
+    // 3. 省级高速：省份 + S + 1-4位纯数字
+    if (letter === 'S' && /^\d{1,4}$/.test(number)) {
+      return { original: code, sign_type: 'expwy', code: fullCode, province }
+    }
+
+    return parseRoadNumberWithoutProvince(trimmed)
+  }
+
+  return parseRoadNumberWithoutProvince(trimmed)
+}
+```
+
+**SVG 缓存与异步加载** ([`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)):
+
+```typescript
+// 道路标志 SVG 缓存：cacheKey -> svg string
+const roadSignSvgCache = ref<Map<string, string>>(new Map())
+// 加载中的标志（防止重复请求）
+const loadingSigns = ref<Set<string>>(new Set())
+// 强制更新树组件的 key
+const treeForceUpdateKey = ref(0)
+
+// 异步获取道路标志 SVG
+async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
+  // 省级高速需要在缓存键中包含省份，避免冲突（如 豫S88 vs 川S88）
+  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+
+  const cached = roadSignSvgCache.value.get(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: signType,
+      code: code,
+      ...(province && { province }),
+    })
+    const svg = response.svg
+    roadSignSvgCache.value.set(cacheKey, svg)
+    return svg
+  } catch {
+    return null
+  }
+}
+
+// 异步加载道路标志（不阻塞渲染）
+async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
+  const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+
+  // 防止重复加载
+  if (loadingSigns.value.has(key)) {
+    return
+  }
+
+  loadingSigns.value.add(key)
+
+  try {
+    const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+    if (svg) {
+      // 加载成功，强制更新树组件重新渲染
+      treeForceUpdateKey.value++
+    }
+  } finally {
+    loadingSigns.value.delete(key)
+  }
+}
+```
+
+**节点标签渲染**（返回 VNode）:
+
+```vue
+<el-tree :key="treeForceUpdateKey">
+  <template #default="{ data }">
+    <component :is="() => renderNodeLabel(data)" />
+  </template>
+</el-tree>
+```
+
+```typescript
+function renderNodeLabel(node: RegionNode) {
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+
+  // 只处理道路节点且有道路编号
+  if (node.type === 'road' && node.road_number && showSigns) {
+    const roadNumbers = node.road_number.split(',').map(s => s.trim())
+    const contents: (string | ReturnType<typeof h>)[] = []
+
+    roadNumbers.forEach((num, index) => {
+      const parsed = parseRoadNumber(num)
+      if (parsed) {
+        const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+        const svg = roadSignSvgCache.value.get(cacheKey)
+
+        if (svg) {
+          // 渲染 SVG
+          contents.push(h('span', {
+            innerHTML: svg,
+            class: 'road-sign-inline'
+          }))
+        } else {
+          // SVG 未加载，显示文本并触发异步加载
+          contents.push(num)
+          loadRoadSignSvg(parsed)
+        }
+      } else {
+        contents.push(num)
+      }
+
+      // 添加分隔空格
+      if (index < roadNumbers.length - 1) {
+        contents.push(' ')
+      }
+    })
+
+    // 添加道路名称
+    if (node.name && node.name !== '（无名）') {
+      contents.push(' ')
+      contents.push(node.name)
+    }
+
+    return h('span', contents)
+  }
+
+  // 非道路节点或配置关闭，使用原文本
+  return h('span', node.name)
+}
+```
+
+**全局样式**（在 [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) 末尾，非 scoped）:
+
+```css
+<style>
+/* 全局样式：道路标志 SVG 高度控制 */
+.road-sign-inline svg {
+  display: inline-block;
+  vertical-align: middle;
+  height: 1.2em;
+  width: auto;
+}
+</style>
+```
+
+#### 后端配置
+
+**配置字段** ([`schemas/config.py`](backend/app/schemas/config.py)):
+
+```python
+class ConfigResponse(BaseModel):
+    show_road_sign_in_region_tree: bool = True
+
+class PublicConfigResponse(BaseModel):
+    show_road_sign_in_region_tree: bool = True  # 公开配置也包含此字段
+```
+
+**默认值** ([`services/config_service.py`](backend/app/services/config_service.py)):
+
+```python
+DEFAULT_CONFIGS = {
+    "show_road_sign_in_region_tree": True,
+}
+```
+
+**API 返回**：
+
+- 管理员配置 `GET /api/admin/config` 返回完整配置
+- 公开配置 `GET /api/auth/config` 也返回此字段（所有用户可访问）
+
+#### 后台管理界面
+
+在 [`Admin.vue`](frontend/src/views/Admin.vue) 的"系统配置" tab 中添加开关：
+
+```vue
+<div class="form-section">
+  <div class="section-title">显示设置</div>
+  <el-form-item label="道路编号显示标牌">
+    <el-switch v-model="config.show_road_sign_in_region_tree" />
+    <span class="form-tip">开启后，经过区域中的道路编号将显示为对应的道路标志 SVG</span>
+  </el-form-item>
+</div>
+```
+
+#### 关键技术点
+
+1. **中文省份匹配**：使用正则 `/[^\x00-\x7F]/` 匹配非 ASCII 字符（中文），不能用 `[A-Z]`
+2. **省份缓存键**：省级高速的缓存键需包含省份，避免不同省份同编号冲突
+3. **防重复加载**：使用 `loadingSigns` Set 跟踪正在加载的标志，防止内存溢出
+4. **强制更新**：SVG 加载完成后通过 `treeForceUpdateKey` 强制树组件重新渲染
+5. **全局样式**：SVG 高度控制必须用全局样式（非 scoped），直接选择 `.road-sign-inline svg`
+6. **判断顺序**：先判断普通道路（三位数字），再判断高速（1-4位数字），避免歧义
+7. **配置响应式更新**：
+   - Store 提供 `config` computed getter，优先返回 `adminConfig`，回退到 `publicConfig`
+   - 配置更新时同步更新两个配置对象
+   - 组件通过 `configStore.config` 访问配置，自动响应变化
+
+#### 涉及文件
+
+- [`frontend/src/utils/roadSignParser.ts`](frontend/src/utils/roadSignParser.ts) - 道路编号解析工具
+- [`frontend/src/views/TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 主要实现
+- [`frontend/src/views/Admin.vue`](frontend/src/views/Admin.vue) - 配置开关
+- [`frontend/src/api/admin.ts`](frontend/src/api/admin.ts) - 配置接口
+- [`frontend/src/api/auth.ts`](frontend/src/api/auth.ts) - 公开配置接口（包含 `show_road_sign_in_region_tree`）
+- [`frontend/src/stores/config.ts`](frontend/src/stores/config.ts) - 配置 store（提供 `config` getter）
+- [`backend/app/schemas/config.py`](backend/app/schemas/config.py) - 配置 schema
+- [`backend/app/services/config_service.py`](backend/app/services/config_service.py) - 默认配置
+- [`backend/app/api/auth.py`](backend/app/api/auth.py) - 公开配置 API（返回 `show_road_sign_in_region_tree`）
+
 ### 道路标志生成功能
 
 首页提供道路标志 SVG 生成功能，支持普通道路和高速公路标志。

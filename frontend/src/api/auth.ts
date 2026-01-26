@@ -36,6 +36,7 @@ export interface PublicConfig {
   invite_code_required: boolean
   registration_enabled: boolean
   font_config: FontConfig
+  show_road_sign_in_region_tree?: boolean
 }
 
 // API 方法

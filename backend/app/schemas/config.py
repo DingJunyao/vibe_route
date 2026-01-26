@@ -69,6 +69,7 @@ class ConfigResponse(BaseModel):
     geocoding_config: dict
     map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
     font_config: FontConfig = Field(default_factory=FontConfig)
+    show_road_sign_in_region_tree: bool = True
 
     class Config:
         from_attributes = True
@@ -83,6 +84,7 @@ class ConfigUpdate(BaseModel):
     geocoding_config: Optional[dict] = None
     map_layers: Optional[Dict[str, Dict]] = None
     font_config: Optional[FontConfig] = None
+    show_road_sign_in_region_tree: Optional[bool] = None
 
 
 class PublicConfigResponse(BaseModel):
@@ -92,6 +94,7 @@ class PublicConfigResponse(BaseModel):
     invite_code_required: bool
     registration_enabled: bool
     font_config: FontConfig = Field(default_factory=FontConfig)
+    show_road_sign_in_region_tree: bool = True
 
 
 class InviteCodeCreate(BaseModel):

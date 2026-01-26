@@ -21,6 +21,7 @@ class ConfigService:
         "invite_code_required": False,
         "default_map_provider": "osm",
         "geocoding_provider": "nominatim",
+        "show_road_sign_in_region_tree": True,
         "geocoding_config": {
             "nominatim": {
                 "url": "http://localhost:8080",

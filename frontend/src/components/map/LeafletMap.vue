@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, Ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'proj4leaflet'
@@ -45,6 +45,8 @@ import 'leaflet.chinatmsproviders'
 import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
 import type { MapLayerConfig, CRSType } from '@/api/admin'
+import { roadSignApi } from '@/api/roadSign'
+import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 
 // 类型定义
 interface Point {
@@ -122,6 +124,16 @@ const customTooltip = ref<HTMLElement | null>(null)  // 自定义 tooltip 元素
 const lastHoverIndex = ref(-1)
 const currentHighlightPoint = ref<{ index: number; position: [number, number] } | null>(null)  // 当前高亮的点（detail 模式）
 const currentHoverTrack = ref<{ trackId: number; position: [number, number]; track: Track } | null>(null)  // 当前悬停的轨迹（home 模式）
+
+// 道路标志 SVG 缓存
+const roadSignSvgCache = ref<Map<string, string>>(new Map())
+const loadingSigns = ref<Set<string>>(new Set())
+const currentTooltipPoint = ref<Point | null>(null)  // 当前 tooltip 显示的点（用于异步更新）
+const tooltipContentCache = ref<Map<number, string>>(new Map())  // 缓存每个点的 tooltip 内容
+
+// 节流优化：requestAnimationFrame ID
+let rafId: number | null = null
+let pendingUpdate: { pointPixel: L.Point; containerSize: { x: number; y: number } } | null = null
 
 // 当前底图层 ID
 const currentLayerId = ref<string>(
@@ -244,39 +256,71 @@ function initMap() {
     // 更新或隐藏标记
     if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
       const point = trackPoints.value[nearestIndex]
-      // 如果是同一个点，跳过更新
-      if (nearestIndex !== lastHoverIndex.value) {
+
+      // 检查点索引是否变化
+      const indexChanged = nearestIndex !== lastHoverIndex.value
+
+      if (indexChanged) {
         lastHoverIndex.value = nearestIndex
 
-        // 更新标记位置并显示
-        if (mouseMarker.value) {
-          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
-          mouseMarker.value.addTo(map.value!)
+        // 生成或获取缓存的 tooltip 内容
+        let content = tooltipContentCache.value.get(nearestIndex)
+        if (!content) {
+          const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+          const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+          const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+          const locationResult = formatLocationInfo(point)
+          const locationHtml = locationResult.html || ''
+
+          content = `
+            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+              ${locationHtml ? `<div style="color: #666;">${locationHtml}</div>` : ''}
+              <div style="color: #666;">时间: ${timeStr}</div>
+              <div style="color: #666;">速度: ${speed}</div>
+              <div style="color: #666;">海拔: ${elevation}</div>
+            </div>
+          `
+          tooltipContentCache.value.set(nearestIndex, content)
+
+          // 异步加载道路标志 SVG
+          if (locationResult.needLoad.length > 0) {
+            nextTick(async () => {
+              const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+              if (loaded) {
+                // 清除缓存，下次会重新生成
+                tooltipContentCache.value.delete(nearestIndex)
+                // 如果当前还在显示同一个点，更新 tooltip
+                if (lastHoverIndex.value === nearestIndex) {
+                  // 强制下次鼠标移动时重新生成内容
+                  lastHoverIndex.value = -1
+                }
+              }
+            })
+          }
         }
 
-        // 更新提示框内容
-        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
-        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
-        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-        const location = formatLocationInfo(point)
-
-        const content = `
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-          ${location ? `<div style="color: #666;">${location}</div>` : ''}
-          <div style="color: #666;">时间: ${timeStr}</div>
-          <div style="color: #666;">速度: ${speed}</div>
-          <div style="color: #666;">海拔: ${elevation}</div>
-        `
-
-        // 使用自定义 tooltip
+        // 更新 tooltip 内容（只在索引变化时）
         if (customTooltip.value && mapContainer) {
-          const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-          const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
-          updateCustomTooltip(content, pointPixel, containerSize)
+          customTooltip.value.innerHTML = content
+          customTooltip.value.style.display = 'block'
         }
 
         // 发射事件
         emit('point-hover', point, nearestIndex)
+      }
+
+      // 每次鼠标移动都更新标记位置（轻量级操作）
+      if (mouseMarker.value) {
+        mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        mouseMarker.value.addTo(map.value!)
+      }
+
+      // 每次鼠标移动都更新 tooltip 位置（轻量级操作）
+      if (customTooltip.value && mapContainer) {
+        const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
+        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        updateCustomTooltipPosition(pointPixel, containerSize)
       }
     } else {
       hideMarker()
@@ -668,12 +712,13 @@ function initMap() {
           const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
           const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
           const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-          const location = formatLocationInfo(point)
+          const locationResult = formatLocationInfo(point)
+          const locationHtml = locationResult.html || ''
 
           const content = `
             <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-              ${location ? `<div style="color: #666;">${location}</div>` : ''}
+              ${locationHtml ? `<div style="color: #666;">${locationHtml}</div>` : ''}
               <div style="color: #666;">时间: ${timeStr}</div>
               <div style="color: #666;">速度: ${speed}</div>
               <div style="color: #666;">海拔: ${elevation}</div>
@@ -977,39 +1022,71 @@ function recreateMap() {
     // 更新或隐藏标记
     if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.value.length) {
       const point = trackPoints.value[nearestIndex]
-      // 如果是同一个点，跳过更新
-      if (nearestIndex !== lastHoverIndex.value) {
+
+      // 检查点索引是否变化
+      const indexChanged = nearestIndex !== lastHoverIndex.value
+
+      if (indexChanged) {
         lastHoverIndex.value = nearestIndex
 
-        // 更新标记位置并显示
-        if (mouseMarker.value) {
-          mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
-          mouseMarker.value.addTo(map.value!)
+        // 生成或获取缓存的 tooltip 内容
+        let content = tooltipContentCache.value.get(nearestIndex)
+        if (!content) {
+          const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
+          const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
+          const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
+          const locationResult = formatLocationInfo(point)
+          const locationHtml = locationResult.html || ''
+
+          content = `
+            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+              ${locationHtml ? `<div style="color: #666;">${locationHtml}</div>` : ''}
+              <div style="color: #666;">时间: ${timeStr}</div>
+              <div style="color: #666;">速度: ${speed}</div>
+              <div style="color: #666;">海拔: ${elevation}</div>
+            </div>
+          `
+          tooltipContentCache.value.set(nearestIndex, content)
+
+          // 异步加载道路标志 SVG
+          if (locationResult.needLoad.length > 0) {
+            nextTick(async () => {
+              const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+              if (loaded) {
+                // 清除缓存，下次会重新生成
+                tooltipContentCache.value.delete(nearestIndex)
+                // 如果当前还在显示同一个点，更新 tooltip
+                if (lastHoverIndex.value === nearestIndex) {
+                  // 强制下次鼠标移动时重新生成内容
+                  lastHoverIndex.value = -1
+                }
+              }
+            })
+          }
         }
 
-        // 更新提示框内容
-        const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
-        const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
-        const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-        const location = formatLocationInfo(point)
-
-        const content = `
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-          ${location ? `<div style="color: #666;">${location}</div>` : ''}
-          <div style="color: #666;">时间: ${timeStr}</div>
-          <div style="color: #666;">速度: ${speed}</div>
-          <div style="color: #666;">海拔: ${elevation}</div>
-        `
-
-        // 使用自定义 tooltip
+        // 更新 tooltip 内容（只在索引变化时）
         if (customTooltip.value && mapContainer) {
-          const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-          const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
-          updateCustomTooltip(content, pointPixel, containerSize)
+          customTooltip.value.innerHTML = content
+          customTooltip.value.style.display = 'block'
         }
 
         // 发射事件
         emit('point-hover', point, nearestIndex)
+      }
+
+      // 每次鼠标移动都更新标记位置（轻量级操作）
+      if (mouseMarker.value) {
+        mouseMarker.value.setLatLng([nearestPosition[1], nearestPosition[0]])
+        mouseMarker.value.addTo(map.value!)
+      }
+
+      // 每次鼠标移动都更新 tooltip 位置（轻量级操作）
+      if (customTooltip.value && mapContainer) {
+        const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
+        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        updateCustomTooltipPosition(pointPixel, containerSize)
       }
     } else {
       hideMarker()
@@ -1401,12 +1478,13 @@ function recreateMap() {
           const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
           const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
           const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-          const location = formatLocationInfo(point)
+          const locationResult = formatLocationInfo(point)
+          const locationHtml = locationResult.html || ''
 
           const content = `
             <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-              ${location ? `<div style="color: #666;">${location}</div>` : ''}
+              ${locationHtml ? `<div style="color: #666;">${locationHtml}</div>` : ''}
               <div style="color: #666;">时间: ${timeStr}</div>
               <div style="color: #666;">速度: ${speed}</div>
               <div style="color: #666;">海拔: ${elevation}</div>
@@ -1487,29 +1565,126 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
   return null
 }
 
-// 格式化地理信息显示
-function formatLocationInfo(point: Point): string {
-  const parts: string[] = []
+// 清理 SVG 字符串
+function sanitizeSvg(svg: string): string {
+  // 只清理空白字符，不修改 SVG 结构
+  // SVG 的显示样式由外层 span 的内联样式控制
+  return svg.replace(/\s+/g, ' ').trim()
+}
 
-  // 行政区划
-  if (point.province) parts.push(point.province)
-  if (point.city && point.city !== point.province) parts.push(point.city)
-  if (point.district) parts.push(point.district)
+// 异步获取道路标志 SVG
+async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
+  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+  const cached = roadSignSvgCache.value.get(cacheKey)
+  if (cached) {
+    // 确保缓存的值是字符串
+    return typeof cached === 'string' ? cached : null
+  }
+
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: signType,
+      code: code,
+      ...(province && { province }),
+    })
+    const svg = response.svg
+    // 确保 svg 是字符串类型并清理
+    if (typeof svg === 'string') {
+      const cleanSvg = sanitizeSvg(svg)
+      roadSignSvgCache.value.set(cacheKey, cleanSvg)
+      return cleanSvg
+    } else {
+      return null
+    }
+  } catch {
+    return null
+  }
+}
+
+// 格式化地理信息显示
+function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadNumber[] } {
+  const parts: string[] = []
+  const needLoad: ParsedRoadNumber[] = []  // 需要异步加载的道路编号
+
+  // 行政区划 - 确保是字符串
+  const province = point.province ? String(point.province) : ''
+  const city = point.city ? String(point.city) : ''
+  const district = point.district ? String(point.district) : ''
+
+  if (province) parts.push(province)
+  if (city && city !== province) parts.push(city)
+  if (district) parts.push(district)
 
   // 道路信息
   const roadParts: string[] = []
   if (point.road_number) {
-    roadParts.push(point.road_number.replace(/,/g, ' / '))
+    const roadNumberStr = String(point.road_number)
+    const roadNumbers = roadNumberStr.split(',').map(s => s.trim())
+    const signContents: string[] = []
+
+    for (const num of roadNumbers) {
+      const parsed = parseRoadNumber(num)
+      if (parsed) {
+        const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+        const svg = roadSignSvgCache.value.get(cacheKey)
+
+        if (svg && typeof svg === 'string') {
+          // 使用 span 包装 SVG，添加内联样式用于 ECharts tooltip
+          signContents.push(`<span class="road-sign-inline" style="display: inline-flex; align-items: center; vertical-align: middle; line-height: 1; margin: 0 1px;">${svg}</span>`)
+        } else {
+          // 显示文本并记录需要加载
+          signContents.push(num)
+          needLoad.push(parsed)
+        }
+      } else {
+        signContents.push(num)
+      }
+    }
+
+    if (signContents.length > 0) {
+      roadParts.push(signContents.join(' '))
+    }
   }
   if (point.road_name) {
-    roadParts.push(point.road_name)
+    roadParts.push(String(point.road_name))
   }
 
   if (roadParts.length > 0) {
     parts.push(roadParts.join(' '))
   }
 
-  return parts.join(' ')
+  // 确保返回的 html 是字符串
+  const html = parts.join(' ')
+  return { html: html || '', needLoad }
+}
+
+// 异步加载道路编号的 SVG
+async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<boolean> {
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+  if (!showSigns || parsedList.length === 0) return false
+
+  let loaded = false
+  for (const parsed of parsedList) {
+    const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+    if (loadingSigns.value.has(key)) continue
+
+    loadingSigns.value.add(key)
+    try {
+      const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+      if (svg) {
+        // 存入缓存（getRoadSignSvg 内部已经存了，但这里确保一下）
+        if (!roadSignSvgCache.value.has(key)) {
+          roadSignSvgCache.value.set(key, svg)
+        }
+        loaded = true
+      }
+    } finally {
+      loadingSigns.value.delete(key)
+    }
+  }
+
+  return loaded
 }
 
 // 计算两点距离
@@ -1583,18 +1758,24 @@ function updateTooltipForPoint(index: number, point: Point) {
   const position = currentHighlightPoint.value.position
   const pointLatLng: L.LatLngExpression = [position[1], position[0]]
 
+  // 保存当前显示的点（用于异步更新）
+  currentTooltipPoint.value = point
+
   // 创建 tooltip 内容
   const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
   const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-  const location = formatLocationInfo(point)
+  const locationResult = formatLocationInfo(point)
+  const locationHtml = locationResult.html || ''
 
   const content = `
-    <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
-    ${location ? `<div style="color: #666;">${location}</div>` : ''}
-    <div style="color: #666;">时间: ${timeStr}</div>
-    <div style="color: #666;">速度: ${speed}</div>
-    <div style="color: #666;">海拔: ${elevation}</div>
+    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
+      ${locationHtml ? `<div style="color: #666;">${locationHtml}</div>` : ''}
+      <div style="color: #666;">时间: ${timeStr}</div>
+      <div style="color: #666;">速度: ${speed}</div>
+      <div style="color: #666;">海拔: ${elevation}</div>
+    </div>
   `
 
   // 获取点的像素位置和容器尺寸
@@ -1603,11 +1784,23 @@ function updateTooltipForPoint(index: number, point: Point) {
 
   // 更新自定义 tooltip
   updateCustomTooltip(content, pointPixel, containerSize)
+
+  // 异步加载道路标志 SVG
+  if (locationResult.needLoad.length > 0) {
+    nextTick(async () => {
+      const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+      // 如果加载成功且当前还在显示同一个点，则更新 tooltip
+      if (loaded && currentTooltipPoint.value === point) {
+        updateTooltipForPoint(index, point)
+      }
+    })
+  }
 }
 
 // 隐藏标记
 function hideMarker() {
   currentHighlightPoint.value = null
+  currentTooltipPoint.value = null
   currentHoverTrack.value = null
   if (mouseMarker.value) {
     map.value?.removeLayer(mouseMarker.value)
@@ -1651,44 +1844,62 @@ function createCustomTooltip() {
   customTooltip.value = tooltipDiv
 }
 
+// 缓存 tooltip 尺寸，避免频繁调用 getBoundingClientRect 引起 reflow
+let cachedTooltipWidth = 0
+let cachedTooltipHeight = 0
+
+// 只更新自定义 tooltip 的位置（不更新内容，用于频繁调用）
+// 使用 CSS transform 进行位移，避免频繁计算
+function updateCustomTooltipPosition(pointPixel: L.Point, containerSize: { x: number; y: number }) {
+  if (!customTooltip.value || customTooltip.value.style.display === 'none') return
+
+  // 取消之前的 RAF
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+  }
+
+  // 保存待处理的更新
+  pendingUpdate = { pointPixel, containerSize }
+
+  // 使用 RAF 节流
+  rafId = requestAnimationFrame(() => {
+    if (!pendingUpdate || !customTooltip.value) return
+
+    const tooltip = customTooltip.value
+    // 直接设置位置，使用 transform 居中
+    tooltip.style.left = `${pendingUpdate.pointPixel.x}px`
+    tooltip.style.top = `${pendingUpdate.pointPixel.y}px`
+    tooltip.style.transform = 'translate(-50%, -100%) translateY(-10px)'
+
+    rafId = null
+    pendingUpdate = null
+  })
+}
+
 // 更新自定义 tooltip 位置和内容
 function updateCustomTooltip(content: string, pointPixel: L.Point, containerSize: { x: number; y: number }) {
   if (!customTooltip.value) return
+
+  // 取消之前的 RAF
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+  pendingUpdate = null
 
   const tooltip = customTooltip.value
   tooltip.innerHTML = content
   tooltip.style.display = 'block'
 
-  // 获取 tooltip 实际尺寸
+  // 内容更新后，重新获取并缓存尺寸
   const tooltipRect = tooltip.getBoundingClientRect()
-  const tooltipWidth = tooltipRect.width
-  const tooltipHeight = tooltipRect.height
-  const padding = 10  // 边距
+  cachedTooltipWidth = tooltipRect.width
+  cachedTooltipHeight = tooltipRect.height
 
-  // 智能选择显示位置
-  // 优先级：上 > 下 > 右 > 左
-  let positionX = pointPixel.x
-  let positionY = pointPixel.y - tooltipHeight - 10  // 默认在上方
-
-  // 检查上方空间
-  if (pointPixel.y - tooltipHeight < padding) {
-    // 上方空间不足，尝试下方
-    if (pointPixel.y + tooltipHeight + 10 < containerSize.y - padding) {
-      positionY = pointPixel.y + 10  // 显示在下方
-    }
-  }
-
-  // 检查左右空间
-  if (pointPixel.x - tooltipWidth / 2 < padding) {
-    // 左边空间不足，向右偏移
-    positionX = padding + tooltipWidth / 2
-  } else if (pointPixel.x + tooltipWidth / 2 > containerSize.x - padding) {
-    // 右边空间不足，向左偏移
-    positionX = containerSize.x - padding - tooltipWidth / 2
-  }
-
-  tooltip.style.left = `${positionX - tooltipWidth / 2}px`
-  tooltip.style.top = `${positionY}px`
+  // 设置位置和 transform
+  tooltip.style.left = `${pointPixel.x}px`
+  tooltip.style.top = `${pointPixel.y}px`
+  tooltip.style.transform = 'translate(-50%, -100%) translateY(-10px)'
 }
 
 // 绘制轨迹
@@ -1977,5 +2188,37 @@ onUnmounted(() => {
   border: 2px solid #fff;
   border-radius: 50%;
   box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+}
+
+/* 道路标志 SVG 行内显示 */
+:deep(.road-sign-inline) {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  line-height: 1;
+  margin: 0 1px;
+}
+
+:deep(.road-sign-inline svg) {
+  display: block;
+  height: 1.4em;
+  width: auto;
+}
+</style>
+
+<!-- 全局样式：用于动态插入的 tooltip 内容 -->
+<style>
+.road-sign-inline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  line-height: 1;
+  margin: 0 1px;
+}
+
+.road-sign-inline svg {
+  display: block;
+  height: 1.4em;
+  width: auto;
 }
 </style>

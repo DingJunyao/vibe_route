@@ -40,6 +40,7 @@ export const useConfigStore = defineStore('config', () => {
             invite_code_required: data.invite_code_required,
             registration_enabled: data.registration_enabled,
             font_config: data.font_config,
+            show_road_sign_in_region_tree: data.show_road_sign_in_region_tree,
           }
           return data
         })
@@ -123,6 +124,7 @@ export const useConfigStore = defineStore('config', () => {
     geocoding_config?: Record<string, unknown>
     map_layers?: Record<string, unknown>
     font_config?: { font_a?: string; font_b?: string; font_c?: string }
+    show_road_sign_in_region_tree?: boolean
   }): Promise<SystemConfig> {
     const result = await adminApi.updateConfig(data)
     adminConfig.value = result
@@ -132,9 +134,13 @@ export const useConfigStore = defineStore('config', () => {
       invite_code_required: result.invite_code_required,
       registration_enabled: result.registration_enabled,
       font_config: result.font_config,
+      show_road_sign_in_region_tree: result.show_road_sign_in_region_tree,
     }
     return result
   }
+
+  // 统一的配置 getter（优先使用 adminConfig，回退到 publicConfig）
+  const config = computed(() => adminConfig.value || publicConfig.value)
 
   // 初始化时获取配置（不等待，让组件自己等待）
   fetchConfig()
@@ -142,6 +148,7 @@ export const useConfigStore = defineStore('config', () => {
   return {
     publicConfig,
     adminConfig,
+    config,
     loading,
     fetchConfig,
     refreshConfig,

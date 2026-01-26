@@ -313,6 +313,7 @@ async def get_config(
         geocoding_config=configs.get("geocoding_config", {}),
         map_layers=configs.get("map_layers", {}),
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
+        show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
     )
 
 
@@ -327,9 +328,8 @@ async def update_config(
     """
     update_data = config_update.model_dump(exclude_unset=True)
 
-    # 处理字体配置
-    if "font_config" in update_data and update_data["font_config"]:
-        update_data["font_config"] = update_data["font_config"].model_dump()
+    # 注意：font_config 此时已经是字典，不需要再调用 model_dump()
+    # ConfigUpdate 中的 FontConfig 会被自动转换为字典
 
     configs = await config_service.update_config(db, update_data, current_admin.id)
 
@@ -347,6 +347,7 @@ async def update_config(
         geocoding_config=configs.get("geocoding_config", {}),
         map_layers=configs.get("map_layers", {}),
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
+        show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
     )
 
 

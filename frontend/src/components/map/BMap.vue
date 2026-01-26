@@ -5,8 +5,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useConfigStore } from '@/stores/config'
+import { roadSignApi } from '@/api/roadSign'
+import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 
 // 类型定义
 interface Point {
@@ -29,8 +31,9 @@ interface Point {
 }
 
 // 格式化地理信息显示
-function formatLocationInfo(point: Point): string {
+function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadNumber[] } {
   const parts: string[] = []
+  const needLoad: ParsedRoadNumber[] = []
 
   // 行政区划
   if (point.province) parts.push(point.province)
@@ -40,7 +43,29 @@ function formatLocationInfo(point: Point): string {
   // 道路信息
   const roadParts: string[] = []
   if (point.road_number) {
-    roadParts.push(point.road_number.replace(/,/g, ' / '))
+    const roadNumbers = point.road_number.split(',').map(s => s.trim())
+    const signContents: string[] = []
+
+    for (const num of roadNumbers) {
+      const parsed = parseRoadNumber(num)
+      if (parsed) {
+        const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+        const svg = roadSignSvgCache.get(cacheKey)
+
+        if (svg) {
+          signContents.push(`<span class="road-sign-inline">${svg}</span>`)
+        } else {
+          signContents.push(num)
+          needLoad.push(parsed)
+        }
+      } else {
+        signContents.push(num)
+      }
+    }
+
+    if (signContents.length > 0) {
+      roadParts.push(signContents.join(' '))
+    }
   }
   if (point.road_name) {
     roadParts.push(point.road_name)
@@ -50,7 +75,52 @@ function formatLocationInfo(point: Point): string {
     parts.push(roadParts.join(' '))
   }
 
-  return parts.join(' ')
+  return { html: parts.join(' '), needLoad }
+}
+
+// 异步获取道路标志 SVG
+async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
+  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+  const cached = roadSignSvgCache.get(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: signType,
+      code: code,
+      ...(province && { province }),
+    })
+    const svg = response.svg
+    roadSignSvgCache.set(cacheKey, svg)
+    return svg
+  } catch {
+    return null
+  }
+}
+
+// 异步加载道路编号的 SVG
+async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<boolean> {
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+  if (!showSigns || parsedList.length === 0) return false
+
+  let loaded = false
+  for (const parsed of parsedList) {
+    const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+    if (loadingSigns.has(key)) continue
+
+    loadingSigns.add(key)
+    try {
+      const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+      if (svg) {
+        loaded = true
+      }
+    } finally {
+      loadingSigns.delete(key)
+    }
+  }
+
+  return loaded
 }
 
 // 定义 emit 事件
@@ -100,6 +170,11 @@ let trackPath: { lng: number; lat: number }[] = []
 let lastHoverIndex = -1
 // home 模式：按轨迹分开存储
 const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
+
+// 道路标志 SVG 缓存
+const roadSignSvgCache = new Map<string, string>()
+const loadingSigns = new Set<string>()
+let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
 
 // 初始化
 async function init() {
@@ -338,14 +413,17 @@ function updateCustomTooltip(content: string, pointPixel: { x: number; y: number
 function showTooltip(nearestIndex: number, point: Point, position: { lng: number; lat: number }) {
   if (!BMapInstance || !customTooltip || !mapContainer.value) return
 
+  // 保存当前显示的点（用于异步更新）
+  currentTooltipPoint = point
+
   const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
   const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
-  const location = formatLocationInfo(point)
+  const locationResult = formatLocationInfo(point)
 
   const content = `
     <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-    ${location ? `<div style="color: #666;">${location}</div>` : ''}
+    ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
     <div style="color: #666;">时间: ${timeStr}</div>
     <div style="color: #666;">速度: ${speed}</div>
     <div style="color: #666;">海拔: ${elevation}</div>
@@ -359,6 +437,16 @@ function showTooltip(nearestIndex: number, point: Point, position: { lng: number
   if (pointPixel) {
     const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
     updateCustomTooltip(content, pointPixel, containerSize)
+  }
+
+  // 异步加载道路标志 SVG
+  if (locationResult.needLoad.length > 0) {
+    nextTick(async () => {
+      const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+      if (loaded && currentTooltipPoint === point) {
+        showTooltip(nearestIndex, point, position)
+      }
+    })
   }
 }
 
@@ -408,6 +496,7 @@ function hideMarker() {
 
   lastHoverIndex = -1
   currentHighlightPoint = null
+  currentTooltipPoint = null
 
   if (mouseMarker && BMapInstance) {
     try {
@@ -472,11 +561,11 @@ async function initMap() {
           const timeStr = currentHighlightPoint.point.time ? new Date(currentHighlightPoint.point.time).toLocaleTimeString('zh-CN') : '-'
           const elevation = currentHighlightPoint.point.elevation != null ? `${currentHighlightPoint.point.elevation.toFixed(1)} m` : '-'
           const speed = currentHighlightPoint.point.speed != null ? `${(currentHighlightPoint.point.speed * 3.6).toFixed(1)} km/h` : '-'
-          const location = formatLocationInfo(currentHighlightPoint.point)
+          const locationResult = formatLocationInfo(currentHighlightPoint.point)
 
           const content = `
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${currentHighlightPoint.index}</div>
-            ${location ? `<div style="color: #666;">${location}</div>` : ''}
+            ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
             <div style="color: #666;">时间: ${timeStr}</div>
             <div style="color: #666;">速度: ${speed}</div>
             <div style="color: #666;">海拔: ${elevation}</div>
@@ -1179,5 +1268,22 @@ defineExpose({
   bottom: 0px !important;
   top: 0px !important;
 } */
+
+/* 道路标志 SVG 行内显示 */
+:deep(.road-sign-inline),
+:deep(.BMap_bubble_content .road-sign-inline) {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+  line-height: 1;
+  margin: 0 1px;
+}
+
+:deep(.road-sign-inline svg),
+:deep(.BMap_bubble_content .road-sign-inline svg) {
+  display: block;
+  height: 1.4em;
+  width: auto;
+}
 
 </style>

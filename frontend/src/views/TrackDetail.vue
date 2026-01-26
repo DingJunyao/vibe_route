@@ -256,6 +256,7 @@
                         default-expand-all
                         :expand-on-click-node="false"
                         node-key="id"
+                        :key="treeForceUpdateKey"
                         @node-click="handleRegionNodeClick"
                       >
                         <template #default="{ data }">
@@ -268,7 +269,7 @@
                                 <Odometer v-else-if="data.type === 'road'" />
                               </el-icon>
                               <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
-                              <span v-else class="node-name">{{ formatNodeLabel(data) }}</span>
+                              <component v-else :is="() => renderNodeLabel(data)" />
                             </div>
                             <div class="node-info">
                               <span class="node-distance">{{ formatDistance(data.distance) }}</span>
@@ -455,9 +456,10 @@
                     default-expand-all
                     :expand-on-click-node="false"
                     node-key="id"
+                    :key="treeForceUpdateKey"
                     @node-click="handleRegionNodeClick"
                   >
-                    <template #default="{ node, data }">
+                    <template #default="{ data }">
                       <div class="region-tree-node">
                         <div class="node-label">
                           <el-icon class="node-icon" :class="`icon-${data.type}`">
@@ -467,7 +469,7 @@
                             <Odometer v-else-if="data.type === 'road'" />
                           </el-icon>
                           <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
-                          <span v-else class="node-name">{{ formatNodeLabel(data) }}</span>
+                          <component v-else :is="() => renderNodeLabel(data)" />
                         </div>
                         <div class="node-info">
                           <span class="node-distance">{{ formatDistance(data.distance) }}</span>
@@ -649,7 +651,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -676,10 +678,14 @@ import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
+import { roadSignApi } from '@/api/roadSign'
+import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
@@ -736,6 +742,13 @@ const regionStats = ref<{ province: number; city: number; district: number; road
   district: 0,
   road: 0,
 })
+
+// 道路标志 SVG 缓存：key 为 `${sign_type}:${code}`，value 为 SVG 字符串
+const roadSignSvgCache = ref<Map<string, string>>(new Map())
+// 正在加载的道路标志（防止重复加载）
+const loadingSigns = ref<Set<string>>(new Set())
+// 强制更新树组件的 key（当 SVG 加载完成后）
+const treeForceUpdateKey = ref(0)
 
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
@@ -873,6 +886,115 @@ function formatNodeLabel(node: RegionNode): string {
   }
   // 非道路节点或没有道路编号，直接返回名称
   return node.name
+}
+
+// ========== 道路标志 SVG 相关 ==========
+
+/**
+ * 异步获取道路标志 SVG
+ * @param code 道路编号，如 "S88"
+ * @param sign_type 标志类型 'way' 或 'expwy'
+ * @param province 省份简称（仅省级高速需要）
+ * @returns SVG 字符串，失败返回 null
+ */
+async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
+  // 缓存 key 包含省份（省级高速需要省份参数）
+  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+
+  // 检查缓存
+  const cached = roadSignSvgCache.value.get(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: signType,
+      code: code,
+      ...(province && { province }),
+    })
+    const svg = response.svg
+    roadSignSvgCache.value.set(cacheKey, svg)
+    return svg
+  } catch {
+    // 生成失败，返回 null 使用文本回退
+    return null
+  }
+}
+
+/**
+ * 异步加载单个道路编号的 SVG（不阻塞渲染）
+ * @param parsed 解析后的道路编号信息
+ */
+async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
+  // 缓存 key 包含省份（省级高速需要）
+  const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+
+  // 防止重复加载
+  if (loadingSigns.value.has(key)) {
+    return
+  }
+
+  loadingSigns.value.add(key)
+
+  try {
+    const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+    if (svg) {
+      // 触发树组件重新渲染
+      treeForceUpdateKey.value++
+    }
+  } catch {
+    // 生成失败，忽略错误
+  } finally {
+    loadingSigns.value.delete(key)
+  }
+}
+
+/**
+ * 渲染节点标签（支持 SVG 标牌）
+ * 返回 VNode
+ */
+function renderNodeLabel(node: RegionNode) {
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+
+  // 处理道路节点且有道路编号
+  if (node.type === 'road' && node.road_number) {
+    const roadNumbers = node.road_number.split(',').map(s => s.trim())
+    const contents: (string | ReturnType<typeof h>)[] = []
+
+    if (showSigns) {
+      // 开启标牌模式：尝试渲染 SVG
+      roadNumbers.forEach((num, index) => {
+        const parsed = parseRoadNumber(num)
+        if (parsed) {
+          const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+          const svg = roadSignSvgCache.value.get(cacheKey)
+          if (svg) {
+            contents.push(h('span', { innerHTML: svg, class: 'road-sign-inline' }))
+          } else {
+            contents.push(num)
+            loadRoadSignSvg(parsed)
+          }
+        } else {
+          contents.push(num)
+        }
+        if (index < roadNumbers.length - 1) contents.push(' ')
+      })
+    } else {
+      // 关闭标牌模式：显示纯文本编号
+      contents.push(roadNumbers.join(' / '))
+    }
+
+    // 添加道路名称
+    if (node.name && node.name !== '（无名）') {
+      contents.push(' ')
+      contents.push(node.name)
+    }
+
+    return h('span', contents)
+  }
+
+  // 非道路节点，使用原文本
+  return h('span', node.name)
 }
 
 // 格式化距离
@@ -1921,6 +2043,21 @@ onUnmounted(() => {
   color: #303133;
 }
 
+/* 行内道路标志 SVG */
+.road-sign-inline {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+  margin: 0 1px;
+}
+
+.road-sign-inline :deep(svg) {
+  display: inline-block;
+  vertical-align: middle;
+  height: 1em;
+  width: auto;
+}
+
 .node-info {
   display: flex;
   align-items: center;
@@ -2398,5 +2535,15 @@ onUnmounted(() => {
     width: 80px !important;
     font-size: 14px;
   }
+}
+</style>
+
+<style>
+/* 全局样式：道路标志 SVG 高度控制 */
+.road-sign-inline svg {
+  display: inline-block;
+  vertical-align: middle;
+  height: 1.4em;
+  width: auto;
 }
 </style>
