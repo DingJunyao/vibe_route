@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from typing import Optional, List, Literal, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class MapProvider(str):
@@ -71,6 +71,8 @@ class PublicConfigResponse(BaseModel):
     """公开配置响应 schema（普通用户可访问）"""
     default_map_provider: str
     map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
+    invite_code_required: bool
+    registration_enabled: bool
 
 
 class InviteCodeCreate(BaseModel):
@@ -90,6 +92,13 @@ class InviteCodeResponse(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime]
     is_valid: bool
+
+    @field_serializer('created_at', 'expires_at')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串（UTC）"""
+        if dt is None:
+            return None
+        return dt.isoformat() + '+00:00'
 
     class Config:
         from_attributes = True

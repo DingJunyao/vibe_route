@@ -33,6 +33,8 @@ export interface AuthResponse {
 export interface PublicConfig {
   default_map_provider: string
   map_layers: Record<string, MapLayerConfig>
+  invite_code_required: boolean
+  registration_enabled: boolean
 }
 
 // API 方法

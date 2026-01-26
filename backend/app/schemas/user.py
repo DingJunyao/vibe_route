@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_serializer
 
 
 class UserBase(BaseModel):
@@ -42,6 +42,11 @@ class UserResponse(UserBase):
     is_admin: bool
     is_active: bool
     created_at: datetime
+
+    @field_serializer('created_at')
+    def serialize_datetime(self, dt: datetime) -> str:
+        """序列化 datetime 为带时区的 ISO 格式字符串（UTC）"""
+        return dt.isoformat() + '+00:00'
 
     class Config:
         from_attributes = True

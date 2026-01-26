@@ -59,14 +59,13 @@ async def register(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="请提供邀请码",
             )
+        # 验证邀请码是否有效（不消耗）
         is_valid = await config_service.validate_invite_code(db, user_data.invite_code)
         if not is_valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="邀请码无效或已过期",
             )
-        # 使用邀请码
-        await config_service.use_invite_code(db, user_data.invite_code)
 
     # 检查是否为首位用户
     user_count = await user_service.count_all(db)
@@ -80,6 +79,10 @@ async def register(
         password=user_data.password,
         is_admin=is_admin,
     )
+
+    # 使用邀请码（用户创建后）
+    if invite_code_required and user_data.invite_code:
+        await config_service.use_invite_code(db, user_data.invite_code, user.id)
 
     # 生成访问令牌
     access_token = create_access_token(data={"sub": str(user.id)})
@@ -152,4 +155,6 @@ async def get_public_config(
     return PublicConfigResponse(
         default_map_provider=configs.get("default_map_provider", "osm"),
         map_layers=configs.get("map_layers", {}),
+        invite_code_required=configs.get("invite_code_required", False),
+        registration_enabled=configs.get("registration_enabled", True),
     )

@@ -42,7 +42,7 @@
           </el-button>
         </el-form-item>
 
-        <el-form-item>
+        <el-form-item v-if="isRegistrationEnabled">
           <div class="login-footer">
             <span>还没有账号？</span>
             <router-link to="/register">立即注册</router-link>
@@ -54,17 +54,20 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+const isRegistrationEnabled = computed(() => configStore.isRegistrationEnabled())
 
 const form = reactive({
   username: '',

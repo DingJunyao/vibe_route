@@ -78,17 +78,19 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { useAuthStore } from '@/stores/auth'
+import { useConfigStore } from '@/stores/config'
 
 const router = useRouter()
 const authStore = useAuthStore()
+const configStore = useConfigStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
-const requireInviteCode = ref(false)
+const requireInviteCode = computed(() => configStore.isInviteCodeRequired())
 
 const form = reactive({
   username: '',
@@ -106,7 +108,7 @@ const validateConfirmPassword = (_rule: any, value: string, callback: any) => {
   }
 }
 
-const rules: FormRules = {
+const rules = computed<FormRules>(() => ({
   username: [
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 3, max: 50, message: '用户名长度应为3-50个字符', trigger: 'blur' },
@@ -123,14 +125,10 @@ const rules: FormRules = {
     { required: true, message: '请再次输入密码', trigger: 'blur' },
     { validator: validateConfirmPassword, trigger: 'blur' },
   ],
-  invite_code: [
-    {
-      required: requireInviteCode,
-      message: '请输入邀请码',
-      trigger: 'blur',
-    },
-  ],
-}
+  invite_code: requireInviteCode.value
+    ? [{ required: true, message: '请输入邀请码', trigger: 'blur' }]
+    : [],
+}))
 
 async function handleRegister() {
   if (!formRef.value) return
@@ -158,13 +156,6 @@ async function handleRegister() {
     }
   })
 }
-
-// 检查是否需要邀请码
-onMounted(async () => {
-  // 这里可以调用 API 检查是否需要邀请码
-  // 暂时设为 false，后续可以动态获取
-  requireInviteCode.value = false
-})
 </script>
 
 <style scoped>

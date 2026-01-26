@@ -109,12 +109,16 @@
             </span>
           </div>
         </template>
-        <div class="map-container">
+        <!-- 有数据时显示地图 -->
+        <div v-if="tracksWithPoints.length > 0 || loadingTracks" class="map-container">
           <UniversalMap :tracks="tracksWithPoints" mode="home" />
-          <div v-if="tracksWithPoints.length === 0 && !loadingTracks" class="map-empty">
-            <el-empty description="暂无轨迹数据" :image-size="80" />
-          </div>
         </div>
+        <!-- 无数据时显示空状态 -->
+        <el-empty v-else description="暂无轨迹，请先上传">
+          <el-button type="primary" @click="$router.push('/upload')">
+            上传第一条轨迹
+          </el-button>
+        </el-empty>
       </el-card>
     </el-main>
   </el-container>

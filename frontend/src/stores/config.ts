@@ -37,6 +37,8 @@ export const useConfigStore = defineStore('config', () => {
           publicConfig.value = {
             default_map_provider: data.default_map_provider,
             map_layers: data.map_layers,
+            invite_code_required: data.invite_code_required,
+            registration_enabled: data.registration_enabled,
           }
           return data
         })
@@ -95,6 +97,16 @@ export const useConfigStore = defineStore('config', () => {
     return publicConfig.value?.map_layers?.[id]?.enabled ?? false
   }
 
+  // 检查是否需要邀请码
+  function isInviteCodeRequired(): boolean {
+    return publicConfig.value?.invite_code_required ?? false
+  }
+
+  // 检查注册是否启用
+  function isRegistrationEnabled(): boolean {
+    return publicConfig.value?.registration_enabled ?? true
+  }
+
   // 管理员方法：更新配置
   async function updateConfig(data: {
     registration_enabled?: boolean
@@ -126,6 +138,8 @@ export const useConfigStore = defineStore('config', () => {
     getMapLayers,
     getMapLayerById,
     isMapLayerEnabled,
+    isInviteCodeRequired,
+    isRegistrationEnabled,
     updateConfig,
   }
 })

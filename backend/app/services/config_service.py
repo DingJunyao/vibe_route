@@ -308,16 +308,16 @@ class ConfigService:
         return result.scalar_one_or_none()
 
     async def validate_invite_code(self, db: AsyncSession, code: str) -> bool:
-        """验证邀请码是否有效"""
+        """验证邀请码是否可用"""
         invite_code = await self.get_invite_code(db, code)
         if not invite_code:
             return False
-        return invite_code.is_valid
+        return invite_code.is_usable
 
     async def use_invite_code(self, db: AsyncSession, code: str, user_id: int) -> bool:
         """使用邀请码"""
         invite_code = await self.get_invite_code(db, code)
-        if not invite_code or not invite_code.is_valid:
+        if not invite_code or not invite_code.is_usable:
             return False
 
         invite_code.used_count += 1

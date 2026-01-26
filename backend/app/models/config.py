@@ -38,14 +38,14 @@ class InviteCode(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, comment="创建时间")
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False, comment="修改时间")
     updated_by = Column(Integer, nullable=True, index=True, comment="修改者ID")
-    is_valid = Column(Boolean, default=True, nullable=False, index=True, comment="是否有效")
+    is_valid = Column(Boolean, default=True, nullable=False, index=True, comment="是否有效（软删除标记）")
 
     # 关系
     created_by_user = relationship("User", back_populates="created_invite_codes")
 
     @property
-    def is_valid(self) -> bool:
-        """邀请码是否有效"""
+    def is_usable(self) -> bool:
+        """邀请码是否可用（考虑使用次数、过期时间）"""
         if self.used_count >= self.max_uses:
             return False
         if self.expires_at and self.expires_at < datetime.utcnow():
