@@ -1850,11 +1850,46 @@ function resize() {
   }
 }
 
+// 将所有轨迹居中显示（四周留 5% 空间）
+function fitBounds() {
+  if (!map.value) return
+
+  // 计算所有轨迹的边界
+  const bounds = L.latLngBounds([])
+  const crs = currentLayerConfig.value?.crs || 'wgs84'
+  const mapId = currentLayerConfig.value?.id
+
+  for (const track of props.tracks) {
+    if (!track.points || track.points.length === 0) continue
+    for (const point of track.points) {
+      const coords = getCoordsByCRS(point, crs, mapId)
+      if (!coords) continue
+      const [lat, lng] = coords
+      // 更严格的检查：确保是有效数字
+      if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+        bounds.extend([lat, lng])
+      }
+    }
+  }
+
+  if (!bounds.isValid()) return
+
+  // 获取地图容器尺寸，计算 5% 的 padding
+  const mapContainer = map.value.getContainer()
+  const width = mapContainer.clientWidth
+  const height = mapContainer.clientHeight
+  const padding = Math.round(Math.max(width, height) * 0.05)
+
+  // 使用 L.point() 创建 padding 对象
+  map.value.fitBounds(bounds, { padding: L.point(padding, padding) })
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
   resize,
+  fitBounds,
 })
 
 // 生命周期

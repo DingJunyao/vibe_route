@@ -780,6 +780,64 @@ function addTileLayer(layerId: string) {
 - [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页
 - [`Home.vue`](frontend/src/views/Home.vue) - 首页（使用 `mode="home"`）
 
+### 地图居中按钮
+
+地图控制栏在全屏按钮左边提供了一个居中按钮，点击后将所有轨迹居中显示，四周留 5% 的空间。
+
+#### 功能说明
+
+- **按钮位置**：全屏按钮左边，地图选择器右边
+- **按钮图标**：靶心图标（中心圆点 + 十字准星）
+- **功能**：移动、缩放地图，将所有轨迹居中在画面，四周留 5% 的边距
+
+#### 前端实现
+
+**UniversalMap 组件** ([`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue))：
+
+- 添加居中按钮（使用内联 SVG 绘制靶心图标）
+- 添加 `fitBounds()` 方法，根据当前地图引擎调用对应方法
+- 将 `fitBounds` 暴露给父组件
+
+**各地图引擎的 fitBounds 实现**：
+
+所有四个地图引擎（[`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue)、[`AMap.vue`](frontend/src/components/map/AMap.vue)、[`BMap.vue`](frontend/src/components/map/BMap.vue)、[`TencentMap.vue`](frontend/src/components/map/TencentMap.vue)）都实现了 `fitBounds()` 方法：
+
+1. **Leaflet 地图**：
+   - 计算所有轨迹点的边界（使用 `L.latLngBounds()`）
+   - 调用 `map.fitBounds(bounds, { padding: L.point(padding, padding) })`
+   - padding 使用 `L.point()` 对象格式
+
+2. **高德地图**：
+   - 使用 `AMapInstance.setFitView(null, false, [padding, padding, padding, padding])`
+
+3. **百度地图**：
+   - 使用 `BMapInstance.setViewport(bounds)`
+
+4. **腾讯地图**：
+   - 计算 LatLngBounds
+   - 使用 `TMapInstance.fitBounds(boundsObj, { padding })`
+
+#### 关键技术点
+
+1. **坐标系转换**：每个地图引擎根据自身坐标系（WGS84/GCJ02/BD09）获取对应的坐标字段
+
+2. **坐标有效性检查**：严格检查坐标类型和值
+   ```typescript
+   if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+     bounds.extend([lat, lng])
+   }
+   ```
+
+3. **坐标返回格式**：
+   - Leaflet/天地图/OSM：`getCoordsByCRS()` 返回 `[lat, lng]` 数组
+   - 高德/腾讯地图：`getGCJ02Coords()` 返回 `{ lat, lng }` 对象
+   - 百度地图：`getBD09Coords()` 返回 `{ lat, lng }` 对象
+
+4. **Padding 计算**：取地图容器宽高中较大值的 5%
+   ```typescript
+   const padding = Math.round(Math.max(width, height) * 0.05)
+   ```
+
 ## File Structure Highlights
 
 ```text

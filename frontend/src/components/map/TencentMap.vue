@@ -1083,11 +1083,66 @@ function resize() {
   }
 }
 
+// 将所有轨迹居中显示（四周留 5% 空间）
+function fitBounds() {
+  if (!TMapInstance) return
+
+  // 计算所有轨迹的边界
+  const TMap = (window as any).TMap
+  const bounds: { lat: number; lng: number }[] = []
+
+  for (const track of props.tracks) {
+    if (!track.points || track.points.length === 0) continue
+    for (const point of track.points) {
+      const coords = getGCJ02Coords(point)
+      if (!coords) continue
+      // getGCJ02Coords 返回 { lat, lng } 对象，不是数组
+      const { lat, lng } = coords
+      if (!isNaN(lat) && !isNaN(lng)) {
+        bounds.push({ lat, lng })
+      }
+    }
+  }
+
+  if (bounds.length === 0) return
+
+  try {
+    // 计算边界
+    let minLat = bounds[0].lat
+    let maxLat = bounds[0].lat
+    let minLng = bounds[0].lng
+    let maxLng = bounds[0].lng
+
+    for (const point of bounds) {
+      if (point.lat < minLat) minLat = point.lat
+      if (point.lat > maxLat) maxLat = point.lat
+      if (point.lng < minLng) minLng = point.lng
+      if (point.lng > maxLng) maxLng = point.lng
+    }
+
+    const sw = new TMap.LatLng(minLat, minLng)
+    const ne = new TMap.LatLng(maxLat, maxLng)
+    const boundsObj = new TMap.LatLngBounds(sw, ne)
+
+    // 获取容器尺寸
+    const container = mapContainer.value
+    if (!container) return
+    const width = container.clientWidth || 800
+    const height = container.clientHeight || 600
+    const padding = Math.round(Math.max(width, height) * 0.05)
+
+    TMapInstance.fitBounds(boundsObj, { padding })
+  } catch (e) {
+    console.error('[TencentMap] fitBounds failed:', e)
+  }
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
   resize,
+  fitBounds,
 })
 </script>
 

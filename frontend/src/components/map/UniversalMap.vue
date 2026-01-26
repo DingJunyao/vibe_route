@@ -79,6 +79,19 @@
           :value="layer.id"
         />
       </el-select>
+      <el-button-group size="small" class="fit-bounds-btn">
+        <el-button @click="fitBounds" title="居中显示轨迹">
+          <el-icon :size="14">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+              <line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="12" y1="16" x2="12" y2="22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </el-icon>
+        </el-button>
+      </el-button-group>
       <el-button-group size="small" class="fullscreen-btn">
         <el-button @click="toggleFullscreen">
           <el-icon><FullScreen /></el-icon>
@@ -206,6 +219,19 @@ function toggleFullscreen() {
   }
 }
 
+// 将所有轨迹居中显示（四周留 5% 空间）
+function fitBounds() {
+  if (useAMapEngine.value && amapRef.value?.fitBounds) {
+    amapRef.value.fitBounds()
+  } else if (useBMapEngine.value && bmapRef.value?.fitBounds) {
+    bmapRef.value.fitBounds()
+  } else if (useTencentEngine.value && tencentRef.value?.fitBounds) {
+    tencentRef.value.fitBounds()
+  } else if (leafletRef.value?.fitBounds) {
+    leafletRef.value.fitBounds()
+  }
+}
+
 // 清除路径段高亮
 function clearSegmentHighlight() {
   emit('clear-segment-highlight')
@@ -287,6 +313,7 @@ defineExpose({
   highlightPoint,
   hideMarker,
   resize,
+  fitBounds,
 })
 </script>
 
@@ -325,6 +352,7 @@ defineExpose({
     display: block;
   }
 
+  .fit-bounds-btn,
   .fullscreen-btn,
   .clear-highlight-btn {
     flex-shrink: 0;
