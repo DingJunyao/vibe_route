@@ -12,7 +12,12 @@ aiosqlite
 asyncmy
 asyncpg
 
+# Alembic 同步驱动 (用于数据库迁移)
+pymysql
+psycopg2-binary
+
 # 认证
+bcrypt==4.0.1
 python-jose[cryptography]
 passlib[bcrypt]
 python-dotenv

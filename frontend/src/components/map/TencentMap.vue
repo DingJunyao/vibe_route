@@ -127,6 +127,7 @@ async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'track-click', trackId: number): void
 }>()
 
 interface Track {
@@ -692,11 +693,12 @@ async function initMap() {
         }
 
         const content = `
-          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
             <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+            ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
           </div>
         `
 
@@ -744,6 +746,17 @@ async function initMap() {
     if (mapContainer.value) {
       const clickHandler = (e: Event) => {
         if (!TMapInstance) return
+
+        // 检查点击的是否是 InfoWindow 中的 tooltip
+        const target = e.target as HTMLElement
+        const tooltipEl = target?.closest('.track-tooltip') as HTMLElement
+        if (tooltipEl) {
+          const trackId = tooltipEl.getAttribute('data-track-id')
+          if (trackId) {
+            emit('track-click', parseInt(trackId))
+          }
+          return
+        }
 
         const TMap = (window as any).TMap
 
@@ -817,6 +830,14 @@ async function initMap() {
           const triggered = minDistance < dynamicDistance
 
           if (triggered && nearestTrackId !== null) {
+            // 桌面端：直接跳转
+            const isMobile = window.innerWidth <= 1366
+            if (!isMobile) {
+              emit('track-click', nearestTrackId)
+              return
+            }
+
+            // 移动端：显示 InfoWindow
             const trackData = tracksData.get(nearestTrackId)
             if (!trackData) return
 
@@ -888,11 +909,12 @@ async function initMap() {
             }
 
             const content = `
-              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+              <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
                 <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
                 <div style="color: #666;">时间: ${formatTimeRange()}</div>
                 <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
                 <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+                <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
               </div>
             `
 

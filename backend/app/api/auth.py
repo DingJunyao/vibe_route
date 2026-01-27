@@ -9,7 +9,7 @@ from app.core.deps import get_current_user
 from app.core.security import create_access_token
 from app.models.user import User
 from app.schemas.user import UserCreate, UserLogin, UserResponse, TokenResponse
-from app.schemas.config import PublicConfigResponse
+from app.schemas.config import FontConfig, PublicConfigResponse
 from app.services.user_service import user_service
 from app.services.config_service import config_service
 

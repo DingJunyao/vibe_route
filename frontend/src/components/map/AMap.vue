@@ -127,6 +127,7 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'track-click', trackId: number): void
 }>()
 
 interface Track {
@@ -180,6 +181,7 @@ const THROTTLE_DELAY = 30  // 节流延迟（毫秒）
 const roadSignSvgCache = new Map<string, string>()
 const loadingSigns = new Set<string>()
 let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
+let currentTooltipTrackId: number | null = null  // 当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
 
 // 创建鼠标位置标记
 function createMouseMarker() {
@@ -196,6 +198,7 @@ function createMouseMarker() {
       border: 2px solid #fff;
       border-radius: 50%;
       box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+      cursor: pointer;
     "></div>
   `
 
@@ -205,6 +208,14 @@ function createMouseMarker() {
     offset: new AMap.Pixel(-6, -6),
     zIndex: 100,
     map: null,  // 初始不添加到地图
+  })
+
+  // 桌面端：点击标记时跳转到当前轨迹
+  mouseMarker.on('click', () => {
+    const isMobile = window.innerWidth <= 1366
+    if (!isMobile && props.mode === 'home' && currentTooltipTrackId !== null) {
+      emit('track-click', currentTooltipTrackId)
+    }
   })
 }
 
@@ -221,6 +232,46 @@ function createTooltip() {
     closeWhenClickMap: false,
     showShadow: false,
   })
+
+  // InfoWindow 点击事件处理函数
+  const handleInfoWindowClick = (e: Event) => {
+    if (currentTooltipTrackId !== null) {
+      emit('track-click', currentTooltipTrackId)
+      e.stopPropagation()
+      e.preventDefault()
+    }
+  }
+
+  // 监听 InfoWindow 内容的点击事件（使用全局事件委托）
+  // 高德地图 InfoWindow 内容会被插入到 DOM 中，使用全局监听
+  const handleTooltipClick = (e: Event) => {
+    const target = e.target as HTMLElement
+    if (target) {
+      const tooltipEl = target.closest('.track-tooltip') as HTMLElement
+      const trackId = tooltipEl?.getAttribute('data-track-id')
+
+      // 如果找到了 track-tooltip，使用找到的 trackId
+      if (trackId) {
+        emit('track-click', parseInt(trackId))
+        e.stopPropagation()
+        e.preventDefault()
+        return
+      } else {
+        // 否则检查是否点击了 InfoWindow 的内容区域
+        const infoWindowContent = target.closest('.amap-info-content') as HTMLElement
+        const infoWindow = target.closest('.amap-info') as HTMLElement
+
+        if ((infoWindowContent || infoWindow) && currentTooltipTrackId !== null) {
+          emit('track-click', currentTooltipTrackId)
+          e.stopPropagation()
+          e.preventDefault()
+        }
+      }
+    }
+  }
+
+  // 使用捕获阶段监听，确保能捕获到 InfoWindow 内的点击
+  document.addEventListener('click', handleTooltipClick, true)
 }
 
 // 计算点到线段的最近点
@@ -333,6 +384,7 @@ function hideMarker() {
 
   lastHoverIndex = -1
   currentTooltipPoint = null
+  currentTooltipTrackId = null  // 清除保存的轨迹 ID
   if (mouseMarker) mouseMarker.setMap(null)
   if (tooltip) tooltip.close()
   if (props.mode === 'home') {
@@ -602,6 +654,7 @@ async function initMap() {
 
     // home 模式：显示最近的轨迹信息
     const handleHomeModeMouseMove = (mouseLngLat: [number, number]) => {
+      const isMobile = window.innerWidth <= 1366
       const zoom = AMapInstance.getZoom()
       const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
 
@@ -699,17 +752,21 @@ async function initMap() {
         }
 
         const content = `
-          <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
             <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+            ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
           </div>
         `
 
         tooltip.setContent(content)
         tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
         tooltip.open(AMapInstance)
+
+        // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
+        currentTooltipTrackId = nearestTrackId
 
         // 发射事件
         emit('track-hover', nearestTrackId)
@@ -743,70 +800,90 @@ async function initMap() {
       }, true)
     }
 
-    // 移动端：点击地图显示轨迹信息
-    const isMobile = window.innerWidth <= 1366
-    if (isMobile) {
-      AMapInstance.on('click', (e: any) => {
-        const lngLat = e.lnglat
-        const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
-        const AMap = (window as any).AMap
+    // 点击地图显示轨迹信息或跳转
+    // 定义点击处理函数（桌面端和移动端共用）
+    const handleMapClick = (e: any) => {
+      // 检查点击是否来自 InfoWindow 内部，如果是则忽略（由 document 点击处理器处理）
+      const originalEvent = e.originalEvent
+      if (originalEvent && originalEvent.target) {
+        const target = originalEvent.target as HTMLElement
+        const isInInfoWindow = target.closest('.amap-info') || target.closest('.track-tooltip')
+        if (isInInfoWindow) {
+          return
+        }
+      }
 
-        if (props.mode === 'home') {
-          // home 模式：显示轨迹信息
-          if (tracksData.size === 0) {
-            hideMarker()
+      const lngLat = e.lnglat
+      const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
+      const AMap = (window as any).AMap
+      const isMobile = window.innerWidth <= 1366
+
+      if (props.mode === 'home') {
+        // home 模式：显示轨迹信息或跳转
+        if (tracksData.size === 0) {
+          hideMarker()
+          return
+        }
+
+        const zoom = AMapInstance.getZoom()
+        const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+        let minDistance = Infinity
+        let nearestTrackId: number | null = null
+        let nearestPosition: [number, number] = [0, 0]
+
+        // 遍历所有轨迹，找到最近的轨迹
+        for (const [trackId, data] of tracksData) {
+          if (data.path.length < 2) continue
+
+          for (let i = 0; i < data.path.length - 1; i++) {
+            const p1 = [data.path[i].lng, data.path[i].lat] as [number, number]
+            const p2 = [data.path[i + 1].lng, data.path[i + 1].lat] as [number, number]
+            const closest = closestPointOnSegment(mouseLngLat, p1, p2)
+            const dist = distance(mouseLngLat, closest)
+
+            if (dist < minDistance) {
+              minDistance = dist
+              nearestPosition = closest
+              nearestTrackId = trackId
+            }
+          }
+        }
+
+        const triggered = minDistance < dynamicDistance
+
+        if (triggered && nearestTrackId !== null) {
+          // 桌面端：直接跳转
+          if (!isMobile) {
+            emit('track-click', nearestTrackId)
             return
           }
 
-          const zoom = AMapInstance.getZoom()
-          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+          // 移动端：显示 InfoWindow
+          const trackData = tracksData.get(nearestTrackId)
+          if (!trackData) return
 
-          let minDistance = Infinity
-          let nearestTrackId: number | null = null
-          let nearestPosition: [number, number] = [0, 0]
+          const track = trackData.track
+          lastHoverIndex = nearestTrackId
 
-          // 遍历所有轨迹，找到最近的轨迹
-          for (const [trackId, data] of tracksData) {
-            if (data.path.length < 2) continue
+          // 更新标记位置并显示
+          mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+          mouseMarker.setMap(AMapInstance)
 
-            for (let i = 0; i < data.path.length - 1; i++) {
-              const p1 = [data.path[i].lng, data.path[i].lat] as [number, number]
-              const p2 = [data.path[i + 1].lng, data.path[i + 1].lat] as [number, number]
-              const closest = closestPointOnSegment(mouseLngLat, p1, p2)
-              const dist = distance(mouseLngLat, closest)
+          // 重新计算是否是移动端（响应窗口大小变化）
+          const isMobileNow = window.innerWidth <= 1366
 
-              if (dist < minDistance) {
-                minDistance = dist
-                nearestPosition = closest
-                nearestTrackId = trackId
-              }
-            }
-          }
-
-          const triggered = minDistance < dynamicDistance
-
-          if (triggered && nearestTrackId !== null) {
-            const trackData = tracksData.get(nearestTrackId)
-            if (!trackData) return
-
-            const track = trackData.track
-            lastHoverIndex = nearestTrackId
-
-            // 更新标记位置并显示
-            mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-            mouseMarker.setMap(AMapInstance)
-
-            // 格式化时间和里程
-            const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
-              if (!time) return '-'
-              const date = new Date(time)
-              if (endDate) {
-                return date.toLocaleString('zh-CN', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              }
+          // 格式化时间和里程
+          const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+            if (!time) return '-'
+            const date = new Date(time)
+            if (endDate) {
               return date.toLocaleString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
+            return date.toLocaleString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
                 day: '2-digit',
@@ -849,17 +926,56 @@ async function initMap() {
             }
 
             const content = `
-              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+              <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
                 <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
                 <div style="color: #666;">时间: ${formatTimeRange()}</div>
                 <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
                 <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+                ${isMobileNow ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
               </div>
             `
 
             tooltip.setContent(content)
             tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
             tooltip.open(AMapInstance)
+
+            // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
+            currentTooltipTrackId = nearestTrackId
+
+            // 在 InfoWindow 打开后，给其内容添加点击事件监听器
+            // 使用 nextTick 确保 DOM 已经更新
+            nextTick(() => {
+              const trackTooltip = document.querySelector('.track-tooltip')
+              if (trackTooltip) {
+                const parent = trackTooltip.parentElement
+                if (parent) {
+                  // 处理 InfoWindow 内的点击和触摸事件
+                  const handleTooltipInteraction = (e: Event) => {
+                    e.stopImmediatePropagation()
+                    e.stopPropagation()
+                    e.preventDefault()
+                    if (currentTooltipTrackId !== null) {
+                      emit('track-click', currentTooltipTrackId)
+                    }
+                  }
+
+                  // 直接给 track-tooltip 添加点击事件（优先级最高）
+                  trackTooltip.addEventListener('click', handleTooltipInteraction, { capture: true })
+
+                  // 添加 touchstart 监听器（移动端）
+                  trackTooltip.addEventListener('touchstart', handleTooltipInteraction, { capture: true })
+
+                  // 同时给父元素添加点击监听器（备用）
+                  parent.addEventListener('click', (e) => {
+                    if (currentTooltipTrackId !== null) {
+                      emit('track-click', currentTooltipTrackId)
+                      e.stopPropagation()
+                      e.preventDefault()
+                    }
+                  })
+                }
+              }
+            })
 
             emit('track-hover', nearestTrackId)
           } else {
@@ -942,8 +1058,10 @@ async function initMap() {
             hideMarker()
           }
         }
-      })
-    }
+      }
+
+    // 注册点击事件监听器（桌面端和移动端都需要）
+    AMapInstance.on('click', handleMapClick)
 
     // 绘制轨迹
     drawTracks()
@@ -1019,7 +1137,8 @@ function drawTracks() {
       strokeOpacity: 0.8,
       strokeWeight: isHighlighted ? 5 : 3,
       lineJoin: 'round',
-      bubble: true,  // 允许鼠标事件冒泡，以便地图能够捕获 mousemove
+      bubble: true,  // 允许鼠标事件冒泡，以便地图能够捕获 mousemove 和 click
+      showDir: false,
     })
 
     AMapInstance.add(polyline)

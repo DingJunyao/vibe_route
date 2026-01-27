@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import auth, admin, tracks, tasks, road_signs
+from app.api import auth, admin, tracks, tasks, road_signs, logs
 
 
 @asynccontextmanager
@@ -56,6 +56,7 @@ app.include_router(admin.router, prefix=settings.API_V1_PREFIX)
 app.include_router(tracks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(tasks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(road_signs.router, prefix=settings.API_V1_PREFIX)
+app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")

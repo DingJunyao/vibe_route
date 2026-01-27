@@ -1608,3 +1608,137 @@ onUnmounted(() => {
 3. **配置重置**：用户选择离开时，将当前配置重置为原始配置，避免"假保存"状态
 4. **事件清理**：组件卸载时移除 `beforeunload` 监听器，避免内存泄漏
 5. **路由守卫**：只有当前在"系统配置" tab 时才检查，从其他 tab 离开不受影响
+
+### 远程日志调试
+
+系统提供了远程日志功能，方便在电脑上查看手机端的实时日志。
+
+#### 功能说明
+
+- **前端日志拦截**：自动拦截 `console.log/info/warn/error` 并发送到后端
+- **WebSocket 实时推送**：后端通过 WebSocket 将日志推送到连接的查看器
+- **日志查看器页面**：访问 `/log-viewer` 查看实时日志
+
+#### 使用方法
+
+1. **手机端启用日志转发**：URL 添加 `?remote-log` 参数
+
+   ```text
+   http://192.168.x.x:5173/home?remote-log
+   ```
+
+   开发环境默认启用，生产环境需要 URL 参数
+
+2. **电脑端访问日志查看器**：
+
+   ```text
+   http://192.168.x.x:5173/log-viewer
+   ```
+
+   点击"连接"按钮，手机端的日志会实时显示
+
+#### 实现文件
+
+**后端**：
+
+- [`backend/app/api/logs.py`](backend/app/api/logs.py) - 日志接收 API 和 WebSocket 推送
+
+**前端**：
+
+- [`frontend/src/utils/remoteLog.ts`](frontend/src/utils/remoteLog.ts) - 日志拦截器
+- [`frontend/src/views/LogViewer.vue`](frontend/src/views/LogViewer.vue) - 日志查看页面
+- [`frontend/src/main.ts`](frontend/src/main.ts) - 初始化 `initRemoteLog()`
+
+#### 日志格式
+
+日志自动解析标签（如 `[AMap]`）：
+
+```text
+[标签] 消息内容
+```
+
+前端会将标签和消息分开处理，后端接收的格式：
+
+```json
+{
+  "level": "log",
+  "tag": "[AMap]",
+  "message": "地图被点击",
+  "timestamp": 1706123456789
+}
+```
+
+### 首页移动端地图 InfoWindow 点击
+
+首页地图在移动端的点击交互需要特殊处理。
+
+#### 功能说明
+
+- **桌面端**：点击轨迹直接跳转到详情页
+- **移动端**：点击轨迹显示 InfoWindow，再点击"查看详情"跳转
+
+#### 关键问题
+
+高德地图的 InfoWindow 点击事件处理有以下挑战：
+
+1. InfoWindow 内容是动态插入到 DOM 的
+2. 点击 InfoWindow 内容时，地图点击事件也会触发
+3. 移动端触摸事件（`touchstart`）和点击事件（`click`）需要分别处理
+
+#### 解决方案
+
+**直接给 InfoWindow 内容添加事件监听器**（[`AMap.vue`](frontend/src/components/map/AMap.vue)）：
+
+```typescript
+nextTick(() => {
+  const trackTooltip = document.querySelector('.track-tooltip')
+  if (trackTooltip) {
+    const parent = trackTooltip.parentElement
+    if (parent) {
+      // 处理 InfoWindow 内的点击和触摸事件
+      const handleTooltipInteraction = (e: Event) => {
+        e.stopImmediatePropagation()  // 立即停止所有事件传播
+        e.stopPropagation()
+        e.preventDefault()
+        if (currentTooltipTrackId !== null) {
+          emit('track-click', currentTooltipTrackId)
+        }
+      }
+
+      // 直接给 track-tooltip 添加点击事件（捕获阶段）
+      trackTooltip.addEventListener('click', handleTooltipInteraction, { capture: true })
+
+      // 添加 touchstart 监听器（移动端）
+      trackTooltip.addEventListener('touchstart', handleTooltipInteraction, { capture: true })
+
+      // 同时给父元素添加点击监听器（备用）
+      parent.addEventListener('click', (e) => {
+        if (currentTooltipTrackId !== null) {
+          emit('track-click', currentTooltipTrackId)
+          e.stopPropagation()
+          e.preventDefault()
+        }
+      })
+    }
+  }
+})
+```
+
+#### 关键技术点
+
+1. **`capture: true`**：使用捕获阶段监听，确保在事件到达目标元素之前就被处理
+2. **`stopImmediatePropagation()`**：立即停止所有事件传播，防止其他监听器被触发
+3. **双重监听**：同时监听 `click` 和 `touchstart` 事件，兼容移动端
+4. **备用监听器**：给父元素也添加监听器作为兜底
+
+#### InfoWindow 内容结构
+
+```html
+<div class="track-tooltip" data-track-id="20">
+  <div>轨迹名称</div>
+  <div>时间: ...</div>
+  <div>里程: ...</div>
+  <div>历时: ...</div>
+  <div>点击查看详情</div>
+</div>
+```

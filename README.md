@@ -50,14 +50,14 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 - [x] 轨迹列表和详情
 - [x] 地图可视化（Leaflet/高德/百度）
 - [x] 轨迹统计图表
+- [x] 轨迹上传和解析
+- [x] 道路标志生成
 - [x] 后台管理界面
 
 ### 待实现 🚧
 
-- [ ] gpxutil 核心功能集成
-- [ ] 轨迹上传和解析
 - [ ] 信息覆盖层生成
-- [ ] 道路标志生成
+
 
 ## 技术栈
 
@@ -94,6 +94,9 @@ cp .env.example .env
 
 # 创建数据目录
 mkdir -p data/uploads data/temp data/exports data/road_signs
+
+# 数据库迁移（首次启动或模型变更时）
+alembic upgrade head
 
 # 运行开发服务器
 uvicorn app.main:app --reload

@@ -127,6 +127,7 @@ async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'track-click', trackId: number): void
 }>()
 
 interface Track {
@@ -342,18 +343,19 @@ function createCustomTooltip() {
   tooltipDiv.style.cssText = `
     position: absolute;
     z-index: 1000;
-    pointer-events: none;
+    pointer-events: auto;
     display: none;
-    padding: 8px 12px;
-    background: rgba(255, 255, 255, 0.95);
-    border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-    font-size: 12px;
-    line-height: 1.6;
-    white-space: nowrap;
   `
   mapContainer.value.appendChild(tooltipDiv)
   customTooltip = tooltipDiv
+
+  // 监听 tooltip 点击事件（用于点击跳转）
+  tooltipDiv.addEventListener('click', (e) => {
+    const trackId = (e.target as HTMLElement).closest('.track-tooltip')?.getAttribute('data-track-id')
+    if (trackId) {
+      emit('track-click', parseInt(trackId))
+    }
+  })
 }
 
 // 将经纬度转换为容器像素坐标
@@ -783,10 +785,13 @@ async function initMap() {
         }
 
         const content = `
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-          <div style="color: #666;">时间: ${formatTimeRange()}</div>
-          <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-          <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+            <div style="color: #666;">时间: ${formatTimeRange()}</div>
+            <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+            <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+            ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
+          </div>
         `
 
         // 使用自定义 tooltip
@@ -945,10 +950,13 @@ async function initMap() {
             }
 
             const content = `
-              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-              <div style="color: #666;">时间: ${formatTimeRange()}</div>
-              <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-              <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              <div class="track-tooltip" data-track-id="${track.id}" style="cursor: pointer;">
+                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+                <div style="color: #666;">时间: ${formatTimeRange()}</div>
+                <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+                <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+                <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
+              </div>
             `
 
             // 使用自定义 tooltip
@@ -1097,6 +1105,14 @@ function drawTracks() {
       strokeColor: '#FF0000',
       strokeWeight: isHighlighted ? 5 : 3,
       strokeOpacity: 0.8,
+    })
+
+    // 桌面端：点击轨迹直接跳转
+    polyline.addEventListener('click', () => {
+      const isMobile = window.innerWidth <= 1366
+      if (!isMobile) {
+        emit('track-click', track.id)
+      }
     })
 
     BMapInstance.addOverlay(polyline)

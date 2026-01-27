@@ -10,6 +10,7 @@
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
+      @track-click="handleTrackClick"
     />
     <!-- 高德地图引擎 -->
     <AMap
@@ -21,6 +22,7 @@
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
+      @track-click="handleTrackClick"
     />
     <!-- 百度地图引擎 -->
     <BMap
@@ -32,6 +34,7 @@
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
+      @track-click="handleTrackClick"
     />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
@@ -45,6 +48,7 @@
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
+      @track-click="handleTrackClick"
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
@@ -155,6 +159,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'track-click', trackId: number): void
   (e: 'clear-segment-highlight'): void
 }>()
 
@@ -245,6 +250,11 @@ function handlePointHover(point: Point | null, pointIndex: number) {
 // 处理轨迹悬浮事件
 function handleTrackHover(trackId: number | null) {
   emit('track-hover', trackId)
+}
+
+// 处理轨迹点击事件（用于跳转到详情页）
+function handleTrackClick(trackId: number) {
+  emit('track-click', trackId)
 }
 
 // 高亮指定点（由图表触发）

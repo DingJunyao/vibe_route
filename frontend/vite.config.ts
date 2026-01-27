@@ -28,8 +28,12 @@ export default defineConfig({
     },
   },
   server: {
-    host: true,
+    host: '0.0.0.0',
     port: 5173,
+    // HMR 配置，确保从局域网访问时 WebSocket 连接正常
+    hmr: {
+      clientPort: 5173,
+    },
     proxy: {
       '/api': {
         target: 'http://localhost:8000',

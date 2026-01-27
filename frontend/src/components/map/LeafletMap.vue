@@ -100,6 +100,7 @@ const emit = defineEmits<{
   (e: 'point-click', point: Point, trackId: number): void
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
+  (e: 'track-click', trackId: number): void
 }>()
 
 const configStore = useConfigStore()
@@ -182,7 +183,6 @@ function getCRS(crsType: CRSType): L.CRS {
 // 初始化地图
 function initMap() {
   if (!mapContainer.value) {
-    console.error('[LeafletMap] mapContainer is null!')
     return
   }
 
@@ -435,11 +435,12 @@ function initMap() {
       }
 
       const content = `
-        <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+        <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
           <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
           <div style="color: #666;">时间: ${formatTimeRange()}</div>
           <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
           <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+          ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
         </div>
       `
 
@@ -651,11 +652,12 @@ function initMap() {
           }
 
           const content = `
-            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
               <div style="color: #666;">时间: ${formatTimeRange()}</div>
               <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
               <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
             </div>
           `
 
@@ -1201,11 +1203,12 @@ function recreateMap() {
       }
 
       const content = `
-        <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+        <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
           <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
           <div style="color: #666;">时间: ${formatTimeRange()}</div>
           <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
           <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+          ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
         </div>
       `
 
@@ -1417,11 +1420,12 @@ function recreateMap() {
           }
 
           const content = `
-            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
               <div style="color: #666;">时间: ${formatTimeRange()}</div>
               <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
               <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
             </div>
           `
 
@@ -1836,12 +1840,20 @@ function createCustomTooltip() {
   tooltipDiv.style.cssText = `
     position: absolute;
     z-index: 1000;
-    pointer-events: none;
+    pointer-events: auto;
     display: none;
   `
 
   mapContainer.value.appendChild(tooltipDiv)
   customTooltip.value = tooltipDiv
+
+  // 监听 tooltip 点击事件（用于点击跳转）
+  tooltipDiv.addEventListener('click', (e) => {
+    const trackId = (e.target as HTMLElement).closest('.track-tooltip')?.getAttribute('data-track-id')
+    if (trackId) {
+      emit('track-click', parseInt(trackId))
+    }
+  })
 }
 
 // 缓存 tooltip 尺寸，避免频繁调用 getBoundingClientRect 引起 reflow
@@ -1967,7 +1979,11 @@ function drawTracks() {
     })
 
     polyline.on('click', () => {
-      // 轨迹点击事件
+      // 轨迹点击事件：桌面端点击轨迹直接跳转
+      const isMobile = window.innerWidth <= 1366
+      if (!isMobile) {
+        emit('track-click', track.id)
+      }
     })
 
     polyline.addTo(map.value as L.Map)

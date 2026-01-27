@@ -52,6 +52,12 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+backend/data/*.db
+
+# User data directories (uploads, temp, exports)
+backend/data/uploads/
+backend/data/temp/
+backend/data/exports/
 
 # Environment variables
 .env
@@ -82,6 +88,10 @@ frontend/node_modules/
 # Road sign fonts (user provided)
 backend/data/fonts/*
 backend/data/road_signs/*
+
+# Alembic (database migrations)
+# Note: alembic/versions/ should be tracked, but config files may vary
+backend/alembic.ini
 
 # claude code
 .claude/

@@ -124,7 +124,7 @@
         </template>
         <!-- 有数据时显示地图 -->
         <div v-if="tracksWithPoints.length > 0 || loadingTracks" class="map-container">
-          <UniversalMap :tracks="tracksWithPoints" mode="home" />
+          <UniversalMap :tracks="tracksWithPoints" mode="home" @track-click="handleTrackClick" />
         </div>
         <!-- 无数据时显示空状态 -->
         <el-empty v-else description="暂无轨迹，请先上传">
@@ -510,6 +510,12 @@ function downloadSvg() {
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
   ElMessage.success('下载成功')
+}
+
+// 点击轨迹跳转到详情页
+function handleTrackClick(trackId: number) {
+  console.log('[Home] handleTrackClick 被调用, trackId:', trackId)
+  router.push(`/tracks/${trackId}`)
 }
 
 function handleCommand(command: string) {

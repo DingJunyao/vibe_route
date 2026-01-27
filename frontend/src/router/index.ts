@@ -1,6 +1,16 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+// 扩展 meta 类型
+declare module 'vue-router' {
+  interface RouteMeta {
+    requiresAuth?: boolean
+    requiresAdmin?: boolean
+    guest?: boolean
+    devOnly?: boolean
+  }
+}
+
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -60,6 +70,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Admin.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
   },
+  // 日志查看器（仅开发环境）
+  {
+    path: '/log-viewer',
+    name: 'LogViewer',
+    component: () => import('@/views/LogViewer.vue'),
+    meta: { requiresAuth: true, devOnly: true },
+  },
 ]
 
 const router = createRouter({
@@ -70,6 +87,13 @@ const router = createRouter({
 // 路由守卫
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
+  const isDev = import.meta.env.DEV
+
+  // 开发环境专用路由
+  if (to.meta.devOnly && !isDev) {
+    next({ name: 'Home' })
+    return
+  }
 
   if (to.meta.requiresAuth && !authStore.isLoggedIn) {
     // 需要登录但未登录，跳转到登录页

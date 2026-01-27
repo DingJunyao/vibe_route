@@ -6,16 +6,20 @@ import zhCn from 'element-plus/dist/locale/zh-cn.mjs'
 
 import App from './App.vue'
 import router from './router'
+import { initRemoteLog } from './utils/remoteLog'
 
 import 'leaflet/dist/leaflet.css'
 
+// 初始化远程日志
+initRemoteLog()
+
 // 移动端调试工具（开发环境）
-// if (import.meta.env.DEV) {
-//   import('eruda').then((eruda) => {
-//     eruda.default?.init()
-//     console.log('Eruda 调试工具已启用')
-//   })
-// }
+if (import.meta.env.DEV) {
+  import('eruda').then((eruda) => {
+    eruda.default?.init()
+    console.log('Eruda 调试工具已启用')
+  })
+}
 
 const app = createApp(App)
 
