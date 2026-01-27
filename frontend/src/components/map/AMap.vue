@@ -219,6 +219,68 @@ function createMouseMarker() {
   })
 }
 
+// 计算智能偏移量，避免 InfoWindow 超出地图边界
+function calculateSmartOffset(position: [number, number]): { x: number; y: number; anchor: 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' } {
+  if (!AMapInstance || !mapContainer.value) {
+    return { x: 0, y: -40, anchor: 'top' }
+  }
+
+  const AMap = (window as any).AMap
+
+  // 将地图坐标转换为容器像素坐标
+  const pixel = AMapInstance.lngLatToContainer(new AMap.LngLat(position[0], position[1]))
+  if (!pixel) {
+    return { x: 0, y: -40, anchor: 'top' }
+  }
+
+  const containerWidth = mapContainer.value.clientWidth
+  const containerHeight = mapContainer.value.clientHeight
+
+  // InfoWindow 的估计尺寸（根据内容可能变化）
+  const tooltipWidth = 150  // 预估宽度
+  const tooltipHeight = 100 // 预估高度
+  const padding = 10        // 边界留白
+
+  const pixelX = pixel.getX()
+  const pixelY = pixel.getY()
+
+  // 判断点相对于地图容器的位置
+  const isNearLeft = pixelX < tooltipWidth / 2 + padding
+  const isNearRight = pixelX > containerWidth - tooltipWidth / 2 - padding
+  const isNearTop = pixelY < tooltipHeight + padding
+  const isNearBottom = pixelY > containerHeight - tooltipHeight - padding
+
+  // 根据位置确定锚点和偏移
+  // 高德地图 InfoWindow 的 offset 是相对于锚点位置的偏移
+  // anchor 为 'bottom-center' 时，offset 是从点向上偏移
+
+  if (isNearRight && !isNearTop && !isNearBottom) {
+    // 靠近右边缘：显示在点的左侧
+    return { x: -tooltipWidth - 15, y: -20, anchor: 'left' }
+  } else if (isNearLeft && !isNearTop && !isNearBottom) {
+    // 靠近左边缘：显示在点的右侧
+    return { x: 15, y: -20, anchor: 'right' }
+  } else if (isNearBottom && !isNearLeft && !isNearRight) {
+    // 靠近下边缘：显示在点的上方
+    return { x: 0, y: -tooltipHeight - 15, anchor: 'bottom' }
+  } else if (isNearTop && isNearRight) {
+    // 靠近右上角：显示在点的左下方
+    return { x: -tooltipWidth - 10, y: 15, anchor: 'top-right' }
+  } else if (isNearTop && isNearLeft) {
+    // 靠近左上角：显示在点的右下方
+    return { x: 15, y: 15, anchor: 'top-left' }
+  } else if (isNearBottom && isNearRight) {
+    // 靠近右下角：显示在点的左上方
+    return { x: -tooltipWidth - 10, y: -tooltipHeight - 10, anchor: 'bottom-right' }
+  } else if (isNearBottom && isNearLeft) {
+    // 靠近左下角：显示在点的右上方
+    return { x: 15, y: -tooltipHeight - 10, anchor: 'bottom-left' }
+  }
+
+  // 默认：显示在点的上方
+  return { x: 0, y: -40, anchor: 'top' }
+}
+
 // 创建信息提示框
 function createTooltip() {
   if (!AMapInstance) return
@@ -360,7 +422,7 @@ function updateMarker(nearest: { point: Point; index: number; position: [number,
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
 
   const content = `
-    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+    <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
       <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
       <div style="color: #666;">时间: ${timeStr}</div>
       <div style="color: #666;">速度: ${speed}</div>
@@ -369,6 +431,9 @@ function updateMarker(nearest: { point: Point; index: number; position: [number,
   `
 
   if (tooltip) {
+    // 计算智能偏移
+    const smartOffset = calculateSmartOffset(nearest.position)
+    tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
     tooltip.setContent(content)
     tooltip.setPosition(new AMap.LngLat(nearest.position[0], nearest.position[1]))
     tooltip.open(AMapInstance)
@@ -431,7 +496,7 @@ function highlightPoint(index: number) {
   const locationResult = formatLocationInfo(point)
 
   const content = `
-    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+    <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
       <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
       ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
       <div style="color: #666;">时间: ${timeStr}</div>
@@ -440,6 +505,9 @@ function highlightPoint(index: number) {
     </div>
   `
 
+  // 计算智能偏移
+  const smartOffset = calculateSmartOffset([position.lng, position.lat])
+  tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
   tooltip.setContent(content)
   tooltip.setPosition(new AMap.LngLat(position.lng, position.lat))
   tooltip.open(AMapInstance)
@@ -620,7 +688,7 @@ async function initMap() {
           const locationResult = formatLocationInfo(point)
 
           const content = `
-            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
               ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
               <div style="color: #666;">时间: ${timeStr}</div>
@@ -629,6 +697,9 @@ async function initMap() {
             </div>
           `
 
+          // 计算智能偏移
+          const smartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
           tooltip.setContent(content)
           tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
           tooltip.open(AMapInstance)
@@ -752,7 +823,7 @@ async function initMap() {
         }
 
         const content = `
-          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
+          <div class="track-tooltip" data-track-id="${track.id}" style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
@@ -761,6 +832,9 @@ async function initMap() {
           </div>
         `
 
+        // 计算智能偏移
+        const smartOffset = calculateSmartOffset(nearestPosition)
+        tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
         tooltip.setContent(content)
         tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
         tooltip.open(AMapInstance)
@@ -935,6 +1009,9 @@ async function initMap() {
               </div>
             `
 
+            // 计算智能偏移
+            const clickSmartOffset = calculateSmartOffset(nearestPosition)
+            tooltip.setOffset(new AMap.Pixel(clickSmartOffset.x, clickSmartOffset.y))
             tooltip.setContent(content)
             tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
             tooltip.open(AMapInstance)
@@ -1037,6 +1114,9 @@ async function initMap() {
               </div>
             `
 
+            // 计算智能偏移
+            const clickSmartOffset = calculateSmartOffset(nearestPosition)
+            tooltip.setOffset(new AMap.Pixel(clickSmartOffset.x, clickSmartOffset.y))
             tooltip.setContent(content)
             tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
             tooltip.open(AMapInstance)
