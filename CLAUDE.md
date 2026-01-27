@@ -1974,6 +1974,110 @@ updateFillGeocoding(recordingId: number, fillGeocoding: boolean): Promise<{ fill
 - [`frontend/src/views/TrackList.vue`](frontend/src/views/TrackList.vue) - 轨迹列表页面
 - [`frontend/src/views/TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页面
 
+### 实时记录轨迹点复用问题
+
+在实时记录功能中，每个上传的轨迹点应该添加到同一个 Track 中，而不是每个点创建一个新的 Track。
+
+#### 问题描述
+
+如果每个点都创建新的 Track，会导致：
+
+- 数据库中出现大量只包含一个点的 Track
+- 无法正确计算总距离、时长等统计信息
+- 轨迹列表被大量无意义的 Track 污染
+
+#### 技术实现
+
+**数据库设计** ([`LiveRecording`](backend/app/models/live_recording.py))：
+
+```python
+class LiveRecording(Base, AuditMixin):
+    # ... 其他字段 ...
+    current_track_id = Column(Integer, ForeignKey("tracks.id"), nullable=True)
+```
+
+**服务层逻辑** ([`add_point_to_recording`](backend/app/services/live_recording_service.py))：
+
+```python
+# 获取或创建当前轨迹
+track = None
+if recording.current_track_id:
+    # 尝试获取现有轨迹
+    result = await db.execute(
+        select(Track).where(
+            and_(
+                Track.id == recording.current_track_id,
+                Track.is_valid == True
+            )
+        )
+    )
+    track = result.scalar_one_or_none()
+
+if not track:
+    # 创建新轨迹
+    track = Track(...)
+    db.add(track)
+    await db.flush()
+
+    # 更新记录的当前轨迹 ID
+    recording.current_track_id = track.id
+
+# ... 添加轨迹点 ...
+
+await db.commit()
+```
+
+#### 常见陷阱：SQLAlchemy `refresh()` 的副作用
+
+**问题代码**：
+
+```python
+# 错误！refresh 会撤销未提交的更改
+recording.current_track_id = track.id
+await db.refresh(recording)  # ❌ 会从数据库重新加载，current_track_id 又变回 None
+```
+
+**解释**：
+
+- `db.flush()` 将未提交的 SQL 语句发送到数据库，但不提交事务
+- `refresh(obj)` 会从数据库重新加载对象的状态
+- 如果对象在数据库中的值还是旧的，`refresh()` 会覆盖内存中的未提交更改
+- 只有在 `commit()` 之后调用 `refresh()` 才是安全的
+
+**正确做法**：
+
+```python
+# 设置字段值
+recording.current_track_id = track.id
+
+# 不要在 commit 前调用 refresh！
+# await db.refresh(recording)  # ❌ 错误
+
+# 执行其他操作...
+
+await db.commit()
+
+# commit 后可以安全地 refresh
+await db.refresh(recording)  # ✅ 正确
+```
+
+#### 关键技术点
+
+1. **flush() 与 commit() 的区别**：
+   - `flush()`：发送 SQL 到数据库，但事务未提交，可以获取新插入记录的 ID
+   - `commit()`：提交事务，更改永久生效
+
+2. **`refresh()` 的使用时机**：
+   - 在 `commit()` 之前调用会覆盖未提交的更改
+   - 在 `commit()` 之后调用可以获取最新的数据库状态
+
+3. **事务隔离**：每个 API 请求使用独立的数据库会话，`commit()` 后的更改对其他请求可见
+
+#### 涉及文件
+
+- [`backend/app/services/live_recording_service.py`](backend/app/services/live_recording_service.py) - 服务层实现
+- [`backend/app/models/live_recording.py`](backend/app/models/live_recording.py) - 数据模型
+
 ### 首页移动端地图 InfoWindow 点击
 
 首页地图在移动端的点击交互需要特殊处理。

@@ -121,7 +121,12 @@ class LiveRecordingService:
                 )
             )
         )
-        return result.scalar_one_or_none()
+        recording = result.scalar_one_or_none()
+        if recording:
+            logger.info(f"get_by_token: Found recording {recording.id} with current_track_id={recording.current_track_id}")
+        else:
+            logger.warning(f"get_by_token: No recording found for token={token[:8]}...")
+        return recording
 
     async def get_list(
         self,
@@ -233,6 +238,7 @@ class LiveRecordingService:
 
         # 获取或创建当前轨迹
         track = None
+        logger.info(f"Recording {recording.id}: current_track_id={recording.current_track_id}")
         if recording.current_track_id:
             # 获取现有轨迹
             result = await db.execute(
@@ -244,8 +250,13 @@ class LiveRecordingService:
                 )
             )
             track = result.scalar_one_or_none()
+            if track:
+                logger.info(f"Found existing track {track.id} for recording {recording.id}")
+            else:
+                logger.warning(f"Recording {recording.id} has current_track_id={recording.current_track_id} but track not found or invalid")
 
         if not track:
+            logger.info(f"Creating new track for recording {recording.id}")
             # 创建新轨迹
             # 将带时区的时间转换为不带时区的时间（与数据库一致）
             track_time = point_time.replace(tzinfo=None) if point_time else None
@@ -273,6 +284,7 @@ class LiveRecordingService:
 
             # 更新记录的当前轨迹
             recording.current_track_id = track.id
+            logger.info(f"Created new track {track.id} and set recording.current_track_id={recording.current_track_id}")
 
         # 坐标转换
         all_coords = convert_point_to_all(lon, lat, original_crs)
@@ -411,6 +423,9 @@ class LiveRecordingService:
         recording.last_upload_at = datetime.now(timezone.utc)
 
         await db.commit()
+        # 刷新 recording 对象，确保 current_track_id 已正确设置
+        await db.refresh(recording)
+        logger.info(f"After commit: recording {recording.id} current_track_id={recording.current_track_id}")
         await db.refresh(point)
 
         logger.info(
