@@ -75,7 +75,8 @@ def do_run_migrations(connection: Connection) -> None:
 async def run_async_migrations() -> None:
     """异步模式运行迁移"""
     configuration = config.get_section(config.config_ini_section)
-    configuration["sqlalchemy.url"] = database_url
+    # 使用原始的异步 URL（用于 async_engine_from_config）
+    configuration["sqlalchemy.url"] = settings.DATABASE_URL
 
     connectable = async_engine_from_config(
         configuration,

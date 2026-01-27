@@ -6,6 +6,9 @@
         <h1>我的轨迹</h1>
       </div>
       <div class="header-right">
+        <el-button type="warning" :icon="VideoPlay" @click="openCreateRecordingDialog" class="desktop-only">
+          记录实时轨迹
+        </el-button>
         <el-button type="primary" :icon="Plus" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
@@ -17,6 +20,10 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="liveRecording" v-if="isMobile">
+                <el-icon><VideoPlay /></el-icon>
+                记录实时轨迹
+              </el-dropdown-item>
               <el-dropdown-item command="upload" v-if="isMobile">
                 <el-icon><Plus /></el-icon>
                 上传轨迹
@@ -68,26 +75,29 @@
 
       <!-- PC端表格列表 -->
       <el-card v-loading="loading" class="list-card" shadow="never">
-        <template v-if="tracks.length > 0">
+        <template v-if="unifiedTracks.length > 0">
           <!-- PC端表格 -->
-          <el-table :data="tracks" style="width: 100%" @row-click="viewTrack" class="pc-table">
-            <el-table-column prop="name" label="轨迹名称" min-width="200">
+          <el-table :data="displayItems" style="width: 100%" @row-click="handleRowClick" class="pc-table">
+            <el-table-column prop="name" label="名称" min-width="200">
               <template #default="{ row }">
-                <div class="track-name-cell">
-                  <el-link underline="never" @click.stop="viewTrack(row)">
+                <div class="name-cell">
+                  <el-link v-if="row.id >= 0" underline="never" @click.stop="viewTrack(row)">
                     {{ row.name }}
                   </el-link>
-                  <template v-if="getTrackProgress(row.id)">
+                  <span v-else>{{ row.name }}</span>
+
+                  <!-- 轨迹进度标签 -->
+                  <template v-if="!row.is_live_recording && getTrackProgress(row.id)">
                     <el-tag
-                      v-if="getTrackProgress(row.id)!.status === 'filling'"
+                      v-if="getTrackProgress(row.id)?.status === 'filling'"
                       type="primary"
                       size="small"
                       class="progress-tag"
                     >
-                      填充中 {{ getTrackProgress(row.id)!.percent }}%
+                      填充中 {{ getTrackProgress(row.id)?.percent ?? 0 }}%
                     </el-tag>
                     <el-tag
-                      v-else-if="getTrackProgress(row.id)!.status === 'failed'"
+                      v-else-if="getTrackProgress(row.id)?.status === 'failed'"
                       type="danger"
                       size="small"
                       class="progress-tag"
@@ -95,19 +105,27 @@
                       填充失败
                     </el-tag>
                   </template>
+
+                  <!-- 实时记录状态标签 -->
+                  <el-tag v-if="row.id < 0" type="info" size="small">
+                    等待上传点
+                  </el-tag>
+                  <el-tag v-else-if="row.is_live_recording && row.live_recording_status === 'active'" type="success" size="small">
+                    实时轨迹记录中
+                  </el-tag>
                 </div>
               </template>
             </el-table-column>
 
             <el-table-column label="时间" width="180">
               <template #default="{ row }">
-                <div class="track-time">
-                  {{ formatDateTime(row.start_time) }}
+                <div class="item-time">
+                  {{ formatDateTime(row.start_time || row.created_at) }}
                 </div>
               </template>
             </el-table-column>
 
-            <el-table-column label="统计信息" width="280">
+            <el-table-column label="信息" width="280">
               <template #default="{ row }">
                 <div class="track-stats">
                   <span><el-icon><Odometer /></el-icon> {{ formatDistance(row.distance) }}</span>
@@ -119,25 +137,36 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="操作" width="130" fixed="right">
+            <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
                 <div class="action-buttons">
-                  <el-button
-                    type="primary"
-                    size="small"
-                    text
-                    @click.stop="viewTrack(row)"
-                  >
-                    查看
-                  </el-button>
-                  <el-button
-                    type="danger"
-                    size="small"
-                    text
-                    @click.stop="deleteTrack(row)"
-                  >
-                    删除
-                  </el-button>
+                  <!-- 普通轨迹操作 -->
+                  <template v-if="!row.is_live_recording">
+                    <el-button type="primary" size="small" text @click.stop="viewTrack(row)">
+                      查看
+                    </el-button>
+                    <el-button type="danger" size="small" text @click.stop="deleteTrack(row)">
+                      删除
+                    </el-button>
+                  </template>
+                  <!-- 实时记录操作 -->
+                  <template v-else>
+                    <el-button
+                      type="primary"
+                      size="small"
+                      text
+                      @click.stop="viewTrack(row)"
+                      :disabled="row.id < 0"
+                    >
+                      查看
+                    </el-button>
+                    <el-button type="warning" size="small" text @click.stop="showRecordingDetail(row)">
+                      记录配置
+                    </el-button>
+                    <el-button type="danger" size="small" text @click.stop="deleteTrack(row)">
+                      删除
+                    </el-button>
+                  </template>
                 </div>
               </template>
             </el-table-column>
@@ -145,10 +174,41 @@
 
           <!-- 移动端卡片列表 -->
           <div class="mobile-card-list">
-            <div v-for="row in tracks" :key="row.id" class="track-card" @click="viewTrack(row)">
+            <!-- 统一的轨迹卡片 -->
+            <div
+              v-for="row in unifiedTracks"
+              :key="row.id"
+              class="track-card"
+              :class="row.is_live_recording ? 'recording-type' : 'track-type'"
+              @click="handleRowClick(row)"
+            >
               <div class="card-header">
                 <div class="track-name">{{ row.name }}</div>
-                <div class="track-time">{{ formatDateTime(row.start_time) }}</div>
+                <!-- 轨迹进度标签 -->
+                <template v-if="!row.is_live_recording && getTrackProgress(row.id)">
+                  <el-tag
+                    v-if="getTrackProgress(row.id)!.status === 'filling'"
+                    type="primary"
+                    size="small"
+                  >
+                    填充中 {{ getTrackProgress(row.id)!.percent }}%
+                  </el-tag>
+                  <el-tag
+                    v-else-if="getTrackProgress(row.id)!.status === 'failed'"
+                    type="danger"
+                    size="small"
+                  >
+                    填充失败
+                  </el-tag>
+                </template>
+                <!-- 实时记录状态标签 -->
+                <el-tag v-if="row.id < 0" type="info" size="small">
+                  等待上传点
+                </el-tag>
+                <el-tag v-else-if="row.is_live_recording && row.live_recording_status === 'active'" type="success" size="small">
+                  实时轨迹记录中
+                </el-tag>
+                <div class="track-time">{{ formatDateTime(row.start_time || row.created_at) }}</div>
               </div>
               <div class="card-body">
                 <div class="card-item">
@@ -159,48 +219,53 @@
                   <span class="label">时长</span>
                   <span class="value">{{ formatDuration(row.duration) }}</span>
                 </div>
-                <div class="card-item" v-if="getTrackProgress(row.id)">
-                  <span class="label">状态</span>
-                  <span class="value">
-                    <el-tag
-                      v-if="getTrackProgress(row.id)!.status === 'filling'"
-                      type="primary"
-                      size="small"
-                    >
-                      填充中 {{ getTrackProgress(row.id)!.percent }}%
-                    </el-tag>
-                    <el-tag
-                      v-else-if="getTrackProgress(row.id)!.status === 'failed'"
-                      type="danger"
-                      size="small"
-                    >
-                      填充失败
-                    </el-tag>
-                  </span>
+                <div class="card-item" v-if="row.elevation_gain > 0">
+                  <span class="label">爬升</span>
+                  <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
                 </div>
               </div>
               <div class="card-actions" @click.stop>
-                <el-button type="primary" size="small" @click="viewTrack(row)">
-                  查看
-                </el-button>
-                <el-button type="danger" size="small" @click="deleteTrack(row)">
-                  删除
-                </el-button>
+                <!-- 普通轨迹操作 -->
+                <template v-if="!row.is_live_recording">
+                  <el-button type="primary" size="small" @click="viewTrack(row)">
+                    查看
+                  </el-button>
+                  <el-button type="danger" size="small" @click="deleteTrack(row)">
+                    删除
+                  </el-button>
+                </template>
+                <!-- 实时记录操作 -->
+                <template v-else>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    @click="viewTrack(row)"
+                    :disabled="row.id < 0"
+                  >
+                    查看
+                  </el-button>
+                  <el-button type="warning" size="small" @click="showRecordingDetail(row)">
+                    记录配置
+                  </el-button>
+                  <el-button type="danger" size="small" @click="deleteTrack(row)">
+                    删除
+                  </el-button>
+                </template>
               </div>
             </div>
           </div>
         </template>
 
         <!-- 空状态 -->
-        <el-empty v-else description="暂无轨迹，请先上传">
+        <el-empty v-else description="暂无轨迹和记录">
           <el-button type="primary" @click="$router.push('/upload')">
             上传第一条轨迹
           </el-button>
         </el-empty>
       </el-card>
 
-      <!-- 分页 -->
-      <div class="pagination" v-if="tracks.length > 0">
+      <!-- 分页（仅轨迹） -->
+      <div class="pagination" v-if="unifiedTracks.length > 0">
         <el-pagination
           v-model:current-page="currentPage"
           v-model:page-size="pageSize"
@@ -212,6 +277,117 @@
         />
       </div>
     </el-main>
+
+    <!-- 实时记录详情对话框 -->
+    <el-dialog v-model="recordingDetailVisible" title="实时记录配置" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <div v-if="currentRecording" class="recording-detail-content">
+        <!-- 记录状态 -->
+        <div class="recording-status">
+          <div class="status-item">
+            <span class="status-label">记录名称：</span>
+            <span class="status-value">{{ currentRecording.name }}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">状态：</span>
+            <el-tag v-if="currentRecording.live_recording_status === 'active'" type="success" size="small">
+              正在记录
+            </el-tag>
+            <el-tag v-else type="info" size="small">已结束</el-tag>
+          </div>
+        </div>
+
+        <!-- 填充地理信息开关 -->
+        <div class="setting-section">
+          <div class="setting-item">
+            <span class="setting-label">上传时自动填充地理信息</span>
+            <el-switch
+              v-model="currentRecording.fill_geocoding"
+              @change="updateFillGeocoding"
+              :disabled="currentRecording.live_recording_status !== 'active'"
+            />
+          </div>
+          <div class="setting-tip">
+            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
+          </div>
+        </div>
+
+        <!-- GPS Logger URL -->
+        <div class="url-section">
+          <div class="url-label">GPS Logger URL：</div>
+          <el-input :model-value="currentRecording.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
+          <el-button @click="copyGpsLoggerUrl" :icon="DocumentCopy" type="primary" class="copy-button">
+            {{ copyButtonText }}
+          </el-button>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="qrcode-container" v-if="currentRecording.qrCode">
+          <div class="qrcode" v-html="currentRecording.qrCode"></div>
+          <p class="qrcode-tip">扫描二维码查看配置说明</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="recordingDetailVisible = false">关闭</el-button>
+        <el-button
+          v-if="currentRecording?.live_recording_status === 'active'"
+          type="danger"
+          @click="confirmEndRecording"
+        >
+          <el-icon><VideoPause /></el-icon>
+          结束记录
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 创建实时记录对话框 -->
+    <el-dialog v-model="createRecordingDialogVisible" title="创建实时记录" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <el-form :model="createRecordingForm" label-width="100px">
+        <el-form-item label="记录名称">
+          <el-input v-model="createRecordingForm.name" placeholder="留空则使用当前时间" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="createRecordingForm.description" type="textarea" :rows="2" placeholder="可选，记录的描述信息" />
+        </el-form-item>
+        <el-form-item label="自动填充地理信息">
+          <el-switch v-model="createRecordingForm.fill_geocoding" />
+          <div class="radio-hint">
+            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="createRecordingDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="createLiveRecording" :loading="creatingRecording">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 创建成功对话框（显示 URL 和二维码） -->
+    <el-dialog v-model="recordingCreatedDialogVisible" title="实时记录已创建" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <div v-if="createdRecordingData" class="recording-created-content">
+        <p class="success-tip">实时记录创建成功！使用以下 URL 上传轨迹：</p>
+
+        <!-- GPS Logger URL -->
+        <div class="url-section">
+          <div class="url-label">GPS Logger URL：</div>
+          <el-input :model-value="createdRecordingData.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
+          <el-button @click="copyCreatedRecordingUrl" :icon="DocumentCopy" type="primary" class="copy-button">
+            {{ createdRecordingCopyButtonText }}
+          </el-button>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="qrcode-container" v-if="createdRecordingData.qrCode">
+          <div class="qrcode" v-html="createdRecordingData.qrCode"></div>
+          <p class="qrcode-tip">扫描二维码查看配置说明</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="recordingCreatedDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -232,9 +408,17 @@ import {
   SwitchButton,
   SortUp,
   SortDown,
+  Sort,
+  Link,
+  Position,
+  VideoPlay,
+  VideoPause,
+  DocumentCopy,
 } from '@element-plus/icons-vue'
-import { trackApi, type Track, type AllFillProgressResponse, type FillProgressItem } from '@/api/track'
+import { trackApi, type UnifiedTrack, type AllFillProgressResponse, type FillProgressItem } from '@/api/track'
+import { liveRecordingApi } from '@/api/liveRecording'
 import { useAuthStore } from '@/stores/auth'
+import QRCode from 'qrcode'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -251,18 +435,46 @@ function handleResize() {
 }
 
 const loading = ref(false)
-const tracks = ref<Track[]>([])
+const unifiedTracks = ref<UnifiedTrack[]>([])
 const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const searchQuery = ref('')
 const sortBy = ref('start_time')
-const sortOrder = ref<'asc' | 'desc'>('asc')  // 初始为正序图标，表示从新到旧
+const sortOrder = ref<'asc' | 'desc'>('asc')
+
+// 实时记录详情对话框
+const recordingDetailVisible = ref(false)
+const currentRecording = ref<{
+  name: string
+  live_recording_status: 'active' | 'ended' | null
+  live_recording_id: number | null
+  live_recording_token: string | null
+  gpsLoggerUrl: string
+  qrCode: string
+  fill_geocoding: boolean
+} | null>(null)
+const copyButtonText = ref('复制')
+
+// 创建实时记录对话框
+const createRecordingDialogVisible = ref(false)
+const recordingCreatedDialogVisible = ref(false)
+const createRecordingForm = ref({
+  name: '',
+  description: '',
+  fill_geocoding: false,
+})
+const creatingRecording = ref(false)
+const createdRecordingData = ref<{
+  gpsLoggerUrl: string
+  qrCode: string
+} | null>(null)
+const createdRecordingCopyButtonText = ref('复制')
 
 // 填充进度数据
 const fillProgress = ref<AllFillProgressResponse>({})
 let progressTimer: ReturnType<typeof setInterval> | null = null
-const PROGRESS_REFRESH_INTERVAL = 2000  // 2秒刷新一次
+const PROGRESS_REFRESH_INTERVAL = 2000
 
 // 排序选项
 const sortOptions = [
@@ -271,11 +483,21 @@ const sortOptions = [
   { label: '时长', value: 'duration' },
 ]
 
+// PC端显示数据（使用统一轨迹列表）
+const displayItems = computed(() => {
+  return unifiedTracks.value
+})
+
 // 获取所有填充进度
 async function loadAllProgress() {
   try {
     const data = await trackApi.getAllFillProgress()
-    fillProgress.value = data
+    // 确保 data 是对象类型
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      fillProgress.value = data
+    } else {
+      fillProgress.value = {}
+    }
   } catch (error) {
     // 静默处理错误
   }
@@ -284,9 +506,7 @@ async function loadAllProgress() {
 // 启动进度轮询
 function startProgressPolling() {
   if (progressTimer) return
-  // 立即加载一次
   loadAllProgress()
-  // 定时刷新
   progressTimer = setInterval(() => {
     loadAllProgress()
   }, PROGRESS_REFRESH_INTERVAL)
@@ -302,35 +522,40 @@ function stopProgressPolling() {
 
 // 获取轨迹的进度信息
 function getTrackProgress(trackId: number): FillProgressItem | null {
-  return fillProgress.value[trackId] || null
-}
+  const progress = fillProgress.value[trackId]
+  if (!progress) return null
 
-// 检查是否有正在填充的轨迹
-function hasFillingTracks(): boolean {
-  return Object.values(fillProgress.value).some(
-    p => p.status === 'filling'
-  )
+  // 确保 percent 字段存在（后端可能不返回）
+  if (typeof progress.percent === 'undefined') {
+    const current = progress.current || 0
+    const total = progress.total || 0
+    return {
+      ...progress,
+      percent: total > 0 ? Math.floor((current / total) * 100) : 0
+    }
+  }
+
+  return progress
 }
 
 async function loadTracks() {
   loading.value = true
   try {
-    // 对于 start_time 字段，反转排序方向以符合用户习惯
-    // start_time: 正序图标(asc)表示从新到旧，倒序图标(desc)表示从旧到新
     let actualSortOrder = sortOrder.value
     if (sortBy.value === 'start_time') {
       actualSortOrder = sortOrder.value === 'asc' ? 'desc' : 'asc'
     }
 
-    const response = await trackApi.getList({
+    const response = await trackApi.getUnifiedList({
       page: currentPage.value,
       page_size: pageSize.value,
       search: searchQuery.value || undefined,
       sort_by: sortBy.value,
       sort_order: actualSortOrder,
     })
-    tracks.value = response.items
-    total.value = response.total
+    // 确保 items 是数组
+    unifiedTracks.value = Array.isArray(response?.items) ? response.items : []
+    total.value = response?.total || 0
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -345,7 +570,7 @@ function handleSearchInput() {
     clearTimeout(searchTimeout)
   }
   searchTimeout = setTimeout(() => {
-    currentPage.value = 1  // 搜索时重置到第一页
+    currentPage.value = 1
     loadTracks()
   }, 500)
 }
@@ -353,25 +578,33 @@ function handleSearchInput() {
 // 点击排序按钮
 function handleSortClick(value: string) {
   if (sortBy.value === value) {
-    // 点击当前排序字段，切换排序方向
     sortOrder.value = sortOrder.value === 'desc' ? 'asc' : 'desc'
   } else {
-    // 切换到新的排序字段
     sortBy.value = value
-    // 对于"最新"，使用 asc（正序图标，表示从新到旧）
-    // 对于"距离"和"时长"，使用 desc（倒序，表示从大到小）
     sortOrder.value = value === 'start_time' ? 'asc' : 'desc'
   }
   loadTracks()
 }
 
-function viewTrack(track: Track) {
+function handleRowClick(row: UnifiedTrack) {
+  viewTrack(row)
+}
+
+function viewTrack(track: UnifiedTrack) {
+  // 所有列表项都导航到轨迹详情（实时记录也已使用 track ID）
+  if (track.id < 0) {
+    ElMessage.warning('该记录还没有上传任何轨迹点，请先使用 GPS Logger 或其他方式上传轨迹点')
+    return
+  }
   router.push(`/tracks/${track.id}`)
 }
 
-function deleteTrack(track: Track) {
+function deleteTrack(track: UnifiedTrack) {
+  const isRecording = track.is_live_recording
+  const itemName = isRecording ? '实时记录' : '轨迹'
+
   ElMessageBox.confirm(
-    `确定要删除轨迹 "${track.name}" 吗？此操作不可撤销。`,
+    `确定要删除${itemName} "${track.name}" 吗？此操作不可撤销。`,
     '确认删除',
     {
       confirmButtonText: '确定',
@@ -380,7 +613,13 @@ function deleteTrack(track: Track) {
     }
   ).then(async () => {
     try {
-      await trackApi.delete(track.id)
+      if (isRecording && track.live_recording_id) {
+        // 删除实时记录（使用 recording ID）
+        await liveRecordingApi.delete(track.live_recording_id)
+      } else {
+        // 删除普通轨迹
+        await trackApi.delete(track.id)
+      }
       ElMessage.success('删除成功')
       loadTracks()
     } catch (error) {
@@ -402,9 +641,288 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'liveRecording') {
+    openCreateRecordingDialog()
   } else if (command === 'upload') {
     router.push('/upload')
   }
+}
+
+// 显示实时记录详情对话框
+async function showRecordingDetail(track: UnifiedTrack) {
+  if (!track.live_recording_token) return
+
+  const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(track.live_recording_token)
+
+  try {
+    // 二维码直接使用 GPS Logger API URL（带占位符）
+    // GPS Logger 扫描后可以直接使用
+    // 用户在浏览器打开时，后端会检测占位符并重定向到引导页面
+    const qrCode = await QRCode.toString(gpsLoggerUrl, {
+      width: 200,
+      margin: 2,
+      type: 'svg',
+    })
+
+    currentRecording.value = {
+      name: track.name,
+      live_recording_status: track.live_recording_status,
+      live_recording_id: track.live_recording_id,
+      live_recording_token: track.live_recording_token,
+      gpsLoggerUrl,
+      qrCode,
+      fill_geocoding: track.fill_geocoding || false,
+    }
+    recordingDetailVisible.value = true
+  } catch (error) {
+    ElMessage.error('生成二维码失败')
+  }
+}
+
+// 更新填充地理信息设置
+async function updateFillGeocoding(value: boolean) {
+  if (!currentRecording.value?.live_recording_id) return
+
+  const originalValue = currentRecording.value.fill_geocoding
+
+  try {
+    await liveRecordingApi.updateFillGeocoding(currentRecording.value.live_recording_id, value)
+    // 成功后更新本地状态
+    currentRecording.value.fill_geocoding = value
+    // 更新对应 track 的 fill_geocoding 值
+    const track = unifiedTracks.value.find(t => t.live_recording_id === currentRecording.value?.live_recording_id)
+    if (track) {
+      track.fill_geocoding = value
+    }
+    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
+  } catch (error) {
+    // 失败时恢复到原来的值（el-switch 会自动恢复，但我们需要确保状态一致）
+    currentRecording.value.fill_geocoding = originalValue
+    console.error('更新填充地理信息设置失败:', error)
+  }
+}
+
+// 复制 GPS Logger URL
+function copyGpsLoggerUrl() {
+  if (!currentRecording.value) return
+  const url = currentRecording.value.gpsLoggerUrl
+
+  // 检查剪贴板 API 是否可用
+  if (!navigator.clipboard) {
+    // 尝试使用传统的 execCommand 方法作为回退
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        copyButtonText.value = '已复制'
+        ElMessage.success('URL 已复制到剪贴板')
+        setTimeout(() => {
+          copyButtonText.value = '复制'
+        }, 2000)
+      } else {
+        ElMessage.error('复制失败，请手动选择复制')
+      }
+    } catch (err) {
+      document.body.removeChild(textarea)
+      ElMessage.error('复制失败，请手动选择复制')
+      console.error('复制失败:', err)
+    }
+    return
+  }
+
+  // 使用现代剪贴板 API
+  navigator.clipboard.writeText(url).then(() => {
+    copyButtonText.value = '已复制'
+    ElMessage.success('URL 已复制到剪贴板')
+    setTimeout(() => {
+      copyButtonText.value = '复制'
+    }, 2000)
+  }).catch((err) => {
+    // 检查是否是因为非安全上下文（http vs https）
+    const isSecureContext = window.isSecureContext
+    if (!isSecureContext) {
+      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
+    console.error('复制失败:', err)
+  })
+}
+
+// 从对话框结束记录（带二次确认）
+async function confirmEndRecording() {
+  if (!currentRecording.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要结束实时记录"${currentRecording.value.name}"吗？结束后将无法继续上传轨迹点。`,
+      '确认结束记录',
+      {
+        confirmButtonText: '确定结束',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+
+    await liveRecordingApi.end(currentRecording.value.live_recording_id!)
+    ElMessage.success('记录已结束')
+    recordingDetailVisible.value = false
+    loadTracks()
+  } catch (error) {
+    // 用户取消或错误已在拦截器中处理
+  }
+}
+
+// 打开创建实时记录对话框
+function openCreateRecordingDialog() {
+  createRecordingForm.value = {
+    name: '',
+    description: '',
+    fill_geocoding: false,
+  }
+  createRecordingDialogVisible.value = true
+}
+
+// 创建实时记录
+async function createLiveRecording() {
+  // 生成记录名称（如果未填写则使用当前时间）
+  let name = createRecordingForm.value.name.trim()
+  if (!name) {
+    const now = new Date()
+    name = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+  }
+
+  creatingRecording.value = true
+  try {
+    const recording = await liveRecordingApi.create({
+      name,
+      description: createRecordingForm.value.description.trim() || undefined,
+      fill_geocoding: createRecordingForm.value.fill_geocoding,
+    })
+
+    // 生成 GPS Logger URL
+    const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(recording.token)
+
+    // 生成二维码
+    const qrCode = await QRCode.toString(gpsLoggerUrl, {
+      width: 200,
+      margin: 2,
+      type: 'svg',
+    })
+
+    createdRecordingData.value = {
+      gpsLoggerUrl,
+      qrCode,
+    }
+
+    // 关闭创建对话框，显示成功对话框
+    createRecordingDialogVisible.value = false
+    recordingCreatedDialogVisible.value = true
+
+    // 刷新轨迹列表
+    loadTracks()
+
+    ElMessage.success('记录创建成功')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    creatingRecording.value = false
+  }
+}
+
+// 复制创建成功的记录 URL
+function copyCreatedRecordingUrl() {
+  if (!createdRecordingData.value) return
+  const url = createdRecordingData.value.gpsLoggerUrl
+
+  // 检查剪贴板 API 是否可用
+  if (!navigator.clipboard) {
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        createdRecordingCopyButtonText.value = '已复制'
+        ElMessage.success('URL 已复制到剪贴板')
+        setTimeout(() => {
+          createdRecordingCopyButtonText.value = '复制'
+        }, 2000)
+      } else {
+        ElMessage.error('复制失败，请手动选择复制')
+      }
+    } catch (err) {
+      document.body.removeChild(textarea)
+      ElMessage.error('复制失败，请手动选择复制')
+      console.error('复制失败:', err)
+    }
+    return
+  }
+
+  navigator.clipboard.writeText(url).then(() => {
+    createdRecordingCopyButtonText.value = '已复制'
+    ElMessage.success('URL 已复制到剪贴板')
+    setTimeout(() => {
+      createdRecordingCopyButtonText.value = '复制'
+    }, 2000)
+  }).catch((err) => {
+    const isSecureContext = window.isSecureContext
+    if (!isSecureContext) {
+      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
+    console.error('复制失败:', err)
+  })
+}
+
+// 复制记录 URL（保留用于其他可能的调用）
+function copyRecordingUrl(track: UnifiedTrack) {
+  if (!track.live_recording_token) return
+  const url = liveRecordingApi.getFullUploadUrl(track.live_recording_token)
+  navigator.clipboard.writeText(url).then(() => {
+    ElMessage.success('链接已复制到剪贴板')
+  }).catch(() => {
+    ElMessage.error('复制失败，请手动复制')
+  })
+}
+
+// 显示二维码（保留用于其他可能的调用）
+async function showRecordingQrCode(track: UnifiedTrack) {
+  showRecordingDetail(track)
+}
+
+// 结束记录（保留用于其他可能的调用）
+function endRecording(track: UnifiedTrack) {
+  ElMessageBox.confirm(
+    `确定要结束记录 "${track.name}" 吗？结束后将无法继续上传轨迹。`,
+    '确认结束',
+    {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }
+  ).then(async () => {
+    try {
+      await liveRecordingApi.end(track.live_recording_id!)
+      ElMessage.success('记录已结束')
+      loadTracks()
+    } catch (error) {
+      // 错误已在拦截器中处理
+    }
+  })
 }
 
 function formatDistance(meters: number): string {
@@ -441,17 +959,13 @@ function formatDateTime(dateStr: string | null): string {
 
 onMounted(async () => {
   await loadTracks()
-  // 启动进度轮询
   startProgressPolling()
-
-  // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
 })
 
-// 组件卸载时移除监听器
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
-  stopProgressPolling()  // 停止进度轮询
+  stopProgressPolling()
 })
 </script>
 
@@ -548,6 +1062,7 @@ onUnmounted(() => {
 .sort-col {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .sort-buttons {
@@ -589,7 +1104,7 @@ onUnmounted(() => {
   background-color: #f5f7fa;
 }
 
-.track-time {
+.item-time {
   font-size: 13px;
   color: #606266;
 }
@@ -607,13 +1122,7 @@ onUnmounted(() => {
   gap: 4px;
 }
 
-.action-buttons {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-}
-
-.track-name-cell {
+.name-cell {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -664,7 +1173,6 @@ onUnmounted(() => {
 
 /* 移动端响应式 */
 @media (max-width: 1366px) {
-  /* 容器固定，防止页面滚动 */
   .track-list-container {
     position: fixed;
     top: 0;
@@ -675,7 +1183,6 @@ onUnmounted(() => {
     background: #f5f7fa;
   }
 
-  /* 导航栏固定在顶部 */
   .track-list-container > .el-header {
     position: absolute;
     top: 0;
@@ -688,7 +1195,6 @@ onUnmounted(() => {
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
 
-  /* 主内容区添加顶部内边距，避免被固定导航栏遮挡 */
   .track-list-container > .el-main {
     padding-top: 80px;
     height: 100%;
@@ -717,7 +1223,6 @@ onUnmounted(() => {
     background: #f5f7fa;
   }
 
-  /* 确保 Element Plus 的主内容区也有正确的背景色 */
   :deep(.el-main) {
     background: #f5f7fa;
   }
@@ -737,12 +1242,10 @@ onUnmounted(() => {
     margin-top: 10px;
   }
 
-  /* 隐藏PC端表格 */
   .pc-table {
     display: none;
   }
 
-  /* 显示移动端卡片 */
   .mobile-card-list {
     display: block;
   }
@@ -751,17 +1254,14 @@ onUnmounted(() => {
     flex-wrap: wrap;
   }
 
-  /* 移动端卡片列表滚动，底部留出分页器空间 */
   .mobile-card-list {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 10px;
-    /* 为固定底部的分页器留出空间（分页器高度约 50px + 安全区域） */
     padding-bottom: 70px;
   }
 
-  /* 移动端列表卡片 */
   .list-card {
     flex: 1;
     min-height: 0;
@@ -783,7 +1283,6 @@ onUnmounted(() => {
     padding: 0;
   }
 
-  /* 分页器固定在底部 */
   .pagination {
     position: fixed;
     bottom: 0;
@@ -792,7 +1291,6 @@ onUnmounted(() => {
     z-index: 100;
     background: #f5f7fa;
     padding: 10px;
-    /* 适配安全区域 */
     padding-bottom: max(10px, env(safe-area-inset-bottom));
     box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
     margin-top: 0;
@@ -815,6 +1313,20 @@ onUnmounted(() => {
 
 .track-card:hover {
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* 实时记录卡片特殊样式 */
+.recording-type {
+  border-left: 4px solid #67c23a;
+  cursor: default;
+}
+
+.recording-type:hover {
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.track-type {
+  border-left: 4px solid #409eff;
 }
 
 .card-header {
@@ -875,7 +1387,6 @@ onUnmounted(() => {
   flex: 1;
 }
 
-/* 防止移动端拖动卡片 */
 .mobile-card-list {
   touch-action: pan-y pinch-zoom;
 }
@@ -889,9 +1400,7 @@ onUnmounted(() => {
 </style>
 
 <style>
-/* 非 scoped 样式：确保移动端 Safari 背景色正确延伸到地址栏区域 */
 @media (max-width: 1366px) {
-  /* 使用伪元素创建一个背景层，确保覆盖整个视口 */
   .track-list-container::before {
     content: '';
     position: fixed;
@@ -901,12 +1410,10 @@ onUnmounted(() => {
     bottom: 0;
     background: #f5f7fa;
     z-index: -1;
-    /* 延伸到安全区域 */
     height: 100vh;
     height: -webkit-fill-available;
   }
 
-  /* 确保 body 和 html 也有正确的背景色 */
   body {
     background: #f5f7fa !important;
   }
@@ -914,5 +1421,135 @@ onUnmounted(() => {
   #app {
     background: #f5f7fa !important;
   }
+}
+
+/* 实时记录详情对话框 */
+.recording-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.recording-status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-label {
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+.status-value {
+  color: var(--el-text-color-primary);
+}
+
+.url-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.url-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+.url-textarea {
+  font-family: monospace;
+}
+
+.copy-button {
+  align-self: flex-start;
+}
+
+/* 设置区域 */
+.setting-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.setting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.setting-label {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.setting-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-left: 0;
+}
+
+/* 操作区域 */
+.action-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 二维码 */
+.qrcode-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.qrcode {
+  display: flex;
+}
+
+.qrcode :deep(svg) {
+  width: 200px;
+  height: 200px;
+}
+
+.qrcode-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 创建成功对话框 */
+.recording-created-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.success-tip {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.action-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  text-align: center;
 }
 </style>

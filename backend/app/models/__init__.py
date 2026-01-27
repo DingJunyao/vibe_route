@@ -8,6 +8,7 @@ from app.models.track import Track, TrackPoint
 from app.models.config import Config, InviteCode
 from app.models.task import Task
 from app.models.road_sign import RoadSignCache
+from app.models.live_recording import LiveRecording
 
 __all__ = [
     "Base",
@@ -19,4 +20,5 @@ __all__ = [
     "InviteCode",
     "Task",
     "RoadSignCache",
+    "LiveRecording",
 ]

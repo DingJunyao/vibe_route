@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = '004_fix_road_sign_cache_id'
-down_revision = '003_add_memo_to_track_points'
+down_revision = '003_add_memo'
 branch_labels = None
 depends_on = None
 

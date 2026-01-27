@@ -3,11 +3,13 @@
 """
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.user import User
+from app.models.live_recording import LiveRecording
 from app.schemas.track import (
     TrackCreate,
     TrackUpdate,
@@ -16,6 +18,7 @@ from app.schemas.track import (
     TrackPointResponse,
     TrackStatsResponse,
     RegionTreeResponse,
+    UnifiedTrackListResponse,
 )
 from app.services.track_service import track_service
 
@@ -114,7 +117,7 @@ async def get_tracks(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    获取当前用户的轨迹列表
+    获取当前用户的轨迹列表（仅普通轨迹，不包含实时记录）
 
     - search: 搜索轨迹名称（模糊匹配）
     - sort_by: 排序字段 (start_time, distance, duration)，默认为 start_time
@@ -139,6 +142,39 @@ async def get_tracks(
     )
 
 
+@router.get("/unified", response_model=UnifiedTrackListResponse)
+async def get_unified_tracks(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None, description="搜索轨迹名称"),
+    sort_by: Optional[str] = Query(None, description="排序字段: start_time, distance, duration"),
+    sort_order: Optional[str] = Query("desc", description="排序方向: asc, desc"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取当前用户的轨迹列表（包含实时记录）
+
+    实时记录会作为特殊轨迹一起返回，带有 is_live_recording=True 标记
+    """
+    items, total = await track_service.get_unified_list(
+        db,
+        current_user.id,
+        (page - 1) * page_size,
+        page_size,
+        search=search,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+
+    return UnifiedTrackListResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=items,
+    )
+
+
 @router.get("/stats", response_model=TrackStatsResponse)
 async def get_track_stats(
     current_user: User = Depends(get_current_user),
@@ -148,7 +184,12 @@ async def get_track_stats(
     获取当前用户的轨迹统计
     """
     stats = await track_service.get_stats(db, current_user.id)
-    return TrackStatsResponse(**stats)
+    return TrackStatsResponse(
+        total_tracks=stats['total_tracks'],
+        total_distance=stats['total_distance'],
+        total_duration=stats['total_duration'],
+        total_elevation_gain=stats['total_elevation_gain'],
+    )
 
 
 @router.get("/{track_id}", response_model=TrackResponse)
@@ -167,7 +208,42 @@ async def get_track(
             detail="轨迹不存在",
         )
 
-    return TrackResponse.model_validate(track)
+    # 查询关联的实时记录
+    result = await db.execute(
+        select(LiveRecording).where(
+            LiveRecording.current_track_id == track_id,
+            LiveRecording.is_valid == True
+        )
+    )
+    recording = result.scalar_one_or_none()
+
+    # 构建响应
+    response_data = {
+        "id": track.id,
+        "user_id": track.user_id,
+        "name": track.name,
+        "description": track.description,
+        "original_filename": track.original_filename,
+        "original_crs": track.original_crs,
+        "distance": track.distance or 0,
+        "duration": track.duration or 0,
+        "elevation_gain": track.elevation_gain or 0,
+        "elevation_loss": track.elevation_loss or 0,
+        "start_time": track.start_time,
+        "end_time": track.end_time,
+        "has_area_info": track.has_area_info or False,
+        "has_road_info": track.has_road_info or False,
+        "created_at": track.created_at,
+        "updated_at": track.updated_at,
+        # 实时记录相关
+        "is_live_recording": recording is not None and recording.status == "active",
+        "live_recording_id": recording.id if recording else None,
+        "live_recording_status": recording.status if recording else None,
+        "live_recording_token": recording.token if recording else None,
+        "fill_geocoding": recording.fill_geocoding if recording else False,
+    }
+
+    return TrackResponse.model_validate(response_data)
 
 
 @router.patch("/{track_id}", response_model=TrackResponse)

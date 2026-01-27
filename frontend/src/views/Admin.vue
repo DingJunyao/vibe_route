@@ -767,7 +767,7 @@
     </el-container>
 
     <!-- 创建邀请码对话框 -->
-    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" width="500px" class="responsive-dialog">
+    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form :model="inviteCodeForm" label-width="120px" class="dialog-form">
         <el-form-item label="邀请码">
           <el-input v-model="inviteCodeForm.code" placeholder="留空自动生成" />
@@ -790,7 +790,7 @@
     </el-dialog>
 
     <!-- 重置密码对话框 -->
-    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" width="500px" class="responsive-dialog">
+    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form :model="resetPasswordForm" label-width="100px" class="dialog-form">
         <el-form-item label="用户名">
           <el-input :value="resetPasswordForm.username" disabled />

@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User
+from app.models.live_recording import LiveRecording
+from app.services.live_recording_service import live_recording_service
 
 
 async def get_current_user(
@@ -130,3 +132,36 @@ async def get_current_admin_user(
             detail="需要管理员权限",
         )
     return current_user
+
+
+async def get_live_recording(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> LiveRecording:
+    """
+    通过 token 获取实时记录
+
+    Args:
+        token: 实时记录 token
+        db: 数据库会话
+
+    Returns:
+        实时记录对象
+
+    Raises:
+        HTTPException: token 无效或记录不存在时
+    """
+    recording = await live_recording_service.get_by_token(db, token)
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="无效的 token",
+        )
+
+    if recording.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="记录已结束",
+        )
+
+    return recording

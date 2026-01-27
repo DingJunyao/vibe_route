@@ -3,10 +3,24 @@
     <el-header>
       <div class="header-left">
         <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
-        <h1>{{ track?.name || '轨迹详情' }}</h1>
+        <div class="title-with-tags">
+          <h1>{{ track?.name || '轨迹详情' }}</h1>
+          <el-tag v-if="track?.is_live_recording && track.live_recording_status === 'active'" type="success" size="small" class="title-tag">
+            实时轨迹记录中
+          </el-tag>
+        </div>
       </div>
       <div class="header-right">
         <div class="header-actions">
+          <el-button
+            v-if="track?.is_live_recording && track.live_recording_token"
+            type="warning"
+            @click="showRecordingDetail"
+            class="desktop-only"
+          >
+            <el-icon><Link /></el-icon>
+            记录配置
+          </el-button>
           <el-button type="primary" @click="showEditDialog" class="desktop-only">
             <el-icon><Edit /></el-icon>
             编辑
@@ -42,6 +56,13 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item
+                command="recordingDetail"
+                v-if="isMobile && track?.is_live_recording && track.live_recording_token"
+              >
+                <el-icon><Link /></el-icon>
+                记录配置
+              </el-dropdown-item>
               <el-dropdown-item command="edit" v-if="isMobile">
                 <el-icon><Edit /></el-icon>
                 编辑
@@ -520,7 +541,7 @@
     </el-main>
 
     <!-- 编辑对话框 -->
-    <el-dialog v-model="editDialogVisible" title="编辑轨迹" width="500px" class="responsive-dialog">
+    <el-dialog v-model="editDialogVisible" title="编辑轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form :model="editForm" label-width="80px" class="dialog-form">
         <el-form-item label="名称">
           <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
@@ -541,7 +562,7 @@
     </el-dialog>
 
     <!-- 下载对话框 -->
-    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" width="500px" class="responsive-dialog">
+    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form label-width="100px" class="dialog-form">
         <el-form-item label="坐标系">
           <el-radio-group v-model="downloadCRS">
@@ -559,7 +580,7 @@
     </el-dialog>
 
     <!-- 导出数据对话框 -->
-    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" width="500px" class="responsive-dialog">
+    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form label-width="100px" class="dialog-form">
         <el-form-item label="文件格式">
           <el-radio-group v-model="exportFormat">
@@ -578,7 +599,7 @@
     </el-dialog>
 
     <!-- 导入数据对话框 -->
-    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" width="500px" class="responsive-dialog">
+    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form label-width="100px" class="dialog-form">
         <el-form-item label="匹配方式">
           <el-radio-group v-model="importMatchMode">
@@ -647,6 +668,68 @@
         <el-button type="primary" :loading="importing" @click="importPoints" :disabled="!importFile">导入</el-button>
       </template>
     </el-dialog>
+
+    <!-- 实时记录配置对话框 -->
+    <el-dialog v-model="recordingDetailVisible" title="实时记录配置" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <div v-if="recordingDetail" class="recording-detail-content">
+        <!-- 记录状态 -->
+        <div class="recording-status">
+          <div class="status-item">
+            <span class="status-label">记录名称：</span>
+            <span class="status-value">{{ recordingDetail.name }}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">状态：</span>
+            <el-tag v-if="recordingDetail.live_recording_status === 'active'" type="success" size="small">
+              正在记录
+            </el-tag>
+            <el-tag v-else type="info" size="small">已结束</el-tag>
+          </div>
+        </div>
+
+        <!-- 填充地理信息开关 -->
+        <div class="setting-section">
+          <div class="setting-item">
+            <span class="setting-label">上传时自动填充地理信息</span>
+            <el-switch
+              v-model="recordingDetail.fill_geocoding"
+              @change="updateRecordingFillGeocoding"
+              :disabled="recordingDetail.live_recording_status !== 'active'"
+            />
+          </div>
+          <div class="setting-tip">
+            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
+          </div>
+        </div>
+
+        <!-- GPS Logger URL -->
+        <div class="url-section">
+          <div class="url-label">GPS Logger URL：</div>
+          <el-input :model-value="recordingDetail.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
+          <el-button @click="copyRecordingUrl" :icon="DocumentCopy" type="primary" class="copy-button">
+            {{ recordingDetailCopyButtonText }}
+          </el-button>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="qrcode-container" v-if="recordingDetail.qrCode">
+          <div class="qrcode" v-html="recordingDetail.qrCode"></div>
+          <p class="qrcode-tip">扫描二维码查看配置说明</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="recordingDetailVisible = false">关闭</el-button>
+        <el-button
+          v-if="recordingDetail?.live_recording_status === 'active'"
+          type="danger"
+          @click="confirmEndRecording"
+        >
+          <el-icon><VideoPause /></el-icon>
+          结束记录
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -673,10 +756,15 @@ import {
   SwitchButton,
   LocationFilled,
   Close,
+  Link,
+  DocumentCopy,
+  VideoPause,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
+import { liveRecordingApi } from '@/api/liveRecording'
 import UniversalMap from '@/components/map/UniversalMap.vue'
+import QRCode from 'qrcode'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
@@ -750,6 +838,19 @@ const loadingSigns = ref<Set<string>>(new Set())
 // 强制更新树组件的 key（当 SVG 加载完成后）
 const treeForceUpdateKey = ref(0)
 
+// 实时记录详情相关
+const recordingDetailVisible = ref(false)
+const recordingDetail = ref<{
+  name: string
+  live_recording_status: 'active' | 'ended'
+  live_recording_id: number
+  live_recording_token: string
+  gpsLoggerUrl: string
+  qrCode: string
+  fill_geocoding: boolean
+} | null>(null)
+const recordingDetailCopyButtonText = ref('复制')
+
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
 
@@ -818,6 +919,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'recordingDetail') {
+    showRecordingDetail()
   } else if (command === 'edit') {
     showEditDialog()
   } else if (command === 'download') {
@@ -1450,6 +1553,142 @@ function showDownloadDialog() {
   downloadDialogVisible.value = true
 }
 
+// 显示实时记录详情对话框
+async function showRecordingDetail() {
+  if (!track.value?.live_recording_id) return
+
+  try {
+    // 从后端获取最新的实时记录数据（包含 fill_geocoding）
+    const recording = await liveRecordingApi.getList('active')
+    const currentRecording = recording.find(r => r.id === track.value?.live_recording_id)
+
+    if (!currentRecording) {
+      ElMessage.error('找不到实时记录')
+      return
+    }
+
+    const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(currentRecording.token)
+
+    // 生成二维码
+    const qrCode = await QRCode.toString(gpsLoggerUrl, {
+      width: 200,
+      margin: 2,
+      type: 'svg',
+    })
+
+    recordingDetail.value = {
+      name: track.value.name,
+      live_recording_status: currentRecording.status,
+      live_recording_id: currentRecording.id,
+      live_recording_token: currentRecording.token,
+      gpsLoggerUrl,
+      qrCode,
+      fill_geocoding: currentRecording.fill_geocoding || false,
+    }
+    recordingDetailVisible.value = true
+  } catch (error) {
+    ElMessage.error('获取实时记录信息失败')
+  }
+}
+
+// 复制实时记录 URL
+function copyRecordingUrl() {
+  if (!recordingDetail.value) return
+  const url = recordingDetail.value.gpsLoggerUrl
+
+  // 检查剪贴板 API 是否可用
+  if (!navigator.clipboard) {
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        recordingDetailCopyButtonText.value = '已复制'
+        ElMessage.success('URL 已复制到剪贴板')
+        setTimeout(() => {
+          recordingDetailCopyButtonText.value = '复制'
+        }, 2000)
+      } else {
+        ElMessage.error('复制失败，请手动选择复制')
+      }
+    } catch (err) {
+      document.body.removeChild(textarea)
+      ElMessage.error('复制失败，请手动选择复制')
+      console.error('复制失败:', err)
+    }
+    return
+  }
+
+  navigator.clipboard.writeText(url).then(() => {
+    recordingDetailCopyButtonText.value = '已复制'
+    ElMessage.success('URL 已复制到剪贴板')
+    setTimeout(() => {
+      recordingDetailCopyButtonText.value = '复制'
+    }, 2000)
+  }).catch((err) => {
+    const isSecureContext = window.isSecureContext
+    if (!isSecureContext) {
+      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
+    console.error('复制失败:', err)
+  })
+}
+
+// 更新填充地理信息设置
+async function updateRecordingFillGeocoding(value: boolean) {
+  if (!recordingDetail.value?.live_recording_id) return
+
+  const originalValue = recordingDetail.value.fill_geocoding
+
+  try {
+    await liveRecordingApi.updateFillGeocoding(recordingDetail.value.live_recording_id, value)
+    // 成功后更新本地状态
+    recordingDetail.value.fill_geocoding = value
+    // 同时更新 track 的 fill_geocoding 值（如果存在）
+    if (track.value) {
+      track.value.fill_geocoding = value
+    }
+    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
+  } catch (error) {
+    // 失败时恢复到原来的值
+    recordingDetail.value.fill_geocoding = originalValue
+    console.error('更新填充地理信息设置失败:', error)
+  }
+}
+
+// 结束实时记录（带二次确认）
+async function confirmEndRecording() {
+  if (!recordingDetail.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要结束实时记录"${recordingDetail.value.name}"吗？结束后将无法继续上传轨迹点。`,
+      '确认结束记录',
+      {
+        confirmButtonText: '确定结束',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+
+    await liveRecordingApi.end(recordingDetail.value.live_recording_id)
+    ElMessage.success('记录已结束')
+    recordingDetailVisible.value = false
+    // 重新加载轨迹数据
+    await fetchTrackDetail()
+  } catch (error) {
+    // 用户取消或错误已在拦截器中处理
+  }
+}
+
 // 显示编辑对话框
 function showEditDialog() {
   if (track.value) {
@@ -1778,6 +2017,18 @@ onUnmounted(() => {
   gap: 16px;
   flex: 1;
   min-width: 0;
+}
+
+.title-with-tags {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.title-tag {
+  flex-shrink: 0;
 }
 
 .header-left h1 {
@@ -2535,6 +2786,110 @@ onUnmounted(() => {
     width: 80px !important;
     font-size: 14px;
   }
+}
+
+/* 实时记录详情对话框 */
+.recording-detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.recording-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-label {
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  min-width: 80px;
+}
+
+.status-value {
+  color: var(--el-text-color-primary);
+}
+
+.url-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.url-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+}
+
+.url-textarea {
+  font-family: monospace;
+}
+
+.copy-button {
+  align-self: flex-start;
+}
+
+/* 设置区域 */
+.setting-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.setting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.setting-label {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.setting-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-left: 0;
+}
+
+.qrcode-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.qrcode {
+  display: flex;
+}
+
+.qrcode :deep(svg) {
+  width: 200px;
+  height: 200px;
+}
+
+.qrcode-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 </style>
 

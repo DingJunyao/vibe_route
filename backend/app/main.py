@@ -4,10 +4,11 @@ FastAPI 主应用
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import auth, admin, tracks, tasks, road_signs, logs
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings
 
 
 @asynccontextmanager
@@ -22,15 +23,25 @@ async def lifespan(app: FastAPI):
     async with async_session_maker() as db:
         await config_service.init_default_configs(db)
 
-    yield
+    try:
+        yield
+    finally:
+        # 关闭时的清理工作（无论是否发生异常都会执行）
+        # 取消所有后台任务
+        from app.services.track_service import track_service
+        import logging
+        logger = logging.getLogger(__name__)
 
-    # 关闭时的清理工作
-    # 取消所有后台任务
-    from app.services.track_service import track_service
-    await track_service.cancel_all_tasks()
+        try:
+            await track_service.cancel_all_tasks()
+        except Exception as e:
+            logger.warning(f"Error cancelling background tasks: {e}")
 
-    # 关闭数据库引擎和连接池
-    await engine.dispose()
+        # 关闭数据库引擎和连接池
+        try:
+            await engine.dispose()
+        except Exception as e:
+            logger.warning(f"Error disposing database engine: {e}")
 
 
 # 创建 FastAPI 应用
@@ -50,6 +61,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加 GZip 压缩中间件
+# 只对响应进行压缩，不处理请求
+# 对于大于 500 字节的响应启用压缩，压缩级别 6（平衡速度和压缩率）
+app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=6)
+
 # 注册路由
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin.router, prefix=settings.API_V1_PREFIX)
@@ -57,6 +73,7 @@ app.include_router(tracks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(tasks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(road_signs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
+app.include_router(live_recordings.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")

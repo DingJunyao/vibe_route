@@ -35,25 +35,33 @@ class TrackService:
         if not self._background_tasks:
             return
 
+        # 复制任务列表，避免迭代过程中被修改
+        tasks_to_cancel = list(self._background_tasks)
+
         # 取消所有未完成的任务
-        for task in list(self._background_tasks):
+        for task in tasks_to_cancel:
             if not task.done():
                 task.cancel()
 
-        # 等待任务取消（忽略所有异常）
-        if self._background_tasks:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*self._background_tasks, return_exceptions=True),
-                    timeout=3.0  # 最多等待3秒
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                # 超时或被取消时直接忽略
-                pass
-            except Exception:
-                # 其他异常也忽略
-                pass
+        # 逐个等待任务完成（避免 gather 的问题）
+        import logging
+        logger = logging.getLogger(__name__)
 
+        for task in tasks_to_cancel:
+            try:
+                # 使用 wait_for 避免无限等待
+                await asyncio.wait_for(task, timeout=0.5)
+            except asyncio.CancelledError:
+                # 任务被取消，这是预期的
+                pass
+            except asyncio.TimeoutError:
+                # 超时，继续下一个任务
+                logger.warning(f"Task {task.get_name()} did not cancel in time")
+            except Exception as e:
+                # 其他异常，记录但继续
+                logger.warning(f"Error while cancelling task {task.get_name()}: {e}")
+
+        # 清空任务列表
         self._background_tasks.clear()
 
     async def _get_geocoding_service(self, db: AsyncSession):
@@ -506,6 +514,15 @@ class TrackService:
                         logger.info(f"Geocoding fill stopped for track {track_id}")
                         return
 
+                    # 检查任务是否被取消
+                    try:
+                        # 使用 asyncio.sleep 的同时检查取消
+                        await asyncio.sleep(0)
+                    except asyncio.CancelledError:
+                        logger.info(f"Geocoding fill cancelled for track {track_id}")
+                        self._filling_progress[track_id]["status"] = "stopped"
+                        return
+
                     try:
                         lat = point.latitude_wgs84
                         lon = point.longitude_wgs84
@@ -532,8 +549,18 @@ class TrackService:
                         self._filling_progress[track_id]["current"] = idx + 1
 
                         # 每次请求后短暂延迟，避免过载
-                        await asyncio.sleep(0.2)
+                        try:
+                            await asyncio.sleep(0.2)
+                        except asyncio.CancelledError:
+                            logger.info(f"Geocoding fill cancelled for track {track_id} (during sleep)")
+                            self._filling_progress[track_id]["status"] = "stopped"
+                            raise  # 重新抛出，让上层处理
 
+                    except asyncio.CancelledError:
+                        # 任务被取消，标记为已停止并重新抛出
+                        logger.info(f"Geocoding fill cancelled for track {track_id}")
+                        self._filling_progress[track_id]["status"] = "stopped"
+                        raise
                     except Exception as e:
                         logger.error(f"Error getting geocoding for point {idx}: {e}")
 
@@ -612,6 +639,236 @@ class TrackService:
             'total_duration': row.total_duration or 0,
             'total_elevation_gain': row.total_elevation_gain or 0,
         }
+
+    async def get_live_recording_stats(self, db: AsyncSession, user_id: int) -> dict:
+        """获取用户实时记录的统计（从关联的当前轨迹获取）"""
+        from app.models.live_recording import LiveRecording
+
+        # 获取所有实时记录
+        result = await db.execute(
+            select(LiveRecording).where(
+                and_(
+                    LiveRecording.user_id == user_id,
+                    LiveRecording.is_valid == True
+                )
+            )
+        )
+        recordings = list(result.scalars().all())
+
+        if not recordings:
+            return {
+                'total_tracks': 0,
+                'total_distance': 0,
+                'total_duration': 0,
+                'total_elevation_gain': 0,
+            }
+
+        # 获取所有关联的当前轨迹 ID（只统计已有关联轨迹的实时记录）
+        track_ids = [r.current_track_id for r in recordings if r.current_track_id]
+
+        if not track_ids:
+            return {
+                'total_tracks': 0,  # 没有关联轨迹的实时记录不计入统计
+                'total_distance': 0,
+                'total_duration': 0,
+                'total_elevation_gain': 0,
+            }
+
+        # 获取这些轨迹的统计
+        result = await db.execute(
+            select(
+                func.count(Track.id).label('total_tracks'),
+                func.sum(Track.distance).label('total_distance'),
+                func.sum(Track.duration).label('total_duration'),
+                func.sum(Track.elevation_gain).label('total_elevation_gain'),
+            ).where(
+                and_(
+                    Track.id.in_(track_ids),
+                    Track.is_valid == True
+                )
+            )
+        )
+        row = result.one()
+
+        return {
+            'total_tracks': row.total_tracks or 0,  # 使用实际轨迹数量
+            'total_distance': row.total_distance or 0,
+            'total_duration': row.total_duration or 0,
+            'total_elevation_gain': row.total_elevation_gain or 0,
+        }
+
+    async def get_unified_list(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        skip: int = 0,
+        limit: int = 20,
+        search: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = "desc",
+    ) -> tuple[List[dict], int]:
+        """
+        获取用户的轨迹列表（包含实时记录状态）
+
+        返回普通轨迹列表，如果轨迹有正在进行的实时记录，会添加 recording_status 字段
+        正在记录的轨迹会优先显示在列表前面
+        没有关联轨迹的实时记录也会显示（显示记录名称，数据为0）
+
+        Returns:
+            (轨迹列表, 总数)
+        """
+        from app.models.live_recording import LiveRecording
+
+        # 构建查询条件
+        track_conditions = [Track.user_id == user_id, Track.is_valid == True]
+        if search:
+            track_conditions.append(Track.name.ilike(f"%{search}%"))
+
+        # 获取轨迹总数
+        track_count_result = await db.execute(
+            select(func.count(Track.id)).where(and_(*track_conditions))
+        )
+        track_total = track_count_result.scalar() or 0
+
+        # 获取所有正在进行的实时记录
+        recording_conditions = [
+            LiveRecording.user_id == user_id,
+            LiveRecording.is_valid == True,
+            LiveRecording.status == 'active',
+        ]
+        if search:
+            recording_conditions.append(LiveRecording.name.ilike(f"%{search}%"))
+
+        recording_count_result = await db.execute(
+            select(func.count(LiveRecording.id)).where(and_(*recording_conditions))
+        )
+        recording_total = recording_count_result.scalar() or 0
+
+        # 总数 = 普通轨迹 + 正在记录的实时记录（去重）
+        # 但需要排除已关联轨迹的实时记录（避免重复计数）
+        # 先获取已关联轨迹的实时记录数量
+        linked_recording_count_result = await db.execute(
+            select(func.count(LiveRecording.id)).where(
+                and_(
+                    LiveRecording.user_id == user_id,
+                    LiveRecording.is_valid == True,
+                    LiveRecording.status == 'active',
+                    LiveRecording.current_track_id.isnot(None)
+                )
+            )
+        )
+        linked_recording_count = linked_recording_count_result.scalar() or 0
+
+        # 计算去重后的总数：普通轨迹 + 未关联的实时记录
+        total = track_total + (recording_total - linked_recording_count)
+
+        # 获取所有轨迹
+        sort_field = Track.created_at
+        if sort_by == "start_time":
+            sort_field = Track.start_time
+        elif sort_by == "distance":
+            sort_field = Track.distance
+        elif sort_by == "duration":
+            sort_field = Track.duration
+
+        if sort_order == "asc":
+            order_by_clause = sort_field.asc()
+        else:
+            order_by_clause = sort_field.desc()
+
+        track_result = await db.execute(
+            select(Track)
+            .where(and_(*track_conditions))
+            .order_by(order_by_clause)
+        )
+        all_tracks = list(track_result.scalars().all())
+
+        # 获取所有正在进行的实时记录
+        recording_result = await db.execute(
+            select(LiveRecording)
+            .where(and_(*recording_conditions))
+            .order_by(LiveRecording.created_at.desc())
+        )
+        all_recordings = list(recording_result.scalars().all())
+
+        # 构建 track_id -> recording 的映射
+        recording_map = {r.current_track_id: r for r in all_recordings if r.current_track_id}
+
+        # 转换为响应格式
+        unified_items = []
+        recording_tracks = []
+        normal_tracks = []
+
+        # 处理普通轨迹
+        for track in all_tracks:
+            recording = recording_map.get(track.id)
+            item = {
+                'id': track.id,
+                'user_id': track.user_id,
+                'name': track.name,
+                'description': track.description,
+                'original_filename': track.original_filename,
+                'original_crs': track.original_crs,
+                'distance': track.distance,
+                'duration': track.duration,
+                'elevation_gain': track.elevation_gain,
+                'elevation_loss': track.elevation_loss,
+                'start_time': track.start_time,
+                'end_time': track.end_time,
+                'has_area_info': track.has_area_info,
+                'has_road_info': track.has_road_info,
+                'created_at': track.created_at,
+                'updated_at': track.updated_at,
+                # 实时记录状态字段
+                'is_live_recording': recording is not None,
+                'live_recording_id': recording.id if recording else None,
+                'live_recording_status': recording.status if recording else None,
+                'live_recording_token': recording.token if recording else None,
+                'fill_geocoding': recording.fill_geocoding if recording else False,
+            }
+
+            if recording:
+                recording_tracks.append(item)
+            else:
+                normal_tracks.append(item)
+
+        # 处理没有关联轨迹的实时记录（创建虚拟轨迹项）
+        linked_track_ids = {r.current_track_id for r in all_recordings if r.current_track_id}
+        for recording in all_recordings:
+            if recording.current_track_id is None:
+                # 没有关联轨迹，创建虚拟项
+                recording_tracks.append({
+                    'id': -recording.id,  # 使用负数 ID 表示这是虚拟项（前端用于判断）
+                    'user_id': recording.user_id,
+                    'name': recording.name,
+                    'description': recording.description,
+                    'original_filename': None,
+                    'original_crs': 'wgs84',
+                    'distance': 0,
+                    'duration': 0,
+                    'elevation_gain': 0,
+                    'elevation_loss': 0,
+                    'start_time': recording.created_at,
+                    'end_time': recording.last_upload_at,
+                    'has_area_info': False,
+                    'has_road_info': False,
+                    'created_at': recording.created_at,
+                    'updated_at': recording.updated_at,
+                    # 实时记录状态字段
+                    'is_live_recording': True,
+                    'live_recording_id': recording.id,
+                    'live_recording_status': recording.status,
+                    'live_recording_token': recording.token,
+                    'fill_geocoding': recording.fill_geocoding or False,
+                })
+
+        # 合并：正在记录的轨迹在前，普通轨迹在后
+        unified_items = recording_tracks + normal_tracks
+
+        # 应用分页
+        items = unified_items[skip:skip + limit]
+
+        return items, total
 
     async def get_points(
         self,

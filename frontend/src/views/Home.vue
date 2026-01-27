@@ -16,6 +16,9 @@
         >
           道路标志
         </el-button>
+        <el-button type="warning" :icon="VideoPlay" @click="showLiveRecordingDialog" class="desktop-only">
+          记录实时轨迹
+        </el-button>
         <el-button type="primary" :icon="Upload" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
@@ -38,6 +41,10 @@
               <el-dropdown-item command="roadSign" v-if="isMobile && fontsConfigured">
                 <el-icon><Flag /></el-icon>
                 道路标志
+              </el-dropdown-item>
+              <el-dropdown-item command="liveRecording" v-if="isMobile">
+                <el-icon><VideoPlay /></el-icon>
+                记录实时轨迹
               </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
@@ -136,7 +143,7 @@
     </el-main>
 
     <!-- 道路标志对话框 -->
-    <el-dialog v-model="roadSignDialogVisible" title="生成道路标志" width="600px" class="road-sign-dialog">
+    <el-dialog v-model="roadSignDialogVisible" title="生成道路标志" :width="isMobile ? '95%' : '600px'" class="road-sign-dialog responsive-dialog">
       <el-form :model="roadSignForm" label-width="100px" class="road-sign-form">
         <!-- 道路类型 -->
         <el-form-item label="道路类型">
@@ -216,6 +223,65 @@
         <el-button type="primary" @click="downloadSvg" v-if="generatedSvg">下载</el-button>
       </template>
     </el-dialog>
+
+    <!-- 实时记录对话框 -->
+    <el-dialog v-model="liveRecordingDialogVisible" title="记录实时轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <el-form :model="liveRecordingForm" label-width="120px">
+        <el-form-item label="记录名称">
+          <el-input v-model="liveRecordingForm.name" placeholder="如：2024年1月骑行，不填则自动生成" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="liveRecordingForm.description" type="textarea" placeholder="可选，记录这次活动的描述" maxlength="1000" show-word-limit :rows="3" />
+        </el-form-item>
+        <el-form-item label="自动填充地理信息">
+          <el-switch v-model="liveRecordingForm.fill_geocoding" />
+          <div class="radio-hint">
+            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
+          </div>
+        </el-form-item>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="liveRecordingDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="createLiveRecording" :loading="creatingRecording">创建</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 上传 URL 对话框 -->
+    <el-dialog v-model="uploadUrlDialogVisible" title="上传 URL 已生成" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <div class="upload-url-content">
+        <p class="url-intro">使用以下 URL 上传轨迹，无需登录：</p>
+
+        <!-- GPS Logger URL -->
+        <div class="url-section">
+          <div class="url-label">GPS Logger URL（推荐）：</div>
+          <div class="url-box">
+            <el-input :model-value="gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
+            <el-button @click="copyGpsLoggerUrl" :icon="DocumentCopy" type="primary" class="copy-button">
+              {{ copyButtonText }}
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="qrcode-container" v-if="uploadQrCode">
+          <div class="qrcode" v-html="uploadQrCode"></div>
+          <p class="qrcode-tip">扫描二维码，用 GPS Logger 等应用记录轨迹</p>
+        </div>
+
+        <el-alert type="info" :closable="false" show-icon class="url-alert">
+          <ul class="url-tips">
+            <li>此 URL 可以多次使用，直到你结束记录</li>
+            <li>在"轨迹列表"页面的"实时记录"标签中可以管理记录</li>
+            <li>结束记录后，token 将失效</li>
+          </ul>
+        </el-alert>
+      </div>
+
+      <template #footer>
+        <el-button type="primary" @click="uploadUrlDialogVisible = false">知道了</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -236,11 +302,15 @@ import {
   List,
   Loading,
   Flag,
+  VideoPlay,
+  DocumentCopy,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
-import { trackApi, type Track, type TrackPoint } from '@/api/track'
+import { trackApi, type Track, type TrackPoint, type UnifiedTrack } from '@/api/track'
 import { roadSignApi } from '@/api/roadSign'
+import { liveRecordingApi } from '@/api/liveRecording'
+import QRCode from 'qrcode'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 
 const router = useRouter()
@@ -271,7 +341,7 @@ const stats = ref({
   total_elevation_gain: 0,
 })
 
-const tracks = ref<Track[]>([])
+const tracks = ref<UnifiedTrack[]>([])
 const tracksPoints = ref<Map<number, TrackPoint[]>>(new Map())
 const loadingTracks = ref(false)
 const loadedTrackCount = ref(0)
@@ -339,6 +409,20 @@ const roadSignForm = reactive({
   province: '',
   name: '',
 })
+
+// 实时记录对话框
+const liveRecordingDialogVisible = ref(false)
+const uploadUrlDialogVisible = ref(false)
+const creatingRecording = ref(false)
+const liveRecordingForm = reactive({
+  name: '',
+  description: '',
+  fill_geocoding: false,
+})
+const fullUploadUrl = ref('')
+const gpsLoggerUrl = ref('')
+const uploadQrCode = ref('')
+const copyButtonText = ref('复制')
 
 // 监听道路类型或高速类型变化，清空编号和预览
 watch(() => [roadSignForm.sign_type, roadSignForm.is_provincial], () => {
@@ -537,7 +621,115 @@ function handleCommand(command: string) {
     router.push('/upload')
   } else if (command === 'roadSign') {
     showRoadSignDialog()
+  } else if (command === 'liveRecording') {
+    showLiveRecordingDialog()
   }
+}
+
+// 显示实时记录对话框
+function showLiveRecordingDialog() {
+  liveRecordingForm.name = ''
+  liveRecordingForm.description = ''
+  liveRecordingDialogVisible.value = true
+}
+
+// 创建实时记录
+async function createLiveRecording() {
+  // 生成记录名称（如果未填写则使用当前时间）
+  let name = liveRecordingForm.name.trim()
+  if (!name) {
+    const now = new Date()
+    name = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+  }
+
+  creatingRecording.value = true
+  try {
+    const recording = await liveRecordingApi.create({
+      name,
+      description: liveRecordingForm.description.trim() || undefined,
+      fill_geocoding: liveRecordingForm.fill_geocoding,
+    })
+
+    // 生成完整的上传 URL
+    fullUploadUrl.value = liveRecordingApi.getFullUploadUrl(recording.token)
+    gpsLoggerUrl.value = liveRecordingApi.getGpsLoggerUrl(recording.token)
+
+    // 生成二维码（使用 GPS Logger URL）
+    uploadQrCode.value = await QRCode.toString(gpsLoggerUrl.value, {
+      width: 200,
+      margin: 2,
+      type: 'svg',
+    })
+
+    // 切换到 URL 对话框
+    liveRecordingDialogVisible.value = false
+    uploadUrlDialogVisible.value = true
+
+    ElMessage.success('记录创建成功')
+  } finally {
+    creatingRecording.value = false
+  }
+}
+
+// 复制上传 URL
+function copyUploadUrl() {
+  navigator.clipboard.writeText(fullUploadUrl.value).then(() => {
+    ElMessage.success('URL 已复制到剪贴板')
+  }).catch(() => {
+    ElMessage.error('复制失败，请手动复制')
+  })
+}
+
+function copyGpsLoggerUrl() {
+  const url = gpsLoggerUrl.value
+
+  // 检查剪贴板 API 是否可用
+  if (!navigator.clipboard) {
+    // 尝试使用传统的 execCommand 方法作为回退
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        copyButtonText.value = '已复制'
+        ElMessage.success('URL 已复制到剪贴板')
+        setTimeout(() => {
+          copyButtonText.value = '复制'
+        }, 2000)
+      } else {
+        ElMessage.error('复制失败，请手动选择复制')
+      }
+    } catch (err) {
+      document.body.removeChild(textarea)
+      ElMessage.error('复制失败，请手动选择复制')
+      console.error('复制失败:', err)
+    }
+    return
+  }
+
+  // 使用现代剪贴板 API
+  navigator.clipboard.writeText(url).then(() => {
+    copyButtonText.value = '已复制'
+    ElMessage.success('URL 已复制到剪贴板')
+    setTimeout(() => {
+      copyButtonText.value = '复制'
+    }, 2000)
+  }).catch((err) => {
+    // 检查是否是因为非安全上下文（http vs https）
+    const isSecureContext = window.isSecureContext
+    if (!isSecureContext) {
+      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
+    console.error('复制失败:', err)
+  })
 }
 
 function formatDistance(meters: number): string {
@@ -644,7 +836,7 @@ async function fetchAllTracksPoints() {
 }
 
 onMounted(() => {
-  // 异步获取统计数据，不阻塞页面渲染
+  // 异步获取统计数据，不阻塞页面渲染（已包含实时轨迹）
   trackApi.getStats()
     .then((data: typeof stats.value) => {
       if (isMounted) stats.value = data
@@ -653,8 +845,8 @@ onMounted(() => {
       // 错误已在拦截器中处理
     })
 
-  // 异步获取轨迹列表，不阻塞页面渲染
-  trackApi.getList({ page: 1, page_size: 100 })
+  // 异步获取统一轨迹列表（包含普通轨迹和实时记录），不阻塞页面渲染
+  trackApi.getUnifiedList({ page: 1, page_size: 100 })
     .then((response: { items: typeof tracks.value }) => {
       if (isMounted) {
         // 按开始时间排序（从旧到新）
@@ -962,6 +1154,10 @@ onUnmounted(() => {
   }
 
   /* 对话框移动端样式 */
+  .responsive-dialog {
+    width: 95% !important;
+  }
+
   .road-sign-dialog {
     width: 95% !important;
   }
@@ -1035,5 +1231,85 @@ onUnmounted(() => {
   background-color: var(--el-fill-color-light);
   color: var(--el-text-color-regular);
   font-weight: 500;
+}
+
+/* 上传 URL 对话框样式 */
+.upload-url-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.url-intro {
+  margin: 0 0 15px 0;
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.url-section {
+  margin-bottom: 15px;
+}
+
+.url-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
+}
+
+.url-box {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.copy-button {
+  align-self: flex-start;
+}
+
+.url-textarea :deep(textarea) {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.qrcode-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.qrcode {
+  display: flex;
+}
+
+.qrcode :deep(svg) {
+  width: 200px;
+  height: 200px;
+}
+
+.qrcode-tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.url-alert {
+  margin: 0;
+}
+
+.url-tips {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.url-tips li {
+  margin-bottom: 5px;
+  font-size: 13px;
 }
 </style>

@@ -7,6 +7,7 @@ declare module 'vue-router' {
     requiresAuth?: boolean
     requiresAdmin?: boolean
     guest?: boolean
+    public?: boolean  // 所有人都可以访问（包括已登录用户）
     devOnly?: boolean
   }
 }
@@ -77,6 +78,20 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/LogViewer.vue'),
     meta: { requiresAuth: true, devOnly: true },
   },
+  // 实时轨迹上传页面（无需认证，通过 token 验证）
+  {
+    path: '/live-upload',
+    name: 'LiveUpload',
+    component: () => import('@/views/LiveUpload.vue'),
+    meta: { guest: true },
+  },
+  // GPS Logger URL 引导页面（无需认证，通过 token 验证，所有人都可以访问）
+  {
+    path: '/live-recordings/log/:token',
+    name: 'LogUrlGuide',
+    component: () => import('@/views/LogUrlGuide.vue'),
+    meta: { public: true },
+  },
 ]
 
 const router = createRouter({
@@ -92,6 +107,12 @@ router.beforeEach((to, from, next) => {
   // 开发环境专用路由
   if (to.meta.devOnly && !isDev) {
     next({ name: 'Home' })
+    return
+  }
+
+  // public 页面：所有人都可以访问
+  if (to.meta.public) {
+    next()
     return
   }
 

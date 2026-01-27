@@ -18,6 +18,37 @@ export interface Track {
   has_road_info: boolean
   created_at: string
   updated_at: string
+  // 实时记录相关
+  is_live_recording: boolean
+  live_recording_id: number | null
+  live_recording_status: 'active' | 'ended' | null
+  live_recording_token: string | null
+}
+
+// 统一轨迹类型（包含实时记录）
+export interface UnifiedTrack {
+  id: number
+  user_id: number
+  name: string
+  description: string | null
+  original_filename: string | null
+  original_crs: string | null
+  distance: number
+  duration: number
+  elevation_gain: number
+  elevation_loss: number
+  start_time: string | null
+  end_time: string | null
+  has_area_info: boolean
+  has_road_info: boolean
+  created_at: string
+  updated_at: string
+  // 实时记录相关字段
+  is_live_recording: boolean
+  live_recording_id: number | null
+  live_recording_status: 'active' | 'ended' | null
+  live_recording_token: string | null
+  fill_geocoding: boolean
 }
 
 export interface TrackPoint {
@@ -52,6 +83,13 @@ export interface TrackListResponse {
   page: number
   page_size: number
   items: Track[]
+}
+
+export interface UnifiedTrackListResponse {
+  total: number
+  page: number
+  page_size: number
+  items: UnifiedTrack[]
 }
 
 export interface TrackStats {
@@ -155,6 +193,17 @@ export const trackApi = {
     sort_order?: string
   }): Promise<TrackListResponse> {
     return http.get('/tracks', { params })
+  },
+
+  // 获取统一轨迹列表（包含实时记录）
+  getUnifiedList(params?: {
+    page?: number
+    page_size?: number
+    search?: string
+    sort_by?: string
+    sort_order?: string
+  }): Promise<UnifiedTrackListResponse> {
+    return http.get('/tracks/unified', { params })
   },
 
   // 获取轨迹统计

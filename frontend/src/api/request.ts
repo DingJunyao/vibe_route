@@ -9,13 +9,14 @@ function getToken(): string | null {
 // 创建 axios 实例
 const request: AxiosInstance = axios.create({
   baseURL: '/api',
-  timeout: 30000,
+  timeout: 60000, // 增加超时时间到 60 秒，适应外网访问
   headers: {
     'Content-Type': 'application/json',
   },
   paramsSerializer: {
     indexes: null, // 数组序列化为 roles=a&roles=b 而不是 roles[0]=a&roles[1]=b
   },
+  // axios 默认会处理 gzip 压缩的响应，无需额外配置
 })
 
 // 请求拦截器

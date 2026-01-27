@@ -47,6 +47,12 @@ class TrackResponse(BaseModel):
     has_road_info: bool
     created_at: datetime
     updated_at: datetime
+    # 实时记录相关字段
+    is_live_recording: bool = False
+    live_recording_id: Optional[int] = None
+    live_recording_status: Optional[str] = None  # active, ended
+    live_recording_token: Optional[str] = None
+    fill_geocoding: bool = False
 
     @field_serializer('start_time', 'end_time', 'created_at', 'updated_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
@@ -66,6 +72,51 @@ class TrackListResponse(BaseModel):
     page: int
     page_size: int
     items: List[TrackResponse]
+
+
+class UnifiedTrackResponse(BaseModel):
+    """统一轨迹响应 schema（包含实时记录）"""
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str]
+    original_filename: Optional[str]
+    original_crs: Optional[str]
+    distance: float
+    duration: int
+    elevation_gain: float
+    elevation_loss: float
+    start_time: Optional[datetime]
+    end_time: Optional[datetime]
+    has_area_info: bool
+    has_road_info: bool
+    created_at: datetime
+    updated_at: datetime
+    # 实时记录相关字段
+    is_live_recording: bool = False
+    live_recording_id: Optional[int] = None
+    live_recording_status: Optional[str] = None  # active, ended
+    live_recording_token: Optional[str] = None
+    fill_geocoding: bool = False
+
+    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        if dt is None:
+            return None
+        # 返回 UTC 时间并添加时区后缀
+        return dt.isoformat() + '+00:00'
+
+    class Config:
+        from_attributes = True
+
+
+class UnifiedTrackListResponse(BaseModel):
+    """统一轨迹列表响应 schema（包含实时记录）"""
+    total: int
+    page: int
+    page_size: int
+    items: List[UnifiedTrackResponse]
 
 
 class TrackPointResponse(BaseModel):

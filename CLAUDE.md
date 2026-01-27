@@ -58,6 +58,15 @@ npm run lint
 
 前端运行在 `http://localhost:5173`
 
+### Testing
+
+用户会在开发过程中对项目多次测试。当用户对项目中存在的问题询问时，除一般的逻辑外，还应当考虑到：
+
+- 数据库里面的数据
+- 前端的显示效果
+
+这些都可以使用插件或 MCP 解决。优先考虑 MCP。
+
 ## Architecture Overview
 
 ### 认证流程（双重加密）
@@ -1668,6 +1677,303 @@ onUnmounted(() => {
 }
 ```
 
+### 实时轨迹记录功能
+
+系统支持通过 GPS Logger 等应用实时记录轨迹点，无需登录即可上传。
+
+#### 功能说明
+
+- **创建记录会话**：用户在首页创建实时记录，生成唯一的 token
+- **无认证上传**：使用 token 即可上传轨迹点，支持 GET/POST 方法
+- **兼容 GPS Logger**：支持 GPS Logger 应用的参数格式
+- **自动轨迹管理**：系统自动创建和管理 Track，记录结束时可停止
+
+#### GPS Logger URL 格式
+
+```
+https://route.a4ding.com/api/live-recordings/log/{TOKEN}?lat=%LAT&lon=%LON&time=%TIME&alt=%ALT&spd=%SPD
+```
+
+**占位符说明**：
+- `%LAT` - 纬度
+- `%LON` - 经度
+- `%TIME` - 时间（GPS Logger 发送 ISO 格式字符串）
+- `%ALT` - 海拔（米）
+- `%SPD` - 速度（m/s）
+
+#### 后端实现
+
+**API 端点** ([`backend/app/api/live_recordings.py`](backend/app/api/live_recordings.py))：
+
+```python
+# 同时支持 GET 和 POST 方法
+@router.get("/log/{token}", response_model=LogPointResponse)
+@router.post("/log/{token}", response_model=LogPointResponse)
+async def log_track_point(
+    token: str,
+    lat: float = Query(...),
+    lon: Optional[float] = Query(None),           # 标准参数名
+    longitude: Optional[float] = Query(None),     # GPS Logger 兼容
+    time: Optional[str] = Query(None),            # 支持 ISO 格式或毫秒时间戳
+    alt: Optional[float] = Query(None),
+    spd: Optional[float] = Query(None),           # 标准参数名
+    s: Optional[float] = Query(None),             # GPS Logger 兼容
+    acc: Optional[float] = Query(None),
+    sat: Optional[int] = Query(None),
+    bea: Optional[float] = Query(None),
+    original_crs: str = Query("wgs84"),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+**参数兼容性处理**：
+- `longitude` → `lon`（经度）
+- `s` → `spd`（速度）
+- 时间格式：支持 ISO 8601 字符串（`2026-01-27T11:36:02.000Z`）或毫秒时间戳数字字符串
+
+**服务层** ([`backend/app/services/live_recording_service.py`](backend/app/services/live_recording_service.py))：
+
+- `create()` - 创建记录会话，生成 64 位安全随机 token
+- `get_by_token()` - 根据 token 获取记录（无需认证）
+- `add_point_to_recording()` - 添加单个轨迹点
+  - 自动创建 Track（如不存在）
+  - 坐标系转换（WGS84/GCJ02/BD09）
+  - 计算方位角、速度、距离
+  - 更新轨迹统计信息
+
+**时区处理注意事项**：
+
+数据库存储的时间不带时区（naive datetime），需要转换：
+
+```python
+# 将带时区的时间转换为不带时区的时间
+track_time = point_time.replace(tzinfo=None) if point_time else None
+```
+
+#### 前端实现
+
+**API 客户端** ([`frontend/src/api/liveRecording.ts`](frontend/src/api/liveRecording.ts))：
+
+```typescript
+export const liveRecordingApi = {
+  // 创建记录会话
+  create(data: CreateRecordingRequest): Promise<LiveRecording>
+
+  // 根据 token 获取记录信息（无需认证）
+  getInfoByToken(token: string): Promise<LiveRecording>
+
+  // 获取记录列表
+  getList(status?: 'active' | 'ended'): Promise<LiveRecording[]>
+
+  // 结束记录
+  end(recordingId: number): Promise<LiveRecording>
+
+  // 获取 GPS Logger 格式的日志记录 URL
+  getGpsLoggerUrl(token: string): string {
+    return `${window.location.origin}/api/live-recordings/log/${token}?lat=%LAT&lon=%LON&time=%TIME&alt=%ALT&spd=%SPD`
+  }
+}
+```
+
+**首页对话框** ([`frontend/src/views/Home.vue`](frontend/src/views/Home.vue))：
+
+- 创建记录后显示 GPS Logger URL（多行文本框）
+- 显示二维码（使用 GPS Logger URL 生成）
+- 一键复制 URL 功能
+
+#### 数据库模型
+
+**LiveRecording** ([`backend/app/models/live_recording.py`](backend/app/models/live_recording.py))：
+
+```python
+class LiveRecording(Base, AuditMixin):
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    token = Column(String(64), unique=True, index=True)
+    name = Column(String(200))
+    description = Column(Text)
+    status = Column(String(20), default="active")  # active, ended
+    track_count = Column(Integer, default=0)
+    last_upload_at = Column(DateTime)
+    ended_at = Column(DateTime)
+    current_track_id = Column(Integer, ForeignKey("tracks.id"))
+```
+
+#### 关键技术点
+
+1. **参数兼容**：同时支持标准参数名和 GPS Logger 参数名（`longitude`/`s`）
+2. **时间格式**：自动解析 ISO 格式字符串或毫秒时间戳
+3. **时区处理**：统一转换为不带时区的时间存储到数据库
+4. **自动创建 Track**：首个点上传时自动创建 Track，`original_filename` 设置为 `live_recording_{id}`
+5. **坐标转换**：每个点都转换为三种坐标系（WGS84/GCJ02/BD09）
+6. **统计计算**：自动计算方位角、速度、距离，更新轨迹统计
+
+#### 涉及文件
+
+**后端**：
+
+- [`backend/app/api/live_recordings.py`](backend/app/api/live_recordings.py) - API 路由
+- [`backend/app/services/live_recording_service.py`](backend/app/services/live_recording_service.py) - 服务层
+- [`backend/app/models/live_recording.py`](backend/app/models/live_recording.py) - 数据模型
+- [`backend/app/schemas/live_recording.py`](backend/app/schemas/live_recording.py) - Pydantic schemas
+
+**前端**：
+
+- [`frontend/src/api/liveRecording.ts`](frontend/src/api/liveRecording.ts) - API 客户端
+- [`frontend/src/views/Home.vue`](frontend/src/views/Home.vue) - 创建记录对话框
+- [`frontend/src/views/LiveUpload.vue`](frontend/src/views/LiveUpload.vue) - 上传页面
+
+### 实时记录自动填充地理信息设置
+
+实时记录功能支持在上传轨迹点时自动填充地理信息（省市区、道路名称等）。
+
+#### 功能说明
+
+- **创建时设置**：创建实时记录时可选择是否开启自动填充
+- **运行时切换**：在"实时记录配置"对话框中可随时切换
+- **实时生效**：设置立即生效，后续上传的轨迹点会自动获取地理信息
+
+#### 后端实现
+
+**数据库模型** ([`backend/app/models/live_recording.py`](backend/app/models/live_recording.py))：
+
+```python
+class LiveRecording(Base, AuditMixin):
+    # ... 其他字段 ...
+    fill_geocoding = Column(Boolean, default=False)  # 上传点时是否自动填充地理信息
+```
+
+**Schema** ([`backend/app/schemas/live_recording.py`](backend/app/schemas/live_recording.py))：
+
+```python
+class LiveRecordingResponse(BaseModel):
+    # ... 其他字段 ...
+    fill_geocoding: bool = False
+
+class CreateRecordingRequest(BaseModel):
+    # ... 其他字段 ...
+    fill_geocoding: Optional[bool] = Field(False, description="上传点时是否自动填充地理信息")
+```
+
+**API 端点** ([`backend/app/api/live_recordings.py`](backend/app/api/live_recordings.py))：
+
+```python
+# 创建记录时设置 fill_geocoding
+@router.post("/create", response_model=LiveRecordingResponse)
+async def create_recording(
+    data: CreateRecordingRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    recording = await live_recording_service.create(
+        db,
+        user_id=current_user.id,
+        name=data.name,
+        description=data.description,
+        fill_geocoding=data.fill_geocoding or False,
+    )
+    # ... 返回包含 fill_geocoding 的响应
+
+# PATCH 端点更新设置
+@router.patch("/{recording_id}/fill-geocoding")
+async def update_fill_geocoding(
+    recording_id: int,
+    data: dict = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    fill_geocoding = data.get("fill_geocoding", False)
+    recording = await live_recording_service.update_fill_geocoding(db, recording, fill_geocoding)
+    return {"fill_geocoding": recording.fill_geocoding, "message": "设置已更新"}
+```
+
+**服务层** ([`backend/app/services/live_recording_service.py`](backend/app/services/live_recording_service.py))：
+
+```python
+async def update_fill_geocoding(
+    self,
+    db: AsyncSession,
+    recording: LiveRecording,
+    fill_geocoding: bool,
+) -> LiveRecording:
+    """更新自动填充地理信息设置"""
+    recording.fill_geocoding = fill_geocoding
+    await db.commit()
+    await db.refresh(recording)
+    return recording
+```
+
+#### 前端实现
+
+**类型定义** ([`frontend/src/api/liveRecording.ts`](frontend/src/api/liveRecording.ts))：
+
+```typescript
+export interface LiveRecording {
+  // ... 其他字段 ...
+  fill_geocoding: boolean
+}
+
+export interface CreateRecordingRequest {
+  name: string
+  description?: string
+  fill_geocoding?: boolean
+}
+```
+
+**API 方法**：
+
+```typescript
+updateFillGeocoding(recordingId: number, fillGeocoding: boolean): Promise<{ fill_geocoding: boolean; message: string }>
+```
+
+**轨迹列表页面** ([`TrackList.vue`](frontend/src/views/TrackList.vue))：
+
+- "实时记录配置"对话框中添加开关
+- 显示"上传时自动填充地理信息"开关
+- 开关状态从 `track.fill_geocoding` 读取，点击开关调用 `updateFillGeocoding` 更新
+
+**轨迹详情页面** ([`TrackDetail.vue`](frontend/src/views/TrackDetail.vue))：
+
+- 从 `liveRecordingApi.getList('active')` 获取最新数据
+- 显示开关并允许切换
+- 开关状态保存到 `recordingDetail.fill_geocoding` 和 `track.value.fill_geocoding`
+
+#### 关键技术点
+
+1. **对象简写陷阱**：JavaScript 对象简写 `{ fill_geocoding }` 等同于 `{ fill_geocoding: fill_geocoding }`，参数名必须匹配
+   ```typescript
+   // 错误：{ fill_geocoding }  // 查找 fill_geocoding 变量
+   // 正确：{ fill_geocoding: fillGeocoding }  // 显式指定属性名
+   ```
+
+2. **变量名统一**：TrackList 使用 `unifiedTracks` 而非 `tracks`
+
+3. **数据同步**：
+   - 后端所有返回 `LiveRecordingResponse` 的地方都包含 `fill_geocoding` 字段
+   - `/tracks/{track_id}` 端点也返回 `fill_geocoding`
+   - 前端从正确的 API 获取最新数据
+
+#### UI 改进（同期）
+
+- **按钮颜色**："记录配置"按钮使用黄色（`type="warning"`）
+- **确认对话框**："结束记录"按钮使用红色（`type="danger"`），带二次确认
+- **URL 复制**：添加复制按钮，带剪贴板 API 回退方案
+- **信息显示**：对话框中显示总爬升、总下降信息
+
+#### 涉及文件
+
+**后端**：
+- [`backend/app/models/live_recording.py`](backend/app/models/live_recording.py) - 添加 fill_geocoding 字段
+- [`backend/app/schemas/live_recording.py`](backend/app/schemas/live_recording.py) - schema 更新
+- [`backend/app/api/live_recordings.py`](backend/app/api/live_recordings.py) - API 端点
+- [`backend/app/services/live_recording_service.py`](backend/app/services/live_recording_service.py) - 服务层方法
+- [`backend/app/api/tracks.py`](backend/app/api/tracks.py) - 轨迹详情端点返回 fill_geocoding
+
+**前端**：
+- [`frontend/src/api/liveRecording.ts`](frontend/src/api/liveRecording.ts) - 类型定义和 API 方法
+- [`frontend/src/views/TrackList.vue`](frontend/src/views/TrackList.vue) - 轨迹列表页面
+- [`frontend/src/views/TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 轨迹详情页面
+
 ### 首页移动端地图 InfoWindow 点击
 
 首页地图在移动端的点击交互需要特殊处理。
@@ -1677,68 +1983,39 @@ onUnmounted(() => {
 - **桌面端**：点击轨迹直接跳转到详情页
 - **移动端**：点击轨迹显示 InfoWindow，再点击"查看详情"跳转
 
-#### 关键问题
+## Git 技巧
 
-高德地图的 InfoWindow 点击事件处理有以下挑战：
+### 临时修改文件但不上传到 Git
 
-1. InfoWindow 内容是动态插入到 DOM 的
-2. 点击 InfoWindow 内容时，地图点击事件也会触发
-3. 移动端触摸事件（`touchstart`）和点击事件（`click`）需要分别处理
+如果你需要临时修改某个文件（如配置文件），但不想将其提交到 git，同时也不想将其添加到 `.gitignore`，可以使用 `git skip-worktree`。
 
-#### 解决方案
+#### 使用场景
 
-**直接给 InfoWindow 内容添加事件监听器**（[`AMap.vue`](frontend/src/components/map/AMap.vue)）：
+- 本地开发环境的配置修改（如 `vite.config.ts` 的 `host` 设置）
+- 临时调试修改
+- 不想共享的个人配置
 
-```typescript
-nextTick(() => {
-  const trackTooltip = document.querySelector('.track-tooltip')
-  if (trackTooltip) {
-    const parent = trackTooltip.parentElement
-    if (parent) {
-      // 处理 InfoWindow 内的点击和触摸事件
-      const handleTooltipInteraction = (e: Event) => {
-        e.stopImmediatePropagation()  // 立即停止所有事件传播
-        e.stopPropagation()
-        e.preventDefault()
-        if (currentTooltipTrackId !== null) {
-          emit('track-click', currentTooltipTrackId)
-        }
-      }
+#### 命令
 
-      // 直接给 track-tooltip 添加点击事件（捕获阶段）
-      trackTooltip.addEventListener('click', handleTooltipInteraction, { capture: true })
+```bash
+# 标记文件为跳过工作树（git 会忽略该文件的修改）
+git update-index --skip-worktree <文件路径>
 
-      // 添加 touchstart 监听器（移动端）
-      trackTooltip.addEventListener('touchstart', handleTooltipInteraction, { capture: true })
+# 示例：跳过 vite.config.ts 的修改
+git update-index --skip-worktree frontend/vite.config.ts
 
-      // 同时给父元素添加点击监听器（备用）
-      parent.addEventListener('click', (e) => {
-        if (currentTooltipTrackId !== null) {
-          emit('track-click', currentTooltipTrackId)
-          e.stopPropagation()
-          e.preventDefault()
-        }
-      })
-    }
-  }
-})
+# 查看当前哪些文件被跳过了
+git ls-files -v | grep "^S"
+
+# 恢复文件（取消跳过，之后可以正常提交）
+git update-index --no-skip-worktree <文件路径>
 ```
 
-#### 关键技术点
+#### 注意事项
 
-1. **`capture: true`**：使用捕获阶段监听，确保在事件到达目标元素之前就被处理
-2. **`stopImmediatePropagation()`**：立即停止所有事件传播，防止其他监听器被触发
-3. **双重监听**：同时监听 `click` 和 `touchstart` 事件，兼容移动端
-4. **备用监听器**：给父元素也添加监听器作为兜底
-
-#### InfoWindow 内容结构
-
-```html
-<div class="track-tooltip" data-track-id="20">
-  <div>轨迹名称</div>
-  <div>时间: ...</div>
-  <div>里程: ...</div>
-  <div>历时: ...</div>
-  <div>点击查看详情</div>
-</div>
-```
+- 标记后，该文件的本地修改不会被 `git status` 显示
+- `git diff` 也不会显示该文件的修改
+- 如果需要恢复文件的修改，必须先用 `--no-skip-worktree` 取消跳过
+- 与 `assume-unchanged` 的区别：
+  - `skip-worktree`：适合"我会主动修改这个文件，但不希望 git 跟踪"
+  - `assume-unchanged`：适合"这个文件我不会改，让 git 暂时忽略以提高性能"
