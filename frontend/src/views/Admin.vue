@@ -625,6 +625,7 @@
 
           <!-- 字体管理 -->
           <el-tab-pane label="字体管理" name="fonts">
+            <div class="fonts-tab-content">
             <!-- 激活字体选择 -->
             <el-card v-loading="loadingFonts" shadow="never" style="margin-bottom: 16px;">
               <template #header>
@@ -761,6 +762,7 @@
                 </div>
               </div>
             </el-card>
+            </div>
           </el-tab-pane>
         </el-tabs>
       </el-main>
@@ -1623,6 +1625,14 @@ onUnmounted(() => {
 
 /* 系统配置 tab 可滚动 */
 .config-tab-content {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 字体管理 tab 可滚动 */
+.fonts-tab-content {
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;

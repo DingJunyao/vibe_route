@@ -1259,7 +1259,8 @@ onUnmounted(() => {
     min-height: 0;
     overflow-y: auto;
     padding: 10px;
-    padding-bottom: 70px;
+    /* Android Edge 等浏览器的工具栏很高，需要更多底部空间 */
+    padding-bottom: calc(160px + env(safe-area-inset-bottom, 0px));
   }
 
   .list-card {
