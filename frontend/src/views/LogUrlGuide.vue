@@ -86,7 +86,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Link, DocumentCopy } from '@element-plus/icons-vue'
@@ -98,6 +98,9 @@ const route = useRoute()
 const loading = ref(true)
 const recording = ref<{ name: string; description: string | null; status: string } | null>(null)
 const copyButtonText = ref('复制')
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 // 从 URL 获取 token
 const token = computed(() => route.params.token as string)
@@ -112,13 +115,14 @@ const fullUrl = computed(() => {
 
 onMounted(async () => {
   if (!token.value) {
-    loading.value = false
+    if (isMounted.value) loading.value = false
     return
   }
 
   try {
     // 验证 token 并获取记录信息
     const info = await liveRecordingApi.getInfoByToken(token.value)
+    if (!isMounted.value) return
     recording.value = {
       name: info.name,
       description: info.description,
@@ -126,9 +130,16 @@ onMounted(async () => {
     }
     loading.value = false
   } catch (error: any) {
-    ElMessage.error(error.message || '无效的记录链接')
-    loading.value = false
+    if (isMounted.value) {
+      ElMessage.error(error.message || '无效的记录链接')
+      loading.value = false
+    }
   }
+})
+
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
 })
 
 function copyUrl() {

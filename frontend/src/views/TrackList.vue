@@ -2,7 +2,8 @@
   <el-container class="track-list-container">
     <el-header>
       <div class="header-left">
-        <el-button @click="$router.push('/')" :icon="ArrowLeft">返回</el-button>
+        <el-button @click="$router.push('/')" :icon="ArrowLeft" class="nav-btn" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
         <h1>我的轨迹</h1>
       </div>
       <div class="header-right">
@@ -74,8 +75,21 @@
       </el-card>
 
       <!-- PC端表格列表 -->
-      <el-card v-loading="loading" class="list-card" shadow="never">
-        <template v-if="unifiedTracks.length > 0">
+      <el-card class="list-card" shadow="never">
+        <!-- 加载中显示骨架屏 -->
+        <div v-if="loading" class="skeleton-wrapper">
+          <!-- PC端表格骨架屏 -->
+          <el-skeleton :rows="5" animated class="desktop-only" />
+          <!-- 移动端卡片骨架屏 -->
+          <div class="mobile-only">
+            <div v-for="i in 3" :key="i" class="mobile-card-skeleton">
+              <el-skeleton :rows="3" animated />
+            </div>
+          </div>
+        </div>
+
+        <!-- 加载完成后显示内容 -->
+        <template v-else>
           <!-- PC端表格 -->
           <el-table :data="displayItems" style="width: 100%" @row-click="handleRowClick" class="pc-table">
             <el-table-column prop="name" label="名称" min-width="200">
@@ -267,14 +281,14 @@
               </div>
             </div>
           </div>
-        </template>
 
-        <!-- 空状态 -->
-        <el-empty v-else description="暂无轨迹和记录">
+          <!-- 空状态 -->
+          <el-empty v-if="unifiedTracks.length === 0" description="暂无轨迹和记录">
           <el-button type="primary" @click="$router.push('/upload')">
             上传第一条轨迹
           </el-button>
         </el-empty>
+      </template>
       </el-card>
 
       <!-- 分页（仅轨迹） -->
@@ -405,7 +419,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -415,6 +429,7 @@ import {
   Clock,
   Top,
   ArrowLeft,
+  HomeFilled,
   User,
   ArrowDown,
   Setting,
@@ -455,6 +470,9 @@ const pageSize = ref(20)
 const searchQuery = ref('')
 const sortBy = ref('start_time')
 const sortOrder = ref<'asc' | 'desc'>('asc')
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 // 实时记录详情对话框
 const recordingDetailVisible = ref(false)
@@ -505,6 +523,7 @@ const displayItems = computed(() => {
 async function loadAllProgress() {
   try {
     const data = await trackApi.getAllFillProgress()
+    if (!isMounted.value) return
     // 确保 data 是对象类型
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       fillProgress.value = data
@@ -566,13 +585,16 @@ async function loadTracks() {
       sort_by: sortBy.value,
       sort_order: actualSortOrder,
     })
+    if (!isMounted.value) return
     // 确保 items 是数组
     unifiedTracks.value = Array.isArray(response?.items) ? response.items : []
     total.value = response?.total || 0
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
-    loading.value = false
+    if (isMounted.value) {
+      loading.value = false
+    }
   }
 }
 
@@ -972,6 +994,11 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
 })
 
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
+
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   stopProgressPolling()
@@ -1013,9 +1040,18 @@ onUnmounted(() => {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
+}
+
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
 }
 
 .header-left h1 {
@@ -1561,5 +1597,19 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   text-align: center;
+}
+
+/* 骨架屏样式 */
+.skeleton-wrapper {
+  padding: 20px;
+}
+
+.mobile-card-skeleton {
+  padding: 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.mobile-card-skeleton:last-child {
+  border-bottom: none;
 }
 </style>

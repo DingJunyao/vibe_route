@@ -2,7 +2,8 @@
   <div ref="containerRef" class="track-detail-container">
     <el-header>
       <div class="header-left">
-        <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
+        <el-button @click="$router.back()" :icon="ArrowLeft" class="nav-btn" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
         <div class="title-with-tags">
           <!-- 实时记录状态指示器 -->
           <el-tooltip
@@ -119,13 +120,90 @@
       </div>
     </el-header>
 
-    <el-main class="main" :class="{ 'main-fixed': isTallScreen }" v-loading="loading">
-      <!-- 调试信息 -->
-      <el-alert v-if="!track" type="error" :closable="false" style="margin-bottom: 20px">
+    <el-main class="main" :class="{ 'main-fixed': isTallScreen }">
+      <!-- 加载中显示骨架屏 -->
+      <div v-if="loading" class="detail-skeleton">
+        <!-- 固定布局骨架屏 -->
+        <template v-if="isTallScreen">
+          <div class="fixed-layout">
+            <div class="fixed-left">
+              <el-card class="map-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="1" animated />
+                </div>
+                <div class="map-skeleton-content">
+                  <el-skeleton :rows="8" animated />
+                </div>
+              </el-card>
+              <el-card class="chart-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="1" animated />
+                </div>
+                <div class="chart-skeleton-content">
+                  <el-skeleton :rows="4" animated />
+                </div>
+              </el-card>
+            </div>
+            <div class="scrollable-right">
+              <el-card class="stats-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="6" animated />
+                </div>
+              </el-card>
+            </div>
+          </div>
+        </template>
+        <!-- 常规布局骨架屏 -->
+        <template v-else>
+          <el-row :gutter="20">
+            <el-col :xs="24" :md="16">
+              <el-card class="map-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="1" animated />
+                </div>
+                <div class="map-skeleton-content">
+                  <el-skeleton :rows="6" animated />
+                </div>
+              </el-card>
+            </el-col>
+            <el-col :xs="24" :md="8">
+              <el-card class="stats-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="8" animated />
+                </div>
+              </el-card>
+            </el-col>
+          </el-row>
+          <el-row :gutter="20" style="margin-top: 20px">
+            <el-col :xs="24" :md="16">
+              <el-card class="chart-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="1" animated />
+                </div>
+                <div class="chart-skeleton-content">
+                  <el-skeleton :rows="4" animated />
+                </div>
+              </el-card>
+            </el-col>
+            <el-col :xs="24" :md="8">
+              <el-card class="regions-card" shadow="never">
+                <div class="card-skeleton-wrapper">
+                  <el-skeleton :rows="6" animated />
+                </div>
+              </el-card>
+            </el-col>
+          </el-row>
+        </template>
+      </div>
+
+      <!-- 加载失败时显示错误提示 -->
+      <el-alert v-else-if="loadFailed && !track" type="error" :closable="false" style="margin-bottom: 20px">
         轨迹数据加载失败，请返回列表重试
       </el-alert>
 
-      <template v-if="track">
+      <!-- 加载完成后显示内容 -->
+      <template v-else>
+        <template v-if="track">
         <!-- 固定布局容器（高屏时使用） -->
         <div v-if="isTallScreen" class="fixed-layout">
           <!-- 左侧固定区域 -->
@@ -576,6 +654,7 @@
           </div>
         </div>
       </template>
+      </template>
     </el-main>
 
     <!-- 编辑对话框 -->
@@ -772,13 +851,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute } from 'vue-router'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadFile, UploadInstance } from 'element-plus'
 import {
   ArrowLeft,
+  HomeFilled,
   Download,
   Upload,
   Edit,
@@ -835,6 +915,10 @@ const track = ref<Track | null>(null)
 const points = ref<TrackPoint[]>([])
 const trackId = ref<number>(parseInt(route.params.id as string))
 const highlightedPointIndex = ref<number>(-1)
+const loadFailed = ref(false)  // 标记是否加载失败
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 const containerRef = ref<HTMLElement>()
 const mapRef = ref()
@@ -994,7 +1078,9 @@ async function fetchTrackDetail() {
     // 如果是虚拟 ID（负数），说明是等待上传点的实时记录
     if (trackId.value < 0) {
       const recordingId = -trackId.value
-      track.value = await liveRecordingApi.getDetail(recordingId)
+      const result = await liveRecordingApi.getDetail(recordingId)
+      if (!isMounted.value) return
+      track.value = result
       points.value = []  // 空轨迹没有点
 
       // 如果后端返回了真实轨迹 ID，说明已经有轨迹点了
@@ -1009,10 +1095,15 @@ async function fetchTrackDetail() {
         return
       }
     } else {
-      track.value = await trackApi.getDetail(trackId.value)
+      const result = await trackApi.getDetail(trackId.value)
+      if (!isMounted.value) return
+      track.value = result
     }
   } catch (error) {
     // 错误已在拦截器中处理
+    if (isMounted.value) {
+      loadFailed.value = true
+    }
   }
 }
 
@@ -1026,7 +1117,9 @@ async function fetchTrackPoints() {
 
   try {
     const response = await trackApi.getPoints(trackId.value)
-    points.value = response.points
+    if (isMounted.value) {
+      points.value = response.points
+    }
   } catch (error) {
     // 错误已在拦截器中处理
   }
@@ -1043,14 +1136,19 @@ async function fetchRegions() {
   try {
     regionTreeLoading.value = true
     const response = await trackApi.getRegions(trackId.value)
+    if (!isMounted.value) return
     regionTree.value = response.regions
     regionStats.value = response.stats
   } catch (error) {
     // 错误已在拦截器中处理
-    regionTree.value = []
-    regionStats.value = { province: 0, city: 0, district: 0, road: 0 }
+    if (isMounted.value) {
+      regionTree.value = []
+      regionStats.value = { province: 0, city: 0, district: 0, road: 0 }
+    }
   } finally {
-    regionTreeLoading.value = false
+    if (isMounted.value) {
+      regionTreeLoading.value = false
+    }
   }
 }
 
@@ -2231,6 +2329,11 @@ onMounted(async () => {
   window.addEventListener('resize', handleResize)
 })
 
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
+
 // 监听布局切换，重新渲染图表
 watch(isTallScreen, () => {
   nextTick(() => {
@@ -2301,9 +2404,18 @@ onUnmounted(() => {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   flex: 1;
   min-width: 0;
+}
+
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
 }
 
 .title-with-tags {
@@ -3246,6 +3358,25 @@ onUnmounted(() => {
   margin: 0;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+/* 骨架屏样式 */
+.detail-skeleton {
+  width: 100%;
+}
+
+.card-skeleton-wrapper {
+  padding: 20px;
+}
+
+.map-skeleton-content {
+  padding: 20px;
+  min-height: 400px;
+}
+
+.chart-skeleton-content {
+  padding: 20px;
+  min-height: 180px;
 }
 </style>
 

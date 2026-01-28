@@ -62,84 +62,106 @@
 
     <!-- 主内容区 -->
     <el-main class="main">
-      <!-- 统计卡片 -->
-      <el-row :gutter="20" class="stats-row">
-        <el-col :xs="12" :sm="6">
-          <el-card shadow="hover" class="stat-card" @click="$router.push('/tracks')">
-            <div class="stat-card-content">
-              <div class="stat-icon" style="background: #409eff">
-                <el-icon :size="24"><Location /></el-icon>
-              </div>
-              <div class="stat-content">
-                <div class="stat-value">{{ stats.total_tracks }}</div>
-                <div class="stat-label">轨迹总数</div>
-              </div>
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="12" :sm="6">
-          <el-card shadow="hover">
-            <div class="stat-card-content">
-              <div class="stat-icon" style="background: #67c23a">
-                <el-icon :size="24"><Odometer /></el-icon>
-              </div>
-              <div class="stat-content">
-                <div class="stat-value">{{ formatDistance(stats.total_distance) }}</div>
-                <div class="stat-label">总里程</div>
-              </div>
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="12" :sm="6">
-          <el-card shadow="hover">
-            <div class="stat-card-content">
-              <div class="stat-icon" style="background: #e6a23c">
-                <el-icon :size="24"><Clock /></el-icon>
-              </div>
-              <div class="stat-content">
-                <div class="stat-value">{{ formatDuration(stats.total_duration) }}</div>
-                <div class="stat-label">总时长</div>
-              </div>
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :xs="12" :sm="6">
-          <el-card shadow="hover">
-            <div class="stat-card-content">
-              <div class="stat-icon" style="background: #f56c6c">
-                <el-icon :size="24"><Top /></el-icon>
-              </div>
-              <div class="stat-content">
-                <div class="stat-value">{{ formatElevation(stats.total_elevation_gain) }}</div>
-                <div class="stat-label">总爬升</div>
-              </div>
-            </div>
-          </el-card>
-        </el-col>
-      </el-row>
-
-      <!-- 地图 -->
-      <el-card class="map-card" shadow="never">
-        <template #header>
-          <div class="map-header">
-            <span v-if="!loadingTracks">所有轨迹</span>
-            <span v-else class="loading-title">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
-            </span>
+      <!-- 初始加载时显示骨架屏 -->
+      <div v-if="initialLoading" class="initial-loading">
+        <el-row :gutter="20" class="stats-row">
+          <el-col :xs="12" :sm="6" v-for="i in 4" :key="i">
+            <el-card shadow="hover">
+              <el-skeleton :rows="1" animated />
+            </el-card>
+          </el-col>
+        </el-row>
+        <el-card class="map-card" shadow="never">
+          <div class="map-skeleton">
+            <el-skeleton :rows="1" animated />
           </div>
-        </template>
-        <!-- 有数据时显示地图 -->
-        <div v-if="tracksWithPoints.length > 0 || loadingTracks" class="map-container">
-          <UniversalMap :tracks="tracksWithPoints" mode="home" @track-click="handleTrackClick" />
-        </div>
-        <!-- 无数据时显示空状态 -->
-        <el-empty v-else description="暂无轨迹，请先上传">
-          <el-button type="primary" @click="$router.push('/upload')">
-            上传第一条轨迹
-          </el-button>
-        </el-empty>
-      </el-card>
+          <div class="map-skeleton">
+            <el-skeleton :rows="8" animated />
+          </div>
+        </el-card>
+      </div>
+
+      <!-- 数据加载完成后显示内容 -->
+      <template v-else>
+        <!-- 统计卡片 -->
+        <el-row :gutter="20" class="stats-row">
+          <el-col :xs="12" :sm="6">
+            <el-card shadow="hover" class="stat-card" @click="$router.push('/tracks')">
+              <div class="stat-card-content">
+                <div class="stat-icon" style="background: #409eff">
+                  <el-icon :size="24"><Location /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ stats.total_tracks }}</div>
+                  <div class="stat-label">轨迹总数</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-card shadow="hover">
+              <div class="stat-card-content">
+                <div class="stat-icon" style="background: #67c23a">
+                  <el-icon :size="24"><Odometer /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ formatDistance(stats.total_distance) }}</div>
+                  <div class="stat-label">总里程</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-card shadow="hover">
+              <div class="stat-card-content">
+                <div class="stat-icon" style="background: #e6a23c">
+                  <el-icon :size="24"><Clock /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ formatDuration(stats.total_duration) }}</div>
+                  <div class="stat-label">总时长</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+          <el-col :xs="12" :sm="6">
+            <el-card shadow="hover">
+              <div class="stat-card-content">
+                <div class="stat-icon" style="background: #f56c6c">
+                  <el-icon :size="24"><Top /></el-icon>
+                </div>
+                <div class="stat-content">
+                  <div class="stat-value">{{ formatElevation(stats.total_elevation_gain) }}</div>
+                  <div class="stat-label">总爬升</div>
+                </div>
+              </div>
+            </el-card>
+          </el-col>
+        </el-row>
+
+        <!-- 地图 -->
+        <el-card class="map-card" shadow="never">
+          <template #header>
+            <div class="map-header">
+              <span v-if="!loadingTracks">所有轨迹</span>
+              <span v-else class="loading-title">
+                <el-icon class="is-loading"><Loading /></el-icon>
+                正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
+              </span>
+            </div>
+          </template>
+          <!-- 有数据时显示地图 -->
+          <div v-if="tracksWithPoints.length > 0 || loadingTracks" class="map-container">
+            <UniversalMap :tracks="tracksWithPoints" mode="home" @track-click="handleTrackClick" />
+          </div>
+          <!-- 无数据时显示空状态 -->
+          <el-empty v-else description="暂无轨迹，请先上传">
+            <el-button type="primary" @click="$router.push('/upload')">
+              上传第一条轨迹
+            </el-button>
+          </el-empty>
+        </el-card>
+      </template>
     </el-main>
 
     <!-- 道路标志对话框 -->
@@ -325,8 +347,8 @@ const isMobile = computed(() => screenWidth.value <= 1366)
 // 检查字体是否已配置
 const fontsConfigured = computed(() => configStore.areFontsConfigured())
 
-// 标记组件是否已挂载，用于避免卸载后更新状态
-let isMounted = true
+// 标记组件是否已挂载，用于避免卸载后更新状态（使用 ref 确保响应式）
+const isMounted = ref(true)
 
 // 监听窗口大小变化
 function handleResize() {
@@ -345,6 +367,9 @@ const tracks = ref<UnifiedTrack[]>([])
 const tracksPoints = ref<Map<number, TrackPoint[]>>(new Map())
 const loadingTracks = ref(false)
 const loadedTrackCount = ref(0)
+
+// 初始加载状态（首次加载统计数据和轨迹列表）
+const initialLoading = ref(true)
 
 // 组合轨迹和点数据供地图组件使用
 const tracksWithPoints = computed(() => {
@@ -787,7 +812,7 @@ async function fetchAllTracksPoints() {
     // 使用递归函数来处理并发，每个请求完成后立即更新地图
     async function fetchNext() {
       // 检查组件是否已卸载或所有轨迹都已处理
-      if (!isMounted || index >= total) {
+      if (!isMounted.value || index >= total) {
         return
       }
 
@@ -803,7 +828,7 @@ async function fetchAllTracksPoints() {
           const points = samplePoints(response.points)
 
           // 每个请求完成后立即更新地图
-          if (isMounted) {
+          if (isMounted.value) {
             tracksPoints.value.set(track.id, points)
             loadedTrackCount.value++
           }
@@ -811,7 +836,7 @@ async function fetchAllTracksPoints() {
           return { success: true }
         } catch (error) {
           console.error(`Failed to load points for track ${track.id}:`, error)
-          if (isMounted) {
+          if (isMounted.value) {
             loadedTrackCount.value++
           }
           return { success: false }
@@ -829,47 +854,51 @@ async function fetchAllTracksPoints() {
     await fetchNext()
   } finally {
     // 只有在组件仍然挂载时才更新 loading 状态
-    if (isMounted) {
+    if (isMounted.value) {
       loadingTracks.value = false
     }
   }
 }
 
 onMounted(() => {
-  // 异步获取统计数据，不阻塞页面渲染（已包含实时轨迹）
-  trackApi.getStats()
-    .then((data: typeof stats.value) => {
-      if (isMounted) stats.value = data
-    })
-    .catch(() => {
-      // 错误已在拦截器中处理
-    })
-
-  // 异步获取统一轨迹列表（包含普通轨迹和实时记录），不阻塞页面渲染
-  trackApi.getUnifiedList({ page: 1, page_size: 100 })
-    .then((response: { items: typeof tracks.value }) => {
-      if (isMounted) {
+  // 使用 Promise.all 同时加载数据，等待两者都完成后才结束初始加载状态
+  Promise.all([
+    trackApi.getStats(),
+    trackApi.getUnifiedList({ page: 1, page_size: 100 }),
+  ])
+    .then(([statsData, tracksResponse]: [typeof stats.value, { items: typeof tracks.value }]) => {
+      if (isMounted.value) {
+        stats.value = statsData
         // 按开始时间排序（从旧到新）
-        tracks.value = response.items.sort((a, b) => {
+        tracks.value = tracksResponse.items.sort((a, b) => {
           const timeA = a.start_time ? new Date(a.start_time).getTime() : 0
           const timeB = b.start_time ? new Date(b.start_time).getTime() : 0
           return timeA - timeB
         })
         // 异步获取轨迹点数据
         fetchAllTracksPoints()
+        // 初始加载完成
+        initialLoading.value = false
       }
     })
     .catch(() => {
       // 错误已在拦截器中处理
+      if (isMounted.value) {
+        initialLoading.value = false
+      }
     })
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
 })
 
-// 组件卸载时设置标志，避免更新已卸载组件的状态
+// 组件即将卸载时立即设置标志，避免在卸载过程中更新状态
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
+
+// 组件卸载时移除监听器
 onUnmounted(() => {
-  isMounted = false
   // 移除窗口大小监听器
   window.removeEventListener('resize', handleResize)
 })
@@ -1048,6 +1077,14 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
   position: relative;
+}
+
+.map-skeleton {
+  padding: 20px;
+}
+
+.initial-loading .stats-row .el-card {
+  min-height: 90px;
 }
 
 .map-empty {

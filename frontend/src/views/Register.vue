@@ -81,6 +81,7 @@
 import { reactive, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { HomeFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 
@@ -179,6 +180,13 @@ async function handleRegister() {
 .register-header {
   text-align: center;
   margin-bottom: 30px;
+  position: relative;
+}
+
+.home-btn {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .register-header h1 {

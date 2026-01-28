@@ -1,7 +1,10 @@
 <template>
   <el-container class="road-sign-container">
     <el-header>
-      <h1>道路标志生成器</h1>
+      <div class="header-content">
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
+        <h1>道路标志生成器</h1>
+      </div>
     </el-header>
 
     <el-main>
@@ -157,7 +160,12 @@
             <template #header>
               <span>预览</span>
             </template>
-            <div v-loading="loading" class="preview-container">
+            <!-- 加载中显示骨架屏 -->
+            <div v-if="loading" class="preview-container">
+              <el-skeleton :rows="8" animated />
+            </div>
+            <!-- 加载完成后显示内容 -->
+            <div v-else class="preview-container">
               <div v-if="!generatedSvg" class="preview-placeholder">
                 <el-icon :size="80" color="#ddd">
                   <Picture />
@@ -178,9 +186,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, Picture } from '@element-plus/icons-vue'
+import { HomeFilled, Download, Picture } from '@element-plus/icons-vue'
 import { roadSignApi, type RoadSignResponse, type RoadSignListItem } from '@/api/roadSign'
 
 // 表单数据
@@ -195,6 +203,9 @@ const form = reactive({
 const loading = ref(false)
 const generatedSvg = ref('')
 const history = ref<RoadSignListItem[]>([])
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 // 省份列表
 const provinces = [
@@ -298,7 +309,10 @@ function applyHistory(item: RoadSignListItem) {
 // 加载历史记录
 async function loadHistory() {
   try {
-    history.value = await roadSignApi.getList({ limit: 20 })
+    const result = await roadSignApi.getList({ limit: 20 })
+    if (isMounted.value) {
+      history.value = result
+    }
   } catch (error) {
     console.error('Failed to load history:', error)
   }
@@ -335,6 +349,11 @@ function downloadSvg() {
 onMounted(() => {
   loadHistory()
 })
+
+// 组件即将卸载时设置标志，避免更新已卸载组件的状态
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
 </script>
 
 <style scoped>
@@ -348,6 +367,13 @@ onMounted(() => {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
   align-items: center;
+  padding: 0 20px;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .el-header h1 {

@@ -2,6 +2,7 @@
   <el-container class="upload-container">
     <el-header>
       <div class="header-content">
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
         <h1>实时轨迹上传</h1>
       </div>
     </el-header>
@@ -199,10 +200,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules, type UploadInstance, type UploadFile } from 'element-plus'
-import { Link, DocumentCopy, Upload, UploadFilled, Close } from '@element-plus/icons-vue'
+import { HomeFilled, Link, DocumentCopy, Upload, UploadFilled, Close } from '@element-plus/icons-vue'
 import { liveRecordingApi } from '@/api/liveRecording'
 import { getAppOrigin } from '@/utils/origin'
 
@@ -218,6 +219,9 @@ const showFileUpload = ref(false)
 const progress = ref(0)
 const progressStatus = ref<'success' | 'exception' | 'warning' | ''>('')
 const copyButtonText = ref('复制')
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 const token = ref('')
 const gpsLoggerUrl = computed(() => {
@@ -246,7 +250,7 @@ const rules: FormRules = {
 onMounted(async () => {
   const queryToken = route.query.token as string
   if (!queryToken) {
-    loading.value = false
+    if (isMounted.value) loading.value = false
     return
   }
 
@@ -255,15 +259,23 @@ onMounted(async () => {
   try {
     // 通过无认证 API 获取记录信息
     const info = await liveRecordingApi.getInfoByToken(queryToken)
+    if (!isMounted.value) return
     recording.value = {
       name: info.name,
       description: info.description,
     }
     loading.value = false
   } catch (error: any) {
-    ElMessage.error(error.message || '无效的上传链接')
-    loading.value = false
+    if (isMounted.value) {
+      ElMessage.error(error.message || '无效的上传链接')
+      loading.value = false
+    }
   }
+})
+
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
 })
 
 // 复制 GPS Logger URL

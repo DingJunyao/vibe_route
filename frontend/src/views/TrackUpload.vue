@@ -2,7 +2,8 @@
   <el-container class="upload-container">
     <el-header>
       <div class="header-content">
-        <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
+        <el-button @click="$router.back()" :icon="ArrowLeft" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
         <h1>上传轨迹</h1>
         <div></div>
       </div>
@@ -117,7 +118,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules, type UploadInstance, type UploadFile } from 'element-plus'
-import { ArrowLeft, UploadFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, UploadFilled } from '@element-plus/icons-vue'
 import { trackApi } from '@/api/track'
 
 const router = useRouter()

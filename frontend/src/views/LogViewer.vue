@@ -1,11 +1,17 @@
 <template>
   <div class="log-viewer">
+    <el-header class="log-viewer-header">
+      <div class="header-left">
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
+        <h2>远程日志查看器</h2>
+      </div>
+      <div class="status" :class="{ connected: isConnected }">
+        {{ isConnected ? '已连接' : '未连接' }}
+      </div>
+    </el-header>
     <el-card class="control-card">
       <div class="control-header">
-        <h2>远程日志查看器</h2>
-        <div class="status" :class="{ connected: isConnected }">
-          {{ isConnected ? '已连接' : '未连接' }}
-        </div>
+        <h2>控制面板</h2>
       </div>
       <div class="control-buttons">
         <el-button type="primary" @click="connect" :disabled="isConnected">
@@ -51,6 +57,7 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onUnmounted } from 'vue'
+import { HomeFilled } from '@element-plus/icons-vue'
 import { getWebSocketUrl } from '@/utils/remoteLog'
 
 interface LogEntry {
@@ -147,9 +154,36 @@ onUnmounted(() => {
 
 <style scoped>
 .log-viewer {
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #f5f7fa;
+}
+
+.log-viewer-header {
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px;
+  flex-shrink: 0;
+  height: 60px;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-left h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.log-viewer > .el-card {
+  margin: 20px;
 }
 
 .control-card {

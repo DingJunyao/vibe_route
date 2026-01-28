@@ -57,6 +57,7 @@
 import { reactive, ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { HomeFilled } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 
@@ -128,6 +129,13 @@ async function handleLogin() {
 .login-header {
   text-align: center;
   margin-bottom: 30px;
+  position: relative;
+}
+
+.home-btn {
+  position: absolute;
+  left: 0;
+  top: 0;
 }
 
 .login-header h1 {

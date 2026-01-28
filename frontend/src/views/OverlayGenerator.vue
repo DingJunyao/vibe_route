@@ -1,7 +1,10 @@
 <template>
   <el-container class="overlay-generator-container">
     <el-header>
-      <h1>信息覆盖层生成</h1>
+      <div class="header-content">
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
+        <h1>信息覆盖层生成</h1>
+      </div>
     </el-header>
 
     <el-main>
@@ -242,9 +245,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { VideoCamera, Refresh, Download } from '@element-plus/icons-vue'
+import { HomeFilled, VideoCamera, Refresh, Download } from '@element-plus/icons-vue'
 import { taskApi, type Task, type CreateOverlayTaskRequest } from '@/api/task'
 import { trackApi, type Track } from '@/api/track'
 
@@ -267,15 +270,23 @@ const currentTask = ref<Task | null>(null)
 const taskHistory = ref<Task[]>([])
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
+
 // 加载轨迹列表
 async function loadTracks() {
   tracksLoading.value = true
   try {
-    tracks.value = await trackApi.getList({ page: 1, page_size: 100 })
+    const result = await trackApi.getList({ page: 1, page_size: 100 })
+    if (isMounted.value) {
+      tracks.value = result
+    }
   } catch (error) {
     console.error('Failed to load tracks:', error)
   } finally {
-    tracksLoading.value = false
+    if (isMounted.value) {
+      tracksLoading.value = false
+    }
   }
 }
 
@@ -283,6 +294,7 @@ async function loadTracks() {
 async function loadTasks() {
   try {
     const tasks = await taskApi.listTasks(20)
+    if (!isMounted.value) return
     if (tasks.length > 0) {
       // 第一个是最新任务
       if (!currentTask.value || tasks[0].id !== currentTask.value.id) {
@@ -332,10 +344,11 @@ function startPolling() {
   }
 
   pollTimer = setInterval(async () => {
-    if (!currentTask.value) return
+    if (!currentTask.value || !isMounted.value) return
 
     try {
       const task = await taskApi.getTask(currentTask.value.id)
+      if (!isMounted.value) return
       currentTask.value = task
 
       // 如果任务完成，停止轮询
@@ -343,10 +356,12 @@ function startPolling() {
         stopPolling()
         loadTasks()
 
-        if (task.status === 'completed') {
-          ElMessage.success('覆盖层生成完成！')
-        } else {
-          ElMessage.error(`任务失败: ${task.error_message}`)
+        if (isMounted.value) {
+          if (task.status === 'completed') {
+            ElMessage.success('覆盖层生成完成！')
+          } else {
+            ElMessage.error(`任务失败: ${task.error_message}`)
+          }
         }
       }
     } catch (error) {
@@ -491,6 +506,11 @@ onMounted(() => {
   loadTasks()
 })
 
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
+
 onUnmounted(() => {
   stopPolling()
 })
@@ -507,6 +527,13 @@ onUnmounted(() => {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
   align-items: center;
+  padding: 0 20px;
+}
+
+.header-content {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .el-header h1 {

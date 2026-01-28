@@ -3,8 +3,34 @@
     <el-container>
       <el-header>
         <div class="header-content">
-          <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
+          <el-button @click="$router.back()" :icon="ArrowLeft" class="nav-btn" />
+          <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
           <h1>后台管理</h1>
+        </div>
+        <div class="header-right">
+          <el-dropdown @command="handleCommand">
+            <span class="user-info">
+              <el-icon><UserIcon /></el-icon>
+              <span class="username">{{ authStore.user?.username }}</span>
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="home">
+                  <el-icon><HomeFilled /></el-icon>
+                  主页
+                </el-dropdown-item>
+                <el-dropdown-item command="tracks">
+                  <el-icon><List /></el-icon>
+                  轨迹列表
+                </el-dropdown-item>
+                <el-dropdown-item command="logout">
+                  <el-icon><SwitchButton /></el-icon>
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -13,7 +39,12 @@
           <!-- 系统配置 -->
           <el-tab-pane label="系统配置" name="config">
             <div class="config-tab-content">
-              <el-card v-loading="loadingConfig" shadow="never">
+              <!-- 加载中显示骨架屏 -->
+              <div v-if="loadingConfig" class="config-skeleton">
+                <el-skeleton :rows="10" animated />
+              </div>
+              <!-- 加载完成后显示内容 -->
+              <el-card v-else shadow="never">
                 <el-form :model="config" label-width="150px" class="config-form">
                 <!-- 注册设置 -->
                 <div class="form-section">
@@ -306,7 +337,13 @@
               </el-row>
             </el-card>
 
-            <el-card v-loading="loadingUsers" class="list-card" shadow="never">
+            <!-- 加载中显示骨架屏 -->
+            <div v-if="loadingUsers" class="list-skeleton">
+              <el-skeleton :rows="5" animated />
+            </div>
+
+            <!-- 加载完成后显示内容 -->
+            <el-card v-else class="list-card" shadow="never">
               <!-- 桌面端表格 -->
               <el-table :data="users" class="pc-table" style="width: 100%">
                 <el-table-column prop="id" label="ID" width="80" />
@@ -511,7 +548,13 @@
 
           <!-- 邀请码管理 -->
           <el-tab-pane label="邀请码" name="invite-codes">
-            <el-card v-loading="loadingInviteCodes" class="list-card" shadow="never">
+            <!-- 加载中显示骨架屏 -->
+            <div v-if="loadingInviteCodes" class="list-skeleton">
+              <el-skeleton :rows="5" animated />
+            </div>
+
+            <!-- 加载完成后显示内容 -->
+            <el-card v-else class="list-card" shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>邀请码列表</span>
@@ -626,8 +669,15 @@
           <!-- 字体管理 -->
           <el-tab-pane label="字体管理" name="fonts">
             <div class="fonts-tab-content">
+            <!-- 加载中显示骨架屏 -->
+            <div v-if="loadingFonts" class="fonts-skeleton">
+              <el-skeleton :rows="8" animated />
+            </div>
+
+            <!-- 加载完成后显示内容 -->
+            <template v-else>
             <!-- 激活字体选择 -->
-            <el-card v-loading="loadingFonts" shadow="never" style="margin-bottom: 16px;">
+            <el-card shadow="never" style="margin-bottom: 16px;">
               <template #header>
                 <span>激活字体选择</span>
               </template>
@@ -699,9 +749,10 @@
                 字体未完整配置，道路标志生成功能将被禁用
               </el-alert>
             </el-card>
+            </template>
 
             <!-- 字体文件列表 -->
-            <el-card v-loading="loadingFonts" shadow="never">
+            <el-card shadow="never">
               <template #header>
                 <div class="card-header">
                   <span>字体文件列表</span>
@@ -827,10 +878,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed, onUnmounted, watch } from 'vue'
+import { ref, reactive, onMounted, computed, onUnmounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Plus, Rank, ArrowUp, ArrowDown, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
@@ -865,6 +916,9 @@ const loadingFonts = ref(false)
 const saving = ref(false)
 const creatingInviteCode = ref(false)
 const uploadingFont = ref(false)
+
+// 标记组件是否已挂载，用于避免卸载后更新状态
+const isMounted = ref(true)
 
 // 道路标志缓存清除状态
 const clearingWayCache = ref(false)
@@ -974,6 +1028,7 @@ async function loadConfig() {
   loadingConfig.value = true
   try {
     const data = await adminApi.getConfig()
+    if (!isMounted.value) return
     Object.assign(config, data)
     initGeocodingConfig()
     // 初始化地图层列表（按固定顺序）
@@ -983,7 +1038,9 @@ async function loadConfig() {
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
-    loadingConfig.value = false
+    if (isMounted.value) {
+      loadingConfig.value = false
+    }
   }
 }
 
@@ -1139,6 +1196,7 @@ async function loadUsers() {
       roles: userRoleFilters.value.length === 2 ? undefined : userRoleFilters.value,
       statuses: userStatusFilters.value.length === 2 ? undefined : userStatusFilters.value,
     })
+    if (!isMounted.value) return
     users.value = response.items
     usersTotal.value = response.total
     // 统计管理员数量
@@ -1146,7 +1204,9 @@ async function loadUsers() {
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
-    loadingUsers.value = false
+    if (isMounted.value) {
+      loadingUsers.value = false
+    }
   }
 }
 
@@ -1310,12 +1370,15 @@ async function loadInviteCodes() {
       page: inviteCodesCurrentPage.value,
       page_size: inviteCodesPageSize.value,
     })
+    if (!isMounted.value) return
     inviteCodes.value = response.items
     inviteCodesTotal.value = response.total
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
-    loadingInviteCodes.value = false
+    if (isMounted.value) {
+      loadingInviteCodes.value = false
+    }
   }
 }
 
@@ -1374,6 +1437,25 @@ function getInviteCodeStatus(inviteCode: InviteCode) {
   return { type: 'success', text: '可用' }
 }
 
+// 处理用户下拉菜单命令
+function handleCommand(command: string) {
+  if (command === 'logout') {
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }).then(() => {
+      authStore.logout()
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    })
+  } else if (command === 'home') {
+    router.push('/home')
+  } else if (command === 'tracks') {
+    router.push('/tracks')
+  }
+}
+
 // 格式化日期时间
 function formatDateTime(dateStr: string): string {
   const date = new Date(dateStr)
@@ -1402,12 +1484,15 @@ async function loadFonts() {
   loadingFonts.value = true
   try {
     const response = await adminApi.getFonts()
+    if (!isMounted.value) return
     fonts.value = response.fonts
     activeFonts.value = response.active_fonts
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
-    loadingFonts.value = false
+    if (isMounted.value) {
+      loadingFonts.value = false
+    }
   }
 }
 
@@ -1526,6 +1611,11 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
+// 组件即将卸载时设置标志
+onBeforeUnmount(() => {
+  isMounted.value = false
+})
+
 // 组件卸载时移除监听器
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
@@ -1554,6 +1644,7 @@ onUnmounted(() => {
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
+  justify-content: space-between;
   align-items: center;
   padding: 0 20px;
   flex-shrink: 0;
@@ -1565,9 +1656,17 @@ onUnmounted(() => {
 .header-content {
   display: flex;
   align-items: center;
-  gap: 20px;
-  width: 100%;
+  gap: 8px;
   overflow: hidden;
+}
+
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
 }
 
 .header-content h1 {
@@ -1577,6 +1676,30 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-info:hover {
+  background-color: #f5f7fa;
+}
+
+.user-info .username {
+  display: inline;
 }
 
 .main {
@@ -2312,5 +2435,18 @@ onUnmounted(() => {
     width: 80px !important;
     font-size: 14px;
   }
+}
+
+/* 骨架屏样式 */
+.config-skeleton {
+  padding: 20px;
+}
+
+.list-skeleton {
+  padding: 20px;
+}
+
+.fonts-skeleton {
+  padding: 20px;
 }
 </style>
