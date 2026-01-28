@@ -146,12 +146,13 @@
               </template>
               <template v-else>
                 <div class="map-placeholder">
-                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
-                  <p v-if="points.length > 0" class="debug-info">
+                  <p v-if="isWaitingForPoints">等待记录中...</p>
+                  <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
                     轨迹点数量: {{ points.length }}，
                     有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
                   </p>
-                  <el-button size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
+                  <el-button v-if="!isWaitingForPoints" size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
                 </div>
               </template>
             </el-card>
@@ -174,71 +175,80 @@
                   <template #header>
                     <span>轨迹信息</span>
                   </template>
-                  <!-- 起止时间 -->
-                  <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
-                    <div class="time-range-item">
-                      <div class="time-range-content">
-                        <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
-                        <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
-                      </div>
-                    </div>
-                    <div class="time-range-divider">
-                      <template v-if="isSameDay(track.start_time, track.end_time)">
-                        <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
-                      </template>
-                      <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
-                    </div>
-                    <div class="time-range-item">
-                      <div class="time-range-content">
-                        <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
-                        <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
-                      </div>
-                    </div>
+                  <!-- 待记录状态 -->
+                  <div v-if="isWaitingForPoints" class="waiting-for-points">
+                    <el-icon class="waiting-icon"><Clock /></el-icon>
+                    <p class="waiting-text">等待记录中...</p>
+                    <p class="waiting-hint">请使用 GPS Logger 等应用上传轨迹点</p>
                   </div>
-                  <el-divider style="margin: 16px 0;"></el-divider>
-                  <el-row :gutter="20">
-                    <el-col :span="12">
-                      <div class="stat-item">
-                        <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
-                        <div class="stat-content">
-                          <div class="stat-value">{{ formatDistance(track.distance) }}</div>
-                          <div class="stat-label">总里程</div>
+                  <!-- 正常统计信息 -->
+                  <template v-else>
+                    <!-- 起止时间 -->
+                    <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                      <div class="time-range-item">
+                        <div class="time-range-content">
+                          <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                          <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
                         </div>
                       </div>
-                    </el-col>
-                    <el-col :span="12">
-                      <div class="stat-item">
-                        <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
-                        <div class="stat-content">
-                          <div class="stat-value">{{ formatDuration(track.duration) }}</div>
-                          <div class="stat-label">总时长</div>
+                      <div class="time-range-divider">
+                        <template v-if="isSameDay(track.start_time, track.end_time)">
+                          <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                        </template>
+                        <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                      </div>
+                      <div class="time-range-item">
+                        <div class="time-range-content">
+                          <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                          <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
                         </div>
                       </div>
-                    </el-col>
-                    <el-col :span="12">
-                      <div class="stat-item">
-                        <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
-                        <div class="stat-content">
-                          <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
-                          <div class="stat-label">总爬升</div>
-                        </div>
-                      </div>
-                    </el-col>
-                    <el-col :span="12">
-                      <div class="stat-item">
-                        <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
-                        <div class="stat-content">
-                          <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
-                          <div class="stat-label">总下降</div>
-                        </div>
-                      </div>
-                    </el-col>
-                  </el-row>
-                  <!-- 备注 -->
-                  <div v-if="track.description" class="description-section">
+                    </div>
                     <el-divider style="margin: 16px 0;"></el-divider>
-                    <div class="description-text">{{ track.description }}</div>
-                  </div>
+                    <el-row :gutter="20">
+                      <el-col :span="12">
+                        <div class="stat-item">
+                          <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
+                          <div class="stat-content">
+                            <div class="stat-value">{{ formatDistance(track.distance) }}</div>
+                            <div class="stat-label">总里程</div>
+                          </div>
+                        </div>
+                      </el-col>
+                      <el-col :span="12">
+                        <div class="stat-item">
+                          <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
+                          <div class="stat-content">
+                            <div class="stat-value">{{ formatDuration(track.duration) }}</div>
+                            <div class="stat-label">总时长</div>
+                          </div>
+                        </div>
+                      </el-col>
+                      <el-col :span="12">
+                        <div class="stat-item">
+                          <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
+                          <div class="stat-content">
+                            <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
+                            <div class="stat-label">总爬升</div>
+                          </div>
+                        </div>
+                      </el-col>
+                      <el-col :span="12">
+                        <div class="stat-item">
+                          <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
+                          <div class="stat-content">
+                            <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
+                            <div class="stat-label">总下降</div>
+                          </div>
+                        </div>
+                      </el-col>
+                    </el-row>
+                    <!-- 备注 -->
+                    <div v-if="track.description" class="description-section">
+                      <el-divider style="margin: 16px 0;"></el-divider>
+                      <div class="description-text">{{ track.description }}</div>
+                    </div>
+                  </template>
                 </el-card>
 
                 <!-- 经过的区域 - 树形展示 -->
@@ -348,12 +358,13 @@
               </template>
               <template v-else>
                 <div class="map-placeholder">
-                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
-                  <p v-if="points.length > 0" class="debug-info">
+                  <p v-if="isWaitingForPoints">等待记录中...</p>
+                  <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
                     轨迹点数量: {{ points.length }}，
                     有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
                   </p>
-                  <el-button size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
+                  <el-button v-if="!isWaitingForPoints" size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
                 </div>
               </template>
             </el-card>
@@ -374,71 +385,80 @@
               <template #header>
                 <span>轨迹信息</span>
               </template>
-              <!-- 起止时间 -->
-              <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
-                <div class="time-range-item">
-                  <div class="time-range-content">
-                    <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
-                    <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
-                  </div>
-                </div>
-                <div class="time-range-divider">
-                  <template v-if="isSameDay(track.start_time, track.end_time)">
-                    <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
-                  </template>
-                  <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
-                </div>
-                <div class="time-range-item">
-                  <div class="time-range-content">
-                    <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
-                    <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
-                  </div>
-                </div>
+              <!-- 待记录状态 -->
+              <div v-if="isWaitingForPoints" class="waiting-for-points">
+                <el-icon class="waiting-icon"><Clock /></el-icon>
+                <p class="waiting-text">等待记录中...</p>
+                <p class="waiting-hint">请使用 GPS Logger 等应用上传轨迹点</p>
               </div>
-              <el-divider style="margin: 16px 0;"></el-divider>
-              <el-row :gutter="20">
-                <el-col :span="12">
-                  <div class="stat-item">
-                    <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
-                    <div class="stat-content">
-                      <div class="stat-value">{{ formatDistance(track.distance) }}</div>
-                      <div class="stat-label">总里程</div>
+              <!-- 正常统计信息 -->
+              <template v-else>
+                <!-- 起止时间 -->
+                <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                  <div class="time-range-item">
+                    <div class="time-range-content">
+                      <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                      <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
                     </div>
                   </div>
-                </el-col>
-                <el-col :span="12">
-                  <div class="stat-item">
-                    <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
-                    <div class="stat-content">
-                      <div class="stat-value">{{ formatDuration(track.duration) }}</div>
-                      <div class="stat-label">总时长</div>
+                  <div class="time-range-divider">
+                    <template v-if="isSameDay(track.start_time, track.end_time)">
+                      <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                    </template>
+                    <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                  </div>
+                  <div class="time-range-item">
+                    <div class="time-range-content">
+                      <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                      <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
                     </div>
                   </div>
-                </el-col>
-                <el-col :span="12">
-                  <div class="stat-item">
-                    <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
-                    <div class="stat-content">
-                      <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
-                      <div class="stat-label">总爬升</div>
-                    </div>
-                  </div>
-                </el-col>
-                <el-col :span="12">
-                  <div class="stat-item">
-                    <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
-                    <div class="stat-content">
-                      <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
-                      <div class="stat-label">总下降</div>
-                    </div>
-                  </div>
-                </el-col>
-              </el-row>
-              <!-- 备注 -->
-              <div v-if="track.description" class="description-section">
+                </div>
                 <el-divider style="margin: 16px 0;"></el-divider>
-                <div class="description-text">{{ track.description }}</div>
-              </div>
+                <el-row :gutter="20">
+                  <el-col :span="12">
+                    <div class="stat-item">
+                      <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
+                      <div class="stat-content">
+                        <div class="stat-value">{{ formatDistance(track.distance) }}</div>
+                        <div class="stat-label">总里程</div>
+                      </div>
+                    </div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="stat-item">
+                      <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
+                      <div class="stat-content">
+                        <div class="stat-value">{{ formatDuration(track.duration) }}</div>
+                        <div class="stat-label">总时长</div>
+                      </div>
+                    </div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="stat-item">
+                      <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
+                      <div class="stat-content">
+                        <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
+                        <div class="stat-label">总爬升</div>
+                      </div>
+                    </div>
+                  </el-col>
+                  <el-col :span="12">
+                    <div class="stat-item">
+                      <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
+                      <div class="stat-content">
+                        <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
+                        <div class="stat-label">总下降</div>
+                      </div>
+                    </div>
+                  </el-col>
+                </el-row>
+                <!-- 备注 -->
+                <div v-if="track.description" class="description-section">
+                  <el-divider style="margin: 16px 0;"></el-divider>
+                  <div class="description-text">{{ track.description }}</div>
+                </div>
+              </template>
             </el-card>
 
             <!-- 经过的区域 - 树形展示 -->
@@ -897,6 +917,11 @@ const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnect
 let regionUpdateTimer: number | null = null
 const REGION_UPDATE_INTERVAL = 10000 // 10 秒
 
+// 判断是否是"待记录"状态（实时记录且没有点）
+const isWaitingForPoints = computed(() => {
+  return track.value?.is_live_recording && points.value.length === 0
+})
+
 // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
   if (!track.value || !points.value.length) return null
@@ -966,7 +991,26 @@ function handleCommand(command: string) {
 // 获取轨迹详情
 async function fetchTrackDetail() {
   try {
-    track.value = await trackApi.getDetail(trackId.value)
+    // 如果是虚拟 ID（负数），说明是等待上传点的实时记录
+    if (trackId.value < 0) {
+      const recordingId = -trackId.value
+      track.value = await liveRecordingApi.getDetail(recordingId)
+      points.value = []  // 空轨迹没有点
+
+      // 如果后端返回了真实轨迹 ID，说明已经有轨迹点了
+      if (track.value.id > 0) {
+        console.log(`[TrackDetail] 虚拟轨迹已转为真实轨迹: ${track.value.id}`)
+        // 更新 trackId，这样后续的 fetchTrackPoints 等函数能正确工作
+        trackId.value = track.value.id
+        // 重定向到正确的 URL（不影响当前组件的数据）
+        router.replace(`/tracks/${track.value.id}`)
+        // 重新获取轨迹点数据
+        await fetchTrackPoints()
+        return
+      }
+    } else {
+      track.value = await trackApi.getDetail(trackId.value)
+    }
   } catch (error) {
     // 错误已在拦截器中处理
   }
@@ -974,6 +1018,12 @@ async function fetchTrackDetail() {
 
 // 获取轨迹点
 async function fetchTrackPoints() {
+  // 如果是虚拟 ID（负数），跳过（空轨迹没有点）
+  if (trackId.value < 0) {
+    points.value = []
+    return
+  }
+
   try {
     const response = await trackApi.getPoints(trackId.value)
     points.value = response.points
@@ -1557,6 +1607,11 @@ function getFillProgressPercentage(): number {
 
 // 检查并恢复填充进度轮询
 async function checkAndResumeFilling() {
+  // 跳过虚拟轨迹（等待上传点的实时记录）
+  if (!trackId.value || trackId.value < 0) {
+    return
+  }
+
   try {
     const response = await trackApi.getFillProgress(trackId.value)
     fillProgress.value = response.progress
@@ -1981,10 +2036,46 @@ function startLiveUpdate() {
     liveTrackWs = new LiveTrackWebSocket(token, recordingId)
     isLiveUpdating.value = true
 
+    // 设置重连判断回调：只有记录状态为 active 时才重连
+    liveTrackWs.setShouldReconnectCallback(() => {
+      const shouldReconnect = track.value?.live_recording_status === 'active'
+      console.log('[LiveUpdate] 重连判断:', shouldReconnect ? '继续重连' : '停止重连（记录已结束）')
+      return shouldReconnect
+    })
+
     // 监听连接状态
     liveTrackWs.on('connected', () => {
       console.log('[LiveUpdate] WebSocket 已连接')
       liveUpdateStatus.value = 'connected'
+    })
+
+    // 监听断开连接
+    liveTrackWs.on('disconnected', async (message) => {
+      console.log('[LiveUpdate] WebSocket 已断开:', message.data)
+      liveUpdateStatus.value = 'disconnected'
+
+      // 主动获取最新记录状态（因为可能是记录被结束导致断开）
+      if (track.value?.is_live_recording && track.value?.live_recording_id) {
+        try {
+          const status = await liveRecordingApi.getStatus(track.value.live_recording_id)
+          console.log('[LiveUpdate] 获取到最新记录状态:', status.status)
+
+          // 更新 track 状态
+          if (track.value) {
+            track.value.live_recording_status = status.status
+          }
+
+          // 如果记录已结束，停止实时更新
+          if (status.status !== 'active') {
+            console.log('[LiveUpdate] 记录已结束，停止实时更新')
+            stopLiveUpdate()
+            // 刷新页面数据以显示最终状态
+            fetchTrackDetail()
+          }
+        } catch (error) {
+          console.error('[LiveUpdate] 获取记录状态失败:', error)
+        }
+      }
     })
 
     // 监听新点添加
@@ -2082,6 +2173,10 @@ async function handleNewPointAdded(data: PointAddedData) {
     track.value.elevation_loss = stats.elevation_loss
     // 更新结束时间为最新点的时间
     track.value.end_time = point.time
+    // 如果开始时间为空（第一个点），设置为当前点的时间
+    if (!track.value.start_time && point.time) {
+      track.value.start_time = point.time
+    }
   }
 
   // 延迟更新经过区域（节流：最多每 10 秒更新一次）
@@ -2372,6 +2467,45 @@ onUnmounted(() => {
 .stat-label {
   font-size: 12px;
   color: #999;
+}
+
+/* 等待记录中样式 */
+.waiting-for-points {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  gap: 12px;
+  text-align: center;
+}
+
+.waiting-icon {
+  font-size: 48px;
+  color: #409eff;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.waiting-text {
+  font-size: 16px;
+  font-weight: 500;
+  color: #333;
+  margin: 0;
+}
+
+.waiting-hint {
+  font-size: 14px;
+  color: #999;
+  margin: 0;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 /* 起止时间样式 */

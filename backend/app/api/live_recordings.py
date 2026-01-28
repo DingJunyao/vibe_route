@@ -118,6 +118,14 @@ async def end_recording(
 
     recording = await live_recording_service.end(db, recording)
 
+    # 主动断开该记录的所有 WebSocket 连接
+    from app.api.websocket import live_track_manager
+    await live_track_manager.close_recording_connections(
+        recording_id,
+        code=1000,
+        reason="Recording ended"
+    )
+
     upload_url = f"/live-upload?token={recording.token}"
     return LiveRecordingResponse(
         id=recording.id,
@@ -142,7 +150,8 @@ async def get_recording_detail(
     """
     获取实时记录的详情（返回格式与普通轨迹相同）
 
-    使用关联的当前轨迹的数据返回，包括统计信息、点数据等
+    使用关联的当前轨迹的数据返回，包括统计信息、点数据等。
+    如果还没有关联的轨迹（等待上传点），返回空轨迹对象。
     """
     recording = await live_recording_service.get_by_id(db, recording_id, current_user.id)
     if not recording:
@@ -154,9 +163,29 @@ async def get_recording_detail(
     # 获取关联的当前轨迹 ID
     track_id = getattr(recording, 'current_track_id')
     if track_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="记录暂无轨迹数据，请先上传轨迹点",
+        # 还没有上传轨迹点，返回一个空的 Track 对象
+        return TrackResponse(
+            id=-recording_id,  # 使用负数 ID 表示虚拟轨迹
+            user_id=current_user.id,
+            name=recording.name,
+            description=recording.description,
+            original_filename="",
+            original_crs="wgs84",
+            distance=0,
+            duration=0,
+            elevation_gain=0,
+            elevation_loss=0,
+            start_time=None,
+            end_time=None,
+            has_area_info=False,
+            has_road_info=False,
+            created_at=recording.created_at,
+            updated_at=recording.created_at,
+            is_live_recording=True,
+            live_recording_status=recording.status,
+            live_recording_id=recording.id,
+            live_recording_token=recording.token,
+            fill_geocoding=recording.fill_geocoding,
         )
 
     # 获取关联的轨迹（track_id 在此之后保证不为 None）
@@ -168,7 +197,19 @@ async def get_recording_detail(
         )
 
     # 返回轨迹数据（格式与普通轨迹详情相同）
-    return TrackResponse.model_validate(track)
+    # 使用 model_dump_json() 获取正确的 JSON 格式，然后添加额外字段
+    import json
+    track_json = TrackResponse.model_validate(track).model_dump_json()
+    track_dict = json.loads(track_json)
+    track_dict['fill_geocoding'] = recording.fill_geocoding
+    track_dict['is_live_recording'] = True
+    track_dict['live_recording_id'] = recording.id
+    track_dict['live_recording_status'] = recording.status
+    track_dict['live_recording_token'] = recording.token
+
+    # 使用 JSONResponse 直接返回 JSON
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=track_dict)
 
 
 @router.get("/{recording_id}/status", response_model=RecordingStatusResponse)

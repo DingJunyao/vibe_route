@@ -81,10 +81,9 @@
             <el-table-column prop="name" label="名称" min-width="200">
               <template #default="{ row }">
                 <div class="name-cell">
-                  <el-link v-if="row.id >= 0" underline="never" @click.stop="viewTrack(row)">
+                  <el-link underline="never" @click.stop="viewTrack(row)">
                     {{ row.name }}
                   </el-link>
-                  <span v-else>{{ row.name }}</span>
 
                   <!-- 轨迹进度标签 -->
                   <template v-if="!row.is_live_recording && getTrackProgress(row.id)">
@@ -128,11 +127,18 @@
             <el-table-column label="信息" width="280">
               <template #default="{ row }">
                 <div class="track-stats">
-                  <span><el-icon><Odometer /></el-icon> {{ formatDistance(row.distance) }}</span>
-                  <span><el-icon><Clock /></el-icon> {{ formatDuration(row.duration) }}</span>
-                  <span v-if="row.elevation_gain > 0">
-                    <el-icon><Top /></el-icon> {{ formatElevation(row.elevation_gain) }}
-                  </span>
+                  <!-- 等待上传点 -->
+                  <template v-if="row.id < 0">
+                    <span class="waiting-info">待记录</span>
+                  </template>
+                  <!-- 正常显示 -->
+                  <template v-else>
+                    <span><el-icon><Odometer /></el-icon> {{ formatDistance(row.distance) }}</span>
+                    <span><el-icon><Clock /></el-icon> {{ formatDuration(row.duration) }}</span>
+                    <span v-if="row.elevation_gain > 0">
+                      <el-icon><Top /></el-icon> {{ formatElevation(row.elevation_gain) }}
+                    </span>
+                  </template>
                 </div>
               </template>
             </el-table-column>
@@ -156,7 +162,6 @@
                       size="small"
                       text
                       @click.stop="viewTrack(row)"
-                      :disabled="row.id < 0"
                     >
                       查看
                     </el-button>
@@ -211,18 +216,27 @@
                 <div class="track-time">{{ formatDateTime(row.start_time || row.created_at) }}</div>
               </div>
               <div class="card-body">
-                <div class="card-item">
-                  <span class="label">里程</span>
-                  <span class="value">{{ formatDistance(row.distance) }}</span>
-                </div>
-                <div class="card-item">
-                  <span class="label">时长</span>
-                  <span class="value">{{ formatDuration(row.duration) }}</span>
-                </div>
-                <div class="card-item" v-if="row.elevation_gain > 0">
-                  <span class="label">爬升</span>
-                  <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
-                </div>
+                <!-- 等待上传点 -->
+                <template v-if="row.id < 0">
+                  <div class="card-item">
+                    <span class="value waiting-info">待记录</span>
+                  </div>
+                </template>
+                <!-- 正常显示 -->
+                <template v-else>
+                  <div class="card-item">
+                    <span class="label">里程</span>
+                    <span class="value">{{ formatDistance(row.distance) }}</span>
+                  </div>
+                  <div class="card-item">
+                    <span class="label">时长</span>
+                    <span class="value">{{ formatDuration(row.duration) }}</span>
+                  </div>
+                  <div class="card-item" v-if="row.elevation_gain > 0">
+                    <span class="label">爬升</span>
+                    <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
+                  </div>
+                </template>
               </div>
               <div class="card-actions" @click.stop>
                 <!-- 普通轨迹操作 -->
@@ -240,7 +254,6 @@
                     type="primary"
                     size="small"
                     @click="viewTrack(row)"
-                    :disabled="row.id < 0"
                   >
                     查看
                   </el-button>
@@ -591,11 +604,7 @@ function handleRowClick(row: UnifiedTrack) {
 }
 
 function viewTrack(track: UnifiedTrack) {
-  // 所有列表项都导航到轨迹详情（实时记录也已使用 track ID）
-  if (track.id < 0) {
-    ElMessage.warning('该记录还没有上传任何轨迹点，请先使用 GPS Logger 或其他方式上传轨迹点')
-    return
-  }
+  // 所有列表项都导航到轨迹详情（包括等待上传点的实时记录）
   router.push(`/tracks/${track.id}`)
 }
 

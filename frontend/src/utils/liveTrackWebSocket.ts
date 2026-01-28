@@ -55,6 +55,8 @@ export type WebSocketMessageType =
   | 'pong'           // 心跳响应
   | 'point_added'    // 新点添加
   | 'stats_updated'  // 统计更新
+  | 'disconnected'   // 连接断开
+  | 'should_reconnect' // 询问是否应该重连
 
 // 新点数据
 export interface PointAddedData {
@@ -104,6 +106,7 @@ export class LiveTrackWebSocket {
   private maxReconnectAttempts = 5
   private reconnectDelay = 2000  // 2秒
   private heartbeatTimer: number | null = null
+  private shouldReconnectCallback: (() => boolean) | null = null
 
   /**
    * 构造函数
@@ -227,12 +230,29 @@ export class LiveTrackWebSocket {
           maxReconnectAttempts: this.maxReconnectAttempts,
         })
 
+        // 触发 disconnected 事件
+        const handlers = this.handlers.get('disconnected')
+        if (handlers) {
+          handlers.forEach(handler => {
+            try {
+              handler({ type: 'disconnected', data: { code: event.code, reason: event.reason } })
+            } catch (error) {
+              debugLog('onclose', `disconnected 处理器执行错误:`, error)
+            }
+          })
+        }
+
+        // 检查是否应该重连
+        const shouldRetry = this.shouldReconnectCallback ? this.shouldReconnectCallback() : true
+
         // 如果是非正常关闭，尝试重连
-        if (event.code !== 1000 && this.reconnectAttempts < this.maxReconnectAttempts) {
+        if (event.code !== 1000 && shouldRetry && this.reconnectAttempts < this.maxReconnectAttempts) {
           debugLog('onclose', `将尝试重连...`)
           this.scheduleReconnect()
         } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
           debugLog('onclose', `已达到最大重连次数，停止重连`)
+        } else if (!shouldRetry) {
+          debugLog('onclose', `回调返回 false，停止重连`)
         }
       }
 
@@ -376,6 +396,15 @@ export class LiveTrackWebSocket {
     const connected = this.status === 'connected' && this.ws?.readyState === WebSocket.OPEN
     debugLog('Status', `isConnected=${connected}, status=${this.status}, readyState=${readyStateName(this.ws)}`)
     return connected
+  }
+
+  /**
+   * 设置重连判断回调
+   * @param callback 返回 true 表示应该重连，false 表示停止重连
+   */
+  setShouldReconnectCallback(callback: () => boolean): void {
+    this.shouldReconnectCallback = callback
+    debugLog('Callback', `设置重连判断回调`)
   }
 }
 

@@ -97,6 +97,29 @@ class LiveTrackManager:
         """获取轨迹的连接数"""
         return len(self.track_connections.get(track_id, set()))
 
+    async def close_recording_connections(self, recording_id: int, code: int = 1000, reason: str = "Recording ended"):
+        """主动断开实时记录的所有 WebSocket 连接
+
+        Args:
+            recording_id: 实时记录 ID
+            code: 关闭代码，默认 1000（正常关闭）
+            reason: 关闭原因
+        """
+        if recording_id not in self.recording_connections:
+            return
+
+        connections = self.recording_connections[recording_id].copy()
+        for ws in connections:
+            try:
+                await ws.close(code=code, reason=reason)
+                logger.info(f"主动断开 recording {recording_id} 的 WebSocket 连接")
+            except Exception as e:
+                logger.warning(f"断开 WebSocket 连接失败: {e}")
+
+        # 清理连接集合
+        self.recording_connections[recording_id].clear()
+        del self.recording_connections[recording_id]
+
 
 # 全局管理器实例
 live_track_manager = LiveTrackManager()
