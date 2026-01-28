@@ -1,4 +1,5 @@
 import { http } from './request'
+import { getAppOrigin } from '@/utils/origin'
 
 // 类型定义
 export interface LiveRecording {
@@ -133,12 +134,12 @@ export const liveRecordingApi = {
 
   // 获取完整上传 URL
   getFullUploadUrl(token: string): string {
-    return `${window.location.origin}/api/live-recordings/log/${token}`
+    return `${getAppOrigin()}/api/live-recordings/log/${token}`
   },
 
   // 获取 GPS Logger 格式的日志记录 URL
   getGpsLoggerUrl(token: string): string {
-    const origin = window.location.origin
+    const origin = getAppOrigin()
     return `${origin}/api/live-recordings/log/${token}?lat=%LAT&lon=%LON&time=%TIME&alt=%ALT&spd=%SPD`
   },
 }

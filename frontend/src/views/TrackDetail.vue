@@ -4,10 +4,28 @@
       <div class="header-left">
         <el-button @click="$router.back()" :icon="ArrowLeft">返回</el-button>
         <div class="title-with-tags">
+          <!-- 实时记录状态指示器 -->
+          <el-tooltip
+            v-if="track?.is_live_recording && track.live_recording_status === 'active'"
+            content="实时轨迹记录中"
+            placement="bottom"
+          >
+            <span class="live-status-indicator status-recording"></span>
+          </el-tooltip>
+          <!-- 实时更新状态指示器 -->
+          <el-tooltip
+            v-if="isLiveUpdating && liveUpdateStatus !== 'connected'"
+            :content="liveUpdateStatus === 'connected' ? '实时更新中' : '连接断开'"
+            placement="bottom"
+          >
+            <span
+              class="live-status-indicator"
+              :class="{
+                'status-error': liveUpdateStatus === 'error' || liveUpdateStatus === 'disconnected'
+              }"
+            ></span>
+          </el-tooltip>
           <h1>{{ track?.name || '轨迹详情' }}</h1>
-          <el-tag v-if="track?.is_live_recording && track.live_recording_status === 'active'" type="success" size="small" class="title-tag">
-            实时轨迹记录中
-          </el-tag>
         </div>
       </div>
       <div class="header-right">
@@ -759,6 +777,7 @@ import {
   Link,
   DocumentCopy,
   VideoPause,
+  Loading,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
@@ -769,6 +788,8 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
+import { getWebSocketOrigin } from '@/utils/origin'
 
 const route = useRoute()
 const router = useRouter()
@@ -867,6 +888,14 @@ const importMatchMode = ref<'index' | 'time'>('index')
 const importTimezone = ref<string>('UTC+8')
 const importTimeTolerance = ref<number>(1.0)
 const uploadRef = ref<UploadInstance>()
+
+// 实时更新相关
+let liveTrackWs: LiveTrackWebSocket | null = null
+const isLiveUpdating = ref(false)
+const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnected')
+// 区域更新节流：最多每 10 秒更新一次
+let regionUpdateTimer: number | null = null
+const REGION_UPDATE_INTERVAL = 10000 // 10 秒
 
 // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
@@ -1914,6 +1943,161 @@ function isSameDay(dateStr1: string | null, dateStr2: string | null): boolean {
     date1.getDate() === date2.getDate()
 }
 
+// ========== 实时更新相关 ==========
+
+/**
+ * 启动实时更新（如果是实时轨迹）
+ */
+function startLiveUpdate() {
+  if (!track.value?.is_live_recording || !track.value.live_recording_token) {
+    return
+  }
+
+  if (track.value.live_recording_status !== 'active') {
+    console.log('[LiveUpdate] 记录已结束，不启动实时更新')
+    return
+  }
+
+  const token = track.value.live_recording_token
+  const recordingId = track.value.live_recording_id
+
+  if (!recordingId) {
+    console.warn('[LiveUpdate] 缺少 recording_id')
+    return
+  }
+
+  // 打印调试信息
+  const wsOrigin = getWebSocketOrigin()
+  console.log(`[LiveUpdate] ========== 启动实时更新 ==========`)
+  console.log(`[LiveUpdate] recording_id=${recordingId}`)
+  console.log(`[LiveUpdate] token=${token.substring(0, 16)}...`)
+  console.log(`[LiveUpdate] getWebSocketOrigin() 返回: ${wsOrigin}`)
+  console.log(`[LiveUpdate] 预期 WebSocket URL: ${wsOrigin}/api/ws/live-recording/${recordingId}?token=${token}`)
+  console.log(`[LiveUpdate] VITE_ORIGIN=${import.meta.env.VITE_ORIGIN || '(未设置)'}`)
+  console.log(`[LiveUpdate] VITE_DEBUG_WS=${import.meta.env.VITE_DEBUG_WS || '(未设置，默认开启)'}`)
+  console.log(`[LiveUpdate] ======================================`)
+
+  try {
+    liveTrackWs = new LiveTrackWebSocket(token, recordingId)
+    isLiveUpdating.value = true
+
+    // 监听连接状态
+    liveTrackWs.on('connected', () => {
+      console.log('[LiveUpdate] WebSocket 已连接')
+      liveUpdateStatus.value = 'connected'
+    })
+
+    // 监听新点添加
+    liveTrackWs.on('point_added', (message) => {
+      console.log('[LiveUpdate] 收到新点:', message)
+      handleNewPointAdded(message.data as PointAddedData)
+    })
+
+    // 连接
+    liveTrackWs.connect()
+  } catch (error) {
+    console.error('[LiveUpdate] 启动失败:', error)
+    liveUpdateStatus.value = 'error'
+  }
+}
+
+/**
+ * 停止实时更新
+ */
+function stopLiveUpdate() {
+  console.log('[LiveUpdate] 停止实时更新')
+  if (liveTrackWs) {
+    liveTrackWs.disconnect()
+    liveTrackWs = null
+  }
+  isLiveUpdating.value = false
+  liveUpdateStatus.value = 'disconnected'
+
+  // 清除区域更新定时器
+  if (regionUpdateTimer) {
+    clearTimeout(regionUpdateTimer)
+    regionUpdateTimer = null
+  }
+
+  // 停止时立即获取一次完整的区域数据
+  fetchRegions()
+}
+
+/**
+ * 延迟更新经过区域（使用节流）
+ */
+function scheduleRegionUpdate() {
+  // 清除之前的定时器
+  if (regionUpdateTimer) {
+    clearTimeout(regionUpdateTimer)
+  }
+
+  // 设置新的定时器，10 秒后执行
+  regionUpdateTimer = window.setTimeout(() => {
+    console.log('[LiveUpdate] 更新经过区域')
+    fetchRegions()
+    regionUpdateTimer = null
+  }, REGION_UPDATE_INTERVAL)
+}
+
+/**
+ * 处理新点添加事件
+ */
+async function handleNewPointAdded(data: PointAddedData) {
+  const { point, stats } = data
+
+  // 添加新点到 points 数组
+  points.value.push({
+    id: point.id,
+    point_index: point.point_index,
+    time: point.time,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    latitude_wgs84: point.latitude,
+    longitude_wgs84: point.longitude,
+    latitude_gcj02: null,
+    longitude_gcj02: null,
+    latitude_bd09: null,
+    longitude_bd09: null,
+    elevation: point.elevation,
+    speed: point.speed,
+    bearing: null,
+    province: null,
+    city: null,
+    district: null,
+    road_name: null,
+    road_number: null,
+    province_en: null,
+    city_en: null,
+    district_en: null,
+    road_name_en: null,
+    memo: null,
+  })
+
+  // 更新轨迹统计（包括结束时间）
+  if (track.value) {
+    track.value.distance = stats.distance
+    track.value.duration = stats.duration
+    track.value.elevation_gain = stats.elevation_gain
+    track.value.elevation_loss = stats.elevation_loss
+    // 更新结束时间为最新点的时间
+    track.value.end_time = point.time
+  }
+
+  // 延迟更新经过区域（节流：最多每 10 秒更新一次）
+  scheduleRegionUpdate()
+
+  // 重新渲染图表
+  nextTick(() => {
+    renderChart()
+  })
+
+  // 如果地图已初始化，触发地图更新
+  if (mapRef.value?.refresh) {
+    mapRef.value.refresh()
+  }
+}
+
 onMounted(async () => {
   try {
     await fetchTrackDetail()
@@ -1927,6 +2111,11 @@ onMounted(async () => {
 
   // 检查是否有正在进行的填充操作
   await checkAndResumeFilling()
+
+  // 启动实时更新（如果是实时轨迹）
+  if (track.value?.is_live_recording && track.value.live_recording_status === 'active') {
+    startLiveUpdate()
+  }
 
   // 等待 DOM 更新后渲染图表
   nextTick(() => {
@@ -1956,6 +2145,9 @@ watch(isTallScreen, () => {
 
 onUnmounted(() => {
   stopPollingProgress()
+
+  // 停止实时更新
+  stopLiveUpdate()
 
   // 清理地图 ResizeObserver
   if (mapResizeObserver) {
@@ -2029,6 +2221,36 @@ onUnmounted(() => {
 
 .title-tag {
   flex-shrink: 0;
+}
+
+/* 实时更新状态指示器 */
+.live-status-indicator {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* 实时记录中：红色闪动 */
+.live-status-indicator.status-recording {
+  background-color: #f56c6c;
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
+
+/* 连接断开/错误：黄色 */
+.live-status-indicator.status-error {
+  background-color: #e6a23c;
+}
+
+@keyframes pulse-red {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .header-left h1 {

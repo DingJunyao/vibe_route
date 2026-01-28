@@ -3,11 +3,48 @@
  * 将前端日志发送到后端，通过 WebSocket 在电脑端查看
  */
 
+import { getWebSocketOrigin } from './origin'
+
 // 是否启用远程日志（开发环境或通过 URL 参数启用）
 const ENABLED = import.meta.env.DEV || new URLSearchParams(window.location.search).has('remote-log')
 
+// 调试开关：通过 VITE_DEBUG_WS 环境变量控制，默认开启
+const DEBUG = import.meta.env.VITE_DEBUG_WS !== 'false'
+
 // 后端 API 地址
 const API_BASE = '/api'
+
+// WebSocket 关闭代码说明
+const CLOSE_CODE_DESCRIPTIONS: Record<number, string> = {
+  1000: '正常关闭',
+  1001: '端点离开',
+  1002: '协议错误',
+  1003: '不支持的数据类型',
+  1006: '异常关闭（连接丢失）',
+  1008: '违反政策',
+  1011: '内部错误',
+}
+
+// 格式化时间戳
+function timestamp(): string {
+  return new Date().toISOString().split('T')[1].slice(0, -1)
+}
+
+// 格式化 readyState
+function readyStateName(ws: WebSocket | null): string {
+  if (!ws) return 'null'
+  const states = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']
+  return states[ws.readyState] || `UNKNOWN(${ws.readyState})`
+}
+
+// 调试日志
+function debugLog(category: string, ...args: unknown[]) {
+  if (DEBUG) {
+    const tag = `[RemoteLogWS:${category}]`
+    const time = timestamp()
+    console.log(`${tag} [${time}]`, ...args)
+  }
+}
 
 // 日志级别
 type LogLevel = 'log' | 'info' | 'warn' | 'error'
@@ -115,10 +152,113 @@ export function initRemoteLog() {
   console.log('[RemoteLog] 远程日志已启用')
 }
 
-// 获取 WebSocket URL（自动检测当前协议和主机）
+/**
+ * 连接远程日志 WebSocket
+ * @returns WebSocket 实例和清理函数
+ */
+export function connectRemoteLogWebSocket(): { ws: WebSocket | null; cleanup: () => void } {
+  if (!ENABLED) {
+    debugLog('Init', '远程日志未启用')
+    return { ws: null, cleanup: () => {} }
+  }
+
+  const wsUrl = getWebSocketUrl()
+  debugLog('Init', `连接远程日志 WebSocket: ${wsUrl}`)
+  debugLog('Init', `getWebSocketOrigin() 返回: ${getWebSocketOrigin()}`)
+
+  let ws: WebSocket | null = null
+  let reconnectTimer: number | null = null
+
+  const connect = () => {
+    try {
+      ws = new WebSocket(wsUrl)
+      debugLog('Connect', `WebSocket 对象已创建, readyState=${readyStateName(ws)}`)
+
+      ws.onopen = (event) => {
+        debugLog('onopen', `连接成功!`, {
+          url: wsUrl,
+          readyState: readyStateName(ws),
+          event: {
+            type: event.type,
+            bubbles: event.bubbles,
+            cancelable: event.cancelable,
+          }
+        })
+
+        // 清除重连定时器
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+      }
+
+      ws.onmessage = (event) => {
+        debugLog('onmessage', `收到数据:`, {
+          data: event.data,
+          dataType: typeof event.data,
+          dataLength: event.data?.length,
+          origin: event.origin,
+        })
+      }
+
+      ws.onclose = (event) => {
+        const closeDesc = CLOSE_CODE_DESCRIPTIONS[event.code] || '未知代码'
+
+        debugLog('onclose', `连接关闭:`, {
+          code: event.code,
+          description: closeDesc,
+          reason: event.reason || '(无)',
+          wasClean: event.wasClean,
+          readyState: readyStateName(ws),
+        })
+
+        // 3秒后尝试重连
+        reconnectTimer = window.setTimeout(() => {
+          debugLog('Reconnect', `尝试重新连接...`)
+          connect()
+        }, 3000)
+      }
+
+      ws.onerror = (error) => {
+        debugLog('onerror', `连接错误:`, {
+          error,
+          errorType: error?.type,
+          target: error?.target,
+          readyState: readyStateName(ws),
+          url: wsUrl,
+        })
+      }
+    } catch (error) {
+      debugLog('Connect', `创建 WebSocket 失败:`, error)
+    }
+  }
+
+  // 开始连接
+  connect()
+
+  // 返回清理函数
+  const cleanup = () => {
+    debugLog('Cleanup', `清理远程日志 WebSocket`)
+
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+
+    if (ws) {
+      ws.close(1000, 'Remote log cleanup')
+      ws = null
+    }
+  }
+
+  return { ws, cleanup }
+}
+
+// 获取 WebSocket URL（使用统一的 origin 工具）
 export function getWebSocketUrl(): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const host = window.location.hostname
-  const port = 8000
-  return `${protocol}//${host}:${port}/api/ws/logs`
+  const origin = getWebSocketOrigin()
+  debugLog('URL', `getWebSocketOrigin() 返回: ${origin}`)
+  const url = `${origin}/api/ws/logs`
+  debugLog('URL', `最终 WebSocket URL: ${url}`)
+  return url
 }

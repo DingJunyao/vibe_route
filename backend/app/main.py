@@ -8,7 +8,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from app.core.config import settings
 from app.core.database import init_db
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket
 
 
 @asynccontextmanager
@@ -74,6 +74,7 @@ app.include_router(tasks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(road_signs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(live_recordings.router, prefix=settings.API_V1_PREFIX)
+app.include_router(websocket.router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")

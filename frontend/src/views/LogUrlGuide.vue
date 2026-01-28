@@ -91,6 +91,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Link, DocumentCopy } from '@element-plus/icons-vue'
 import { liveRecordingApi } from '@/api/liveRecording'
+import { getAppOrigin } from '@/utils/origin'
 
 const route = useRoute()
 
@@ -104,7 +105,7 @@ const token = computed(() => route.params.token as string)
 // 完整的 GPS Logger URL（包含占位符）
 const fullUrl = computed(() => {
   if (!token.value) return ''
-  const origin = window.location.origin
+  const origin = getAppOrigin()
   // 注意：这里保留占位符 %LAT, %LON 等，GPS Logger 会替换它们
   return `${origin}/api/live-recordings/log/${token.value}?lat=%LAT&lon=%LON&time=%TIME&alt=%ALT&spd=%SPD`
 })

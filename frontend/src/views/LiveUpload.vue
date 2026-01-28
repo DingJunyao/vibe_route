@@ -204,6 +204,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules, type UploadInstance, type UploadFile } from 'element-plus'
 import { Link, DocumentCopy, Upload, UploadFilled, Close } from '@element-plus/icons-vue'
 import { liveRecordingApi } from '@/api/liveRecording'
+import { getAppOrigin } from '@/utils/origin'
 
 const route = useRoute()
 const formRef = ref<FormInstance>()
@@ -221,7 +222,7 @@ const copyButtonText = ref('复制')
 const token = ref('')
 const gpsLoggerUrl = computed(() => {
   if (!token.value) return ''
-  const origin = window.location.origin
+  const origin = getAppOrigin()
   return `${origin}/api/live-recordings/log/${token.value}?lat=%LAT&lon=%LON&time=%TIME&alt=%ALT&spd=%SPD`
 })
 

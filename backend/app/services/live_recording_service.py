@@ -428,6 +428,48 @@ class LiveRecordingService:
         logger.info(f"After commit: recording {recording.id} current_track_id={recording.current_track_id}")
         await db.refresh(point)
 
+        # 通过 WebSocket 通知订阅的客户端
+        try:
+            from app.api.websocket import notify_point_added
+            # 准备点数据（时间添加 UTC 时区后缀）
+            time_str = None
+            if point.time:
+                if point.time.tzinfo is not None:
+                    time_str = point.time.isoformat()
+                else:
+                    # 数据库存储的是 naive datetime，约定为 UTC 时间
+                    time_str = point.time.isoformat() + "+00:00"
+
+            point_data = {
+                "id": point.id,
+                "point_index": point.point_index,
+                "latitude": point.latitude_wgs84,
+                "longitude": point.longitude_wgs84,
+                "elevation": point.elevation,
+                "speed": point.speed,
+                "time": time_str,
+            }
+            # 准备统计信息
+            stats_data = {
+                "distance": track.distance,
+                "duration": track.duration,
+                "elevation_gain": track.elevation_gain,
+                "elevation_loss": track.elevation_loss,
+            }
+            # 异步通知（不阻塞当前请求）
+            import asyncio
+            asyncio.create_task(notify_point_added(
+                recording_id=recording.id,
+                track_id=track.id,
+                point_data=point_data,
+                stats_data=stats_data
+            ))
+        except ImportError:
+            # WebSocket 模块可能未加载
+            pass
+        except Exception as e:
+            logger.warning(f"Failed to send WebSocket notification: {e}")
+
         logger.info(
             f"Added point {point_index} to track {track.id} for recording {recording.id}: "
             f"lat={lat:.6f}, lon={lon:.6f}, distance={distance_from_prev:.2f}m"

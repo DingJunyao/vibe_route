@@ -60,3 +60,17 @@ def decode_access_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+# 别名，用于 WebSocket 认证
+def decode_token(token: str) -> Optional[dict]:
+    """
+    解码 JWT 令牌（别名函数）
+
+    Args:
+        token: JWT 令牌字符串
+
+    Returns:
+        解码后的数据，如果令牌无效则返回 None
+    """
+    return decode_access_token(token)
