@@ -120,6 +120,48 @@ npm run dev
 
 前端将运行在 `http://localhost:5173`
 
+## 内网穿透配置
+
+当你需要通过内网穿透（如 frp、ngrok）访问前端服务时，需要配置环境变量以解决 WebSocket 连接问题。
+
+### 配置步骤
+
+1. 复制环境变量模板：
+
+   ```bash
+   cd frontend
+   cp .env.example .env.local
+   ```
+
+2. 编辑 `.env.local`，填入你的域名：
+
+   ```env
+   # 完整的访问地址（协议 + 域名）
+   VITE_ORIGIN=https://your-domain.com
+
+   # 禁用 HMR（内网穿透环境下 WebSocket 连接不稳定，建议禁用）
+   VITE_DISABLE_HMR=true
+
+   # 允许的主机列表（逗号分隔）
+   VITE_ALLOWED_HOSTS=your-domain.com,.your-domain.com
+   ```
+
+3. 重启开发服务器使配置生效。
+
+### 配置说明
+
+| 变量 | 说明 |
+| --- | --- |
+| `VITE_ORIGIN` | 设置服务器的原始访问地址，Vite 会用它来生成资源链接 |
+| `VITE_DISABLE_HMR` | 禁用热模块替换（HMR），内网穿透对 WebSocket 支持有限，禁用后需手动刷新浏览器 |
+| `VITE_ALLOWED_HOSTS` | 允许访问的主机列表，防止 Host 攻击 |
+
+### 注意事项
+
+- `.env.local` 文件不会被 Git 跟踪（已在 `.gitignore` 中），不会泄露域名信息
+- 禁用 HMR 后，代码修改需要**手动刷新浏览器**才能看到变化
+- 如果确实需要启用 HMR，请确保内网穿透服务支持 WebSocket，并将 `VITE_DISABLE_HMR` 设为 `false`，同时配置 `VITE_HMR_HOST`、`VITE_HMR_PORT`、`VITE_HMR_PROTOCOL`
+
 ## 数据库配置
 
 项目默认使用 SQLite，无需额外配置。
