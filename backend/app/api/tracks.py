@@ -466,8 +466,15 @@ async def download_track(
     - crs: 坐标系 (original=原始坐标系, wgs84, gcj02, bd09)
     """
     from fastapi.responses import Response
+    from urllib.parse import quote
     import gpxpy
     import gpxpy.gpx
+
+    def encode_filename(filename: str) -> str:
+        """编码文件名以支持中文，filename 和 filename* 都使用相同的 URL 编码"""
+        # safe='' 确保编码所有特殊字符（包括冒号）
+        encoded = quote(filename, safe='')
+        return f"attachment; filename=\"{encoded}\"; filename*=utf-8''{encoded}"
 
     track = await track_service.get_by_id(db, track_id, current_user.id)
     if not track:
@@ -481,12 +488,13 @@ async def download_track(
 
     # 创建 GPX 对象
     gpx = gpxpy.gpx.GPX()
-    gpx_track = gpxpy.gpx.GPXTrack()
+    gpx_track = gpxpy.gpx.GPXTrack(name=track.name)
     gpx_segment = gpxpy.gpx.GPXTrackSegment()
 
     # 确定使用的坐标系
     if crs == "original":
-        target_crs = track.original_crs
+        original_crs_value = track.original_crs or "wgs84"
+        target_crs = str(original_crs_value)  # type: ignore[arg-type]
     else:
         target_crs = crs
 
@@ -513,14 +521,18 @@ async def download_track(
     gpx_track.segments.append(gpx_segment)
     gpx.tracks.append(gpx_track)
 
-    # 生成文件名
-    filename = f"{track.name}_{target_crs}.gpx"
+    # 生成文件名（使用轨迹名称）
+    # 如果坐标系不是原坐标系，在文件名中加上坐标系后缀
+    original_crs_str = str(track.original_crs or "wgs84")
+    target_crs_str = str(target_crs) if target_crs else "wgs84"
+    crs_suffix = "" if target_crs_str == original_crs_str else f"_{target_crs_str.upper()}"
+    filename = f"{track.name}{crs_suffix}.gpx"
 
     return Response(
         content=gpx.to_xml(),
         media_type="application/gpx+xml",
         headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Disposition": encode_filename(filename),
         },
     )
 
@@ -565,9 +577,10 @@ async def export_track_points(
     from urllib.parse import quote
 
     def encode_filename(filename: str) -> str:
-        """编码文件名以支持中文"""
-        encoded = quote(filename.encode('utf-8'))
-        return f"attachment; filename*=UTF-8''{encoded}"
+        """编码文件名以支持中文，filename 和 filename* 都使用相同的 URL 编码"""
+        # safe='' 确保编码所有特殊字符（包括冒号）
+        encoded = quote(filename, safe='')
+        return f"attachment; filename=\"{encoded}\"; filename*=UTF-8''{encoded}"
 
     try:
         logger.info(f"Exporting track {track_id} as {format}")

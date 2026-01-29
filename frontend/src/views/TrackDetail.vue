@@ -1920,12 +1920,20 @@ async function downloadTrack() {
       throw new Error('下载失败')
     }
 
-    // 获取文件名
+    // 获取文件名（优先使用 filename* RFC 5987）
     const contentDisposition = response.headers.get('Content-Disposition')
     let filename = `track_${trackId.value}.gpx`
     if (contentDisposition) {
-      const match = contentDisposition.match(/filename="(.+)"/)
-      if (match) filename = match[1]
+      // 优先匹配 filename*=UTF-8''encoded-filename
+      const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+      if (starMatch) {
+        // 解码 URL 编码的文件名
+        filename = decodeURIComponent(starMatch[1])
+      } else {
+        // 回退到 filename 参数（URL 编码）
+        const match = contentDisposition.match(/filename="([^"]+)"/)
+        if (match) filename = decodeURIComponent(match[1])
+      }
     }
 
     // 创建 blob 并下载
@@ -1962,12 +1970,20 @@ async function exportPoints() {
       throw new Error('导出失败')
     }
 
-    // 获取文件名
+    // 获取文件名（优先使用 filename* RFC 5987）
     const contentDisposition = response.headers.get('Content-Disposition')
     let filename = `track_${trackId.value}_points.${exportFormat.value}`
     if (contentDisposition) {
-      const match = contentDisposition.match(/filename="(.+)"/)
-      if (match) filename = match[1]
+      // 优先匹配 filename*=UTF-8''encoded-filename
+      const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+      if (starMatch) {
+        // 解码 URL 编码的文件名
+        filename = decodeURIComponent(starMatch[1])
+      } else {
+        // 回退到 filename 参数（URL 编码）
+        const match = contentDisposition.match(/filename="([^"]+)"/)
+        if (match) filename = decodeURIComponent(match[1])
+      }
     }
 
     // 创建 blob 并下载

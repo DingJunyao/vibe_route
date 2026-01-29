@@ -289,7 +289,8 @@ class LiveRecordingService:
         # 坐标转换
         all_coords = convert_point_to_all(lon, lat, original_crs)
 
-        # 获取最后一个点，用于计算
+        # 获取最后一个点（按时间排序，而非 point_index）
+        # 实时上传场景下，点可能乱序到达，必须按实际时间顺序处理
         last_point_result = await db.execute(
             select(TrackPoint)
             .where(
@@ -298,15 +299,25 @@ class LiveRecordingService:
                     TrackPoint.is_valid == True
                 )
             )
-            .order_by(TrackPoint.point_index.desc())
+            .order_by(TrackPoint.time.desc(), TrackPoint.created_at.desc())
             .limit(1)
         )
         last_point = last_point_result.scalar_one_or_none()
 
         # 计算点索引
-        point_index = 0
-        if last_point:
-            point_index = last_point.point_index + 1
+        # 注意：实时记录中，point_index 仅作为标识符，不代表时间顺序
+        # 使用当前最大 point_index + 1，避免索引冲突
+        max_index_result = await db.execute(
+            select(func.max(TrackPoint.point_index))
+            .where(
+                and_(
+                    TrackPoint.track_id == track.id,
+                    TrackPoint.is_valid == True
+                )
+            )
+        )
+        max_index = max_index_result.scalar() or -1
+        point_index = max_index + 1
 
         # 计算方位角、速度和距离
         calculated_bearing = bearing

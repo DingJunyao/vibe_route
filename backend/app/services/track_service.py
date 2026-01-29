@@ -475,11 +475,11 @@ class TrackService:
 
         async with async_session_maker() as db:
             try:
-                # 获取轨迹点
+                # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
                 result = await db.execute(
                     select(TrackPoint)
                     .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-                    .order_by(TrackPoint.point_index)
+                    .order_by(TrackPoint.time, TrackPoint.created_at)
                 )
                 points = result.scalars().all()
 
@@ -894,11 +894,11 @@ class TrackService:
         if not track:
             return []
 
-        # 获取轨迹点
+        # 获取轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         return list(result.scalars().all())
 
@@ -924,11 +924,11 @@ class TrackService:
         if not track:
             raise ValueError("轨迹不存在")
 
-        # 获取所有轨迹点，按 point_index 排序
+        # 获取所有轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -986,11 +986,11 @@ class TrackService:
 
         for track in tracks:
             try:
-                # 获取轨迹的所有点
+                # 获取轨迹的所有点（按时间排序）
                 points_result = await db.execute(
                     select(TrackPoint)
                     .where(and_(TrackPoint.track_id == track.id, TrackPoint.is_valid == True))
-                    .order_by(TrackPoint.point_index)
+                    .order_by(TrackPoint.time, TrackPoint.created_at)
                 )
                 points = list(points_result.scalars().all())
 
@@ -1058,11 +1058,11 @@ class TrackService:
         if not track:
             return []
 
-        # 获取轨迹点，按 point_index 排序
+        # 获取轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -1216,11 +1216,11 @@ class TrackService:
         if not track:
             return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
 
-        # 获取轨迹点，按 point_index 排序
+        # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -1251,7 +1251,7 @@ class TrackService:
                 'point_count': 0,  # 总点数
                 'start_time': None,
                 'end_time': None,
-                'start_index': -1,  # 起始点索引
+                'start_index': -1,  # 起始点索引（按时间顺序的位置，非 point_index）
                 'end_index': -1,    # 结束点索引
                 'children': [],
             }
@@ -1263,10 +1263,9 @@ class TrackService:
         current_road = None
         prev_point = None
 
-        for point in points:
-            # 使用数据库中的 point_index
-            idx = point.point_index
-
+        # 使用枚举索引作为时间顺序的位置（而非 point_index）
+        # 实时记录场景下，point_index 不能保证时间顺序
+        for time_idx, point in enumerate(points):
             province = point.province or '未知区域'
             city = point.city or province
             district = point.district or city
@@ -1282,18 +1281,18 @@ class TrackService:
             # 检查是否需要创建新的省级节点
             if current_province is None or current_province[0] != province:
                 # 先结束所有下层节点的索引范围
-                if current_road is not None and prev_point:
-                    current_road[1]['end_index'] = prev_point.point_index
-                if current_district is not None and prev_point:
-                    current_district[1]['end_index'] = prev_point.point_index
-                if current_city is not None and prev_point:
-                    current_city[1]['end_index'] = prev_point.point_index
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
                 # 结束旧省级节点的索引范围
-                if current_province is not None and prev_point:
-                    current_province[1]['end_index'] = prev_point.point_index
+                if current_province is not None and prev_point is not None:
+                    current_province[1]['end_index'] = time_idx - 1
                 # 创建新省级节点并设置起始索引
                 new_province = create_node(province, 'province')
-                new_province['start_index'] = idx
+                new_province['start_index'] = time_idx
                 root_nodes.append(new_province)
                 current_province = (province, new_province)
                 current_city = None
@@ -1305,16 +1304,16 @@ class TrackService:
             # 检查是否需要创建新的市级节点
             if current_city is None or current_city[0] != city:
                 # 先结束所有下层节点的索引范围
-                if current_road is not None and prev_point:
-                    current_road[1]['end_index'] = prev_point.point_index
-                if current_district is not None and prev_point:
-                    current_district[1]['end_index'] = prev_point.point_index
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
                 # 结束旧市级节点的索引范围
-                if current_city is not None and prev_point:
-                    current_city[1]['end_index'] = prev_point.point_index
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
                 # 创建新市级节点并设置起始索引
                 new_city = create_node(city, 'city')
-                new_city['start_index'] = idx
+                new_city['start_index'] = time_idx
                 province_node['children'].append(new_city)
                 current_city = (city, new_city)
                 current_district = None
@@ -1325,14 +1324,14 @@ class TrackService:
             # 检查是否需要创建新的区级节点
             if current_district is None or current_district[0] != district:
                 # 先结束所有下层节点的索引范围
-                if current_road is not None and prev_point:
-                    current_road[1]['end_index'] = prev_point.point_index
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
                 # 结束旧区级节点的索引范围
-                if current_district is not None and prev_point:
-                    current_district[1]['end_index'] = prev_point.point_index
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
                 # 创建新区级节点并设置起始索引
                 new_district = create_node(district, 'district')
-                new_district['start_index'] = idx
+                new_district['start_index'] = time_idx
                 city_node['children'].append(new_district)
                 current_district = (district, new_district)
                 current_road = None
@@ -1348,15 +1347,14 @@ class TrackService:
 
             if current_road is None or current_road[0] != road_key:
                 # 结束旧道路节点的索引范围
-                if current_road is not None and prev_point:
-                    old_end = prev_point.point_index
-                    current_road[1]['end_index'] = old_end
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
                 # 创建新道路节点并设置起始索引
                 if road_name:
                     new_road = create_node(road_name, 'road', road_number)
                 else:
                     new_road = create_node('（无名）', 'road', road_number)
-                new_road['start_index'] = idx
+                new_road['start_index'] = time_idx
                 district_node['children'].append(new_road)
                 current_road = (road_key, new_road)
 
@@ -1390,18 +1388,16 @@ class TrackService:
 
             prev_point = point
 
-        # 设置所有活跃节点的结束索引（使用最后一个点的索引）
-        if prev_point:
-            last_index = prev_point.point_index
-
-            if current_road is not None:
-                current_road[1]['end_index'] = last_index
-            if current_district is not None:
-                current_district[1]['end_index'] = last_index
-            if current_city is not None:
-                current_city[1]['end_index'] = last_index
-            if current_province is not None:
-                current_province[1]['end_index'] = last_index
+        # 设置所有活跃节点的结束索引（使用最后的时间索引）
+        last_time_idx = len(points) - 1
+        if current_road is not None:
+            current_road[1]['end_index'] = last_time_idx
+        if current_district is not None:
+            current_district[1]['end_index'] = last_time_idx
+        if current_city is not None:
+            current_city[1]['end_index'] = last_time_idx
+        if current_province is not None:
+            current_province[1]['end_index'] = last_time_idx
 
         # 后处理：聚合统计信息，让上级包含下级
         for node in root_nodes:
@@ -1440,11 +1436,11 @@ class TrackService:
         if not track:
             raise ValueError("轨迹不存在")
 
-        # 获取轨迹点
+        # 获取轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -1570,11 +1566,11 @@ class TrackService:
         if not track:
             raise ValueError("轨迹不存在")
 
-        # 获取轨迹点
+        # 获取轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -1710,11 +1706,11 @@ class TrackService:
         if not track:
             raise ValueError("轨迹不存在")
 
-        # 获取现有轨迹点
+        # 获取现有轨迹点（按时间排序）
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
 
@@ -1722,7 +1718,9 @@ class TrackService:
             raise ValueError("轨迹没有数据点")
 
         # 创建索引到点的映射
-        points_map = {p.point_index: p for p in points}
+        # 注意：在 index 模式下，使用时间顺序的位置（0, 1, 2...）而非 point_index
+        # 因为实时记录场景下 point_index 不能保证时间顺序
+        points_map = {idx: p for idx, p in enumerate(points)}
 
         # 解析时区
         from datetime import datetime, timezone as dt_timezone, timedelta
