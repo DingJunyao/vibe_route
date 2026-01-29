@@ -2,13 +2,23 @@
 FastAPI 主应用
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+import logging
+import traceback
 
 from app.core.config import settings
 from app.core.database import init_db
 from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -75,6 +85,25 @@ app.include_router(road_signs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(live_recordings.router, prefix=settings.API_V1_PREFIX)
 app.include_router(websocket.router, prefix=settings.API_V1_PREFIX)
+
+
+# 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器"""
+    # 打印详细的错误信息到控制台
+    logger.error(f"Unhandled exception: {type(exc).__name__}: {exc}")
+    logger.error(f"Request: {request.method} {request.url}")
+    logger.error(f"Traceback:\n{traceback.format_exc()}")
+
+    # 返回错误响应
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": f"Internal Server Error: {str(exc)}",
+            "type": type(exc).__name__,
+        }
+    )
 
 
 @app.get("/")

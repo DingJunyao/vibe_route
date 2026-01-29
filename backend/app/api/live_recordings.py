@@ -43,6 +43,9 @@ async def create_recording(
     # 生成上传 URL（使用相对路径，前端根据需要拼接域名）
     upload_url = f"/live-upload?token={recording.token}"
 
+    # 获取最近一次轨迹点的时间
+    last_point_time = await live_recording_service.get_last_point_time(db, recording)
+
     return LiveRecordingResponse(
         id=recording.id,
         name=recording.name,
@@ -51,6 +54,7 @@ async def create_recording(
         status=recording.status,
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
+        last_point_time=last_point_time,
         upload_url=upload_url,
         created_at=recording.created_at,
         fill_geocoding=recording.fill_geocoding,
@@ -76,6 +80,8 @@ async def get_recordings(
     result = []
     for recording in recordings:
         upload_url = f"/live-upload?token={recording.token}"
+        # 获取最近一次轨迹点的时间
+        last_point_time = await live_recording_service.get_last_point_time(db, recording)
         result.append(LiveRecordingResponse(
             id=recording.id,
             name=recording.name,
@@ -84,6 +90,7 @@ async def get_recordings(
             status=recording.status,
             track_count=recording.track_count,
             last_upload_at=recording.last_upload_at,
+            last_point_time=last_point_time,
             upload_url=upload_url,
             created_at=recording.created_at,
             fill_geocoding=recording.fill_geocoding,
@@ -126,6 +133,9 @@ async def end_recording(
         reason="Recording ended"
     )
 
+    # 获取最近一次轨迹点的时间
+    last_point_time = await live_recording_service.get_last_point_time(db, recording)
+
     upload_url = f"/live-upload?token={recording.token}"
     return LiveRecordingResponse(
         id=recording.id,
@@ -135,6 +145,7 @@ async def end_recording(
         status=recording.status,
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
+        last_point_time=last_point_time,
         upload_url=upload_url,
         created_at=recording.created_at,
         fill_geocoding=recording.fill_geocoding,
@@ -249,6 +260,9 @@ async def get_recording_status(
                 "created_at": track.created_at.isoformat() + "+00:00",
             })
 
+    # 获取最近一次轨迹点的时间
+    last_point_time = await live_recording_service.get_last_point_time(db, recording)
+
     return RecordingStatusResponse(
         id=recording.id,
         name=recording.name,
@@ -256,6 +270,7 @@ async def get_recording_status(
         status=recording.status,
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
+        last_point_time=last_point_time,
         created_at=recording.created_at,
         tracks=related_tracks,
     )
@@ -339,6 +354,9 @@ async def get_recording_info(
             detail="此记录已结束",
         )
 
+    # 获取最近一次轨迹点的时间
+    last_point_time = await live_recording_service.get_last_point_time(db, recording)
+
     upload_url = f"/live-upload?token={recording.token}"
     return LiveRecordingResponse(
         id=recording.id,
@@ -348,6 +366,7 @@ async def get_recording_info(
         status=recording.status,
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
+        last_point_time=last_point_time,
         upload_url=upload_url,
         created_at=recording.created_at,
         fill_geocoding=recording.fill_geocoding,

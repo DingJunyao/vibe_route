@@ -4,7 +4,7 @@
 import secrets
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import select, and_, desc
+from sqlalchemy import select, and_, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.live_recording import LiveRecording
@@ -284,6 +284,8 @@ class LiveRecordingService:
 
             # 更新记录的当前轨迹
             recording.current_track_id = track.id
+            # 立即 flush 确保 current_track_id 写入数据库，避免并发请求时创建多条轨迹
+            await db.flush()
             logger.info(f"Created new track {track.id} and set recording.current_track_id={recording.current_track_id}")
 
         # 坐标转换
@@ -651,6 +653,36 @@ class LiveRecordingService:
         await db.commit()
         await db.refresh(recording)
         return recording
+
+    async def get_last_point_time(self, db: AsyncSession, recording: LiveRecording) -> Optional[datetime]:
+        """
+        获取记录中最近一次上传的轨迹点的时间
+
+        Args:
+            db: 数据库会话
+            recording: 记录对象
+
+        Returns:
+            最近一次轨迹点的时间，如果没有点则返回 None
+        """
+        if not recording.current_track_id:
+            return None
+
+        # 获取当前轨迹的最后一个点（按时间排序）
+        last_point_result = await db.execute(
+            select(TrackPoint)
+            .where(
+                and_(
+                    TrackPoint.track_id == recording.current_track_id,
+                    TrackPoint.is_valid == True
+                )
+            )
+            .order_by(TrackPoint.time.desc(), TrackPoint.created_at.desc())
+            .limit(1)
+        )
+        last_point = last_point_result.scalar_one_or_none()
+
+        return last_point.time if last_point else None
 
 
 live_recording_service = LiveRecordingService()

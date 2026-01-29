@@ -49,6 +49,8 @@ export interface UnifiedTrack {
   live_recording_status: 'active' | 'ended' | null
   live_recording_token: string | null
   fill_geocoding: boolean
+  last_upload_at: string | null  // 最近一次上传的时间
+  last_point_time: string | null  // 最近一次上传的轨迹点的时间
 }
 
 export interface TrackPoint {

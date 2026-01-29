@@ -874,6 +874,18 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 未保存更改确认对话框 -->
+    <el-dialog v-model="unsavedChangesDialogVisible" title="提示" :width="isMobile ? '90%' : '420px'" class="unsaved-changes-dialog">
+      <p>系统配置有未保存的更改，确定要离开吗？</p>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="handleUnsavedChanges('cancel')">取消</el-button>
+          <el-button type="primary" @click="handleUnsavedChanges('save')">保存配置</el-button>
+          <el-button type="danger" @click="handleUnsavedChanges('leave')">离开</el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -957,6 +969,27 @@ const resetPasswordForm = reactive({
   new_password: '',
   confirm_password: '',
 })
+
+// 未保存更改对话框
+const unsavedChangesDialogVisible = ref(false)
+let unsavedChangesResolve: ((action: 'save' | 'leave' | 'cancel') => void) | null = null
+
+// 显示未保存更改对话框，返回用户选择的操作
+function showUnsavedChangesDialog(): Promise<'save' | 'leave' | 'cancel'> {
+  return new Promise((resolve) => {
+    unsavedChangesResolve = resolve
+    unsavedChangesDialogVisible.value = true
+  })
+}
+
+// 处理用户选择
+function handleUnsavedChanges(action: 'save' | 'leave' | 'cancel') {
+  unsavedChangesDialogVisible.value = false
+  if (unsavedChangesResolve) {
+    unsavedChangesResolve(action)
+    unsavedChangesResolve = null
+  }
+}
 
 // 系统配置
 const config = reactive<SystemConfig>({
@@ -1543,26 +1576,20 @@ async function deleteFont(font: FontInfo) {
 // 监听 tab 切换，如果有未保存的配置更改则提示
 watch(activeTab, async (newTab, oldTab) => {
   if (oldTab === 'config' && hasUnsavedConfigChanges()) {
-    try {
-      await ElMessageBox.confirm(
-        '系统配置有未保存的更改，确定要离开吗？',
-        '提示',
-        {
-          confirmButtonText: '离开',
-          cancelButtonText: '留在本页',
-          type: 'warning',
-        }
-      )
-      // 用户选择离开，重置为原始配置
+    const action = await showUnsavedChangesDialog()
+    if (action === 'leave') {
+      // 点击"离开"按钮，重置为原始配置
       if (originalConfig.value) {
         Object.assign(config, originalConfig.value)
         initGeocodingConfig()
         initMapLayers()
       }
-    } catch {
-      // 用户选择留在本页，切回原来的 tab
+    } else if (action === 'save') {
+      // 点击"保存配置"按钮
+      await saveConfig()
+    } else {
+      // 点击"取消"按钮，切回原来的 tab
       activeTab.value = oldTab
-      throw new Error('User cancelled') // 阻止 watch 继续
     }
   }
 })
@@ -1571,18 +1598,13 @@ watch(activeTab, async (newTab, oldTab) => {
 onBeforeRouteLeave(async (to, from, next) => {
   // 只有在系统配置 tab 且有未保存更改时才提示
   if (activeTab.value === 'config' && hasUnsavedConfigChanges()) {
-    try {
-      await ElMessageBox.confirm(
-        '系统配置有未保存的更改，确定要离开吗？',
-        '提示',
-        {
-          confirmButtonText: '离开',
-          cancelButtonText: '留在本页',
-          type: 'warning',
-        }
-      )
+    const action = await showUnsavedChangesDialog()
+    if (action === 'leave') {
       next()
-    } catch {
+    } else if (action === 'save') {
+      await saveConfig()
+      next()
+    } else {
       next(false)
     }
   } else {
@@ -2448,5 +2470,18 @@ onUnmounted(() => {
 
 .fonts-skeleton {
   padding: 20px;
+}
+
+/* 未保存更改对话框样式 */
+.unsaved-changes-dialog .dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.unsaved-changes-dialog p {
+  margin: 0;
+  font-size: 14px;
+  color: #606266;
 }
 </style>

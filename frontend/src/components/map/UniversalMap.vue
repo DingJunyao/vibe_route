@@ -52,6 +52,15 @@
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
+      <!-- 实时更新状态按钮 -->
+      <el-button
+        v-if="liveStatusText"
+        type="success"
+        size="small"
+        class="live-status-btn"
+      >
+        {{ liveStatusText }}
+      </el-button>
       <!-- 清除高亮按钮 -->
       <el-button-group v-if="highlightSegment" size="small" class="clear-highlight-btn">
         <el-button @click="clearSegmentHighlight">
@@ -145,6 +154,7 @@ interface Props {
   highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   mode?: 'home' | 'detail'
+  liveStatusText?: string  // 实时更新状态文字
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -153,6 +163,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightSegment: null,
   defaultLayerId: undefined,
   mode: 'detail',
+  liveStatusText: '',
 })
 
 // 定义 emit 事件
@@ -351,6 +362,17 @@ defineExpose({
 .mobile-layer-selector {
   display: none;
   width: 100px;
+}
+
+.live-status-btn {
+  background-color: #67c23a;
+  color: white;
+  border: none;
+  pointer-events: none;
+  font-size: 12px;
+  padding: 4px 8px;
+  height: auto;
+  flex-shrink: 0;
 }
 
 @media (max-width: 1366px) {

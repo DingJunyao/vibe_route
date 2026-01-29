@@ -98,8 +98,10 @@ class UnifiedTrackResponse(BaseModel):
     live_recording_status: Optional[str] = None  # active, ended
     live_recording_token: Optional[str] = None
     fill_geocoding: bool = False
+    last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
+    last_point_time: Optional[datetime] = Field(None, description="最近一次上传的轨迹点的时间")
 
-    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at')
+    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
         """序列化 datetime 为带时区的 ISO 格式字符串"""
         if dt is None:

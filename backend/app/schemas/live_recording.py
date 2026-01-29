@@ -22,11 +22,12 @@ class LiveRecordingResponse(BaseModel):
     status: str
     track_count: int
     last_upload_at: Optional[datetime]
+    last_point_time: Optional[datetime] = Field(None, description="最近一次上传的轨迹点的时间")
     upload_url: str
     created_at: datetime
     fill_geocoding: bool = False
 
-    @field_serializer('last_upload_at', 'created_at')
+    @field_serializer('last_upload_at', 'last_point_time', 'created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
         """序列化 datetime 为带时区的 ISO 格式字符串"""
         if dt is None:
@@ -45,10 +46,11 @@ class RecordingStatusResponse(BaseModel):
     status: str
     track_count: int
     last_upload_at: Optional[datetime]
+    last_point_time: Optional[datetime] = Field(None, description="最近一次上传的轨迹点的时间")
     created_at: datetime
     tracks: list[dict] = []
 
-    @field_serializer('last_upload_at', 'created_at')
+    @field_serializer('last_upload_at', 'last_point_time', 'created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
         """序列化 datetime 为带时区的 ISO 格式字符串"""
         if dt is None:

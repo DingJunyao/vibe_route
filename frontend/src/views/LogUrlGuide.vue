@@ -68,7 +68,14 @@
               <li><strong>现在配置完成，可以开始记录了！</strong></li>
             </ol>
 
-            <el-alert type="info" :closable="false" show-icon class="tip-alert">
+            <el-alert type="warning" :closable="false" show-icon class="tip-alert">
+              <template #title>
+                <div class="instruction-title">提示</div>
+              </template>
+            <strong>手机上结束记录后，请不要立即在本系统结束记录，需等待记录上传完毕后再结束！</strong>
+            </el-alert>
+
+            <!-- <el-alert type="info" :closable="false" show-icon class="tip-alert">
               <template #title>
                 <div class="instruction-title">提示</div>
               </template>
@@ -77,7 +84,7 @@
                 <li>应用在后台运行时也能记录</li>
                 <li>记录会消耗一定的流量和电量</li>
               </ul>
-            </el-alert>
+            </el-alert> -->
           </div>
         </div>
       </el-card>

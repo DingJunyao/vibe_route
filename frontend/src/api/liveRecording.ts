@@ -10,6 +10,7 @@ export interface LiveRecording {
   status: 'active' | 'ended'
   track_count: number
   last_upload_at: string | null
+  last_point_time: string | null  // 最近一次上传的轨迹点的时间
   upload_url: string
   created_at: string
   fill_geocoding: boolean
@@ -28,6 +29,7 @@ export interface RecordingStatus {
   status: 'active' | 'ended'
   track_count: number
   last_upload_at: string | null
+  last_point_time: string | null  // 最近一次上传的轨迹点的时间
   created_at: string
   tracks: RecordingTrack[]
 }

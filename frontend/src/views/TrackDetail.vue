@@ -217,6 +217,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :live-status-text="liveStatusText"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -429,6 +430,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :live-status-text="liveStatusText"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -787,20 +789,17 @@
     </el-dialog>
 
     <!-- 实时记录配置对话框 -->
-    <el-dialog v-model="recordingDetailVisible" title="实时记录配置" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+    <el-dialog v-model="recordingDetailVisible" :title="`实时记录配置 - ${recordingDetail?.name || ''}`" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <div v-if="recordingDetail" class="recording-detail-content">
-        <!-- 记录状态 -->
-        <div class="recording-status">
-          <div class="status-item">
-            <span class="status-label">记录名称：</span>
-            <span class="status-value">{{ recordingDetail.name }}</span>
+        <!-- 最近上传信息 -->
+        <div class="upload-info-section">
+          <div class="info-item">
+            <span class="info-label">最近上传：</span>
+            <span class="info-value">{{ formatTimeWithRelativeDialog(recordingDetail.last_upload_at) }}</span>
           </div>
-          <div class="status-item">
-            <span class="status-label">状态：</span>
-            <el-tag v-if="recordingDetail.live_recording_status === 'active'" type="success" size="small">
-              正在记录
-            </el-tag>
-            <el-tag v-else type="info" size="small">已结束</el-tag>
+          <div class="info-item">
+            <span class="info-label">轨迹点时间：</span>
+            <span class="info-value">{{ formatTimeWithRelativeDialog(recordingDetail.last_point_time) }}</span>
           </div>
         </div>
 
@@ -890,6 +889,7 @@ import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
+import { formatTimeWithRelative, formatTimeShort } from '@/utils/relativeTime'
 
 const route = useRoute()
 const router = useRouter()
@@ -973,6 +973,8 @@ const recordingDetail = ref<{
   gpsLoggerUrl: string
   qrCode: string
   fill_geocoding: boolean
+  last_upload_at: string | null
+  last_point_time: string | null
 } | null>(null)
 const recordingDetailCopyButtonText = ref('复制')
 
@@ -1000,6 +1002,28 @@ const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnect
 // 区域更新节流：最多每 10 秒更新一次
 let regionUpdateTimer: number | null = null
 const REGION_UPDATE_INTERVAL = 10000 // 10 秒
+// 最近更新时间（用于实时状态显示）
+const lastUpdateTime = ref<string | null>(null)
+// 实时状态文字刷新定时器
+let liveStatusRefreshTimer: number | null = null
+const LIVE_STATUS_REFRESH_INTERVAL = 1000 // 每秒刷新一次相对时间
+// 用于触发计算属性重新计算的 key
+const liveStatusRefreshKey = ref(0)
+// 对话框内时间刷新定时器
+let dialogRefreshTimer: number | null = null
+const DIALOG_REFRESH_INTERVAL = 1000 // 每秒刷新对话框内时间
+// 对话框时间刷新 key
+const dialogTimeRefreshKey = ref(0)
+
+// 实时状态文字（用于地图上的绿色按钮）
+const liveStatusText = computed(() => {
+  // 依赖 refreshKey，确保定时触发重新计算
+  void liveStatusRefreshKey.value
+  if (track.value?.is_live_recording && track.value.live_recording_status === 'active' && lastUpdateTime.value) {
+    return formatTimeShort(lastUpdateTime.value)
+  }
+  return ''
+})
 
 // 判断是否是"待记录"状态（实时记录且没有点）
 const isWaitingForPoints = computed(() => {
@@ -1766,8 +1790,13 @@ async function showRecordingDetail() {
       gpsLoggerUrl,
       qrCode,
       fill_geocoding: currentRecording.fill_geocoding || false,
+      last_upload_at: currentRecording.last_upload_at,
+      last_point_time: currentRecording.last_point_time,
     }
     recordingDetailVisible.value = true
+
+    // 启动对话框内时间刷新
+    startDialogTimeRefresh()
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')
   }
@@ -1851,13 +1880,31 @@ async function confirmEndRecording() {
   if (!recordingDetail.value) return
 
   try {
+    // 先刷新一次时间数据，确保显示最新的
+    await refreshDialogTimes()
+
+    // 构建确认消息，包含最近上传信息
+    let confirmMessage = `确定要结束实时记录"${recordingDetail.value.name}"吗？`
+    if (recordingDetail.value.last_upload_at || recordingDetail.value.last_point_time) {
+      confirmMessage += '<p style="margin-top: 12px;">最近上传信息：</p>'
+      if (recordingDetail.value.last_upload_at) {
+        confirmMessage += `<p style="margin: 4px 0;">最近上传：${formatTimeWithRelative(recordingDetail.value.last_upload_at)}</p>`
+      }
+      if (recordingDetail.value.last_point_time) {
+        confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(recordingDetail.value.last_point_time)}</p>`
+      }
+      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">如果觉得轨迹点时间对不上，请先检查 GPS Logger 是否正常上传。</p>'
+    }
+    confirmMessage += '<p style="margin-top: 12px;">结束后将无法继续上传轨迹点。</p>'
+
     await ElMessageBox.confirm(
-      `确定要结束实时记录"${recordingDetail.value.name}"吗？结束后将无法继续上传轨迹点。`,
+      confirmMessage,
       '确认结束记录',
       {
         confirmButtonText: '确定结束',
         cancelButtonText: '取消',
         type: 'warning',
+        dangerouslyUseHTMLString: true,
       }
     )
 
@@ -2075,6 +2122,13 @@ function formatDateTime(dateStr: string | null): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
+// 格式化对话框内时间（依赖 dialogTimeRefreshKey 以触发刷新）
+function formatTimeWithRelativeDialog(timeStr: string | null | undefined): string {
+  // 依赖 dialogTimeRefreshKey，确保定时触发重新计算
+  void dialogTimeRefreshKey.value
+  return formatTimeWithRelative(timeStr)
+}
+
 function formatDate(dateStr: string | null): string {
   if (!dateStr) return '-'
   const date = new Date(dateStr)
@@ -2127,6 +2181,11 @@ function startLiveUpdate() {
     return
   }
 
+  // 初始化最近更新时间（从 track 的 end_time 获取，因为这是最新点的时间）
+  if (track.value.end_time) {
+    lastUpdateTime.value = track.value.end_time
+  }
+
   const token = track.value.live_recording_token
   const recordingId = track.value.live_recording_id
 
@@ -2149,6 +2208,15 @@ function startLiveUpdate() {
   try {
     liveTrackWs = new LiveTrackWebSocket(token, recordingId)
     isLiveUpdating.value = true
+
+    // 启动定时刷新相对时间
+    if (liveStatusRefreshTimer) {
+      clearInterval(liveStatusRefreshTimer)
+    }
+    liveStatusRefreshTimer = window.setInterval(() => {
+      // 更新 refreshKey 触发计算属性重新计算
+      liveStatusRefreshKey.value++
+    }, LIVE_STATUS_REFRESH_INTERVAL)
 
     // 设置重连判断回调：只有记录状态为 active 时才重连
     liveTrackWs.setShouldReconnectCallback(() => {
@@ -2224,8 +2292,48 @@ function stopLiveUpdate() {
     regionUpdateTimer = null
   }
 
+  // 清除实时状态刷新定时器
+  if (liveStatusRefreshTimer) {
+    clearInterval(liveStatusRefreshTimer)
+    liveStatusRefreshTimer = null
+  }
+
   // 停止时立即获取一次完整的区域数据
   fetchRegions()
+}
+
+// 刷新对话框内的时间数据
+async function refreshDialogTimes() {
+  if (!track.value?.is_live_recording || !track.value.live_recording_id) return
+
+  try {
+    const status = await liveRecordingApi.getStatus(track.value.live_recording_id)
+    if (recordingDetail.value) {
+      recordingDetail.value.last_upload_at = status.last_upload_at
+      recordingDetail.value.last_point_time = status.last_point_time
+    }
+  } catch (error) {
+    // 静默处理错误
+  }
+  // 更新刷新 key，触发模板重新计算
+  dialogTimeRefreshKey.value++
+}
+
+// 启动对话框时间刷新
+function startDialogTimeRefresh() {
+  if (dialogRefreshTimer) return
+  refreshDialogTimes()
+  dialogRefreshTimer = window.setInterval(() => {
+    refreshDialogTimes()
+  }, DIALOG_REFRESH_INTERVAL)
+}
+
+// 停止对话框时间刷新
+function stopDialogTimeRefresh() {
+  if (dialogRefreshTimer) {
+    clearInterval(dialogRefreshTimer)
+    dialogRefreshTimer = null
+  }
 }
 
 /**
@@ -2250,6 +2358,9 @@ function scheduleRegionUpdate() {
  */
 async function handleNewPointAdded(data: PointAddedData) {
   const { point, stats } = data
+
+  // 更新最近上传时间
+  lastUpdateTime.value = point.time || null
 
   // 添加新点到 points 数组
   points.value.push({
@@ -2306,6 +2417,13 @@ async function handleNewPointAdded(data: PointAddedData) {
     mapRef.value.refresh()
   }
 }
+
+// 监听对话框关闭，停止时间刷新
+watch(recordingDetailVisible, (isVisible) => {
+  if (!isVisible) {
+    stopDialogTimeRefresh()
+  }
+})
 
 onMounted(async () => {
   try {
@@ -3322,6 +3440,34 @@ onUnmounted(() => {
 
 .copy-button {
   align-self: flex-start;
+}
+
+/* 最近上传信息区域 */
+.upload-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  margin: 12px 0;
+}
+
+.upload-info-section .info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.upload-info-section .info-label {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+.upload-info-section .info-value {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
 }
 
 /* 设置区域 */

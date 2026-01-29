@@ -487,6 +487,57 @@ https://route.a4ding.com/api/live-recordings/log/{TOKEN}?lat=%LAT&lon=%LON&time=
 
 **反向代理配置**：使用 Nginx Proxy Manager 时，需为 `/api/` 路径启用 WebSocket 支持，并正确转发到后端服务。
 
+### 实时上传状态显示功能
+
+在轨迹列表和轨迹详情页直接显示实时上传状态，无需打开对话框即可查看最近更新时间。
+
+**功能位置**：
+
+1. **轨迹列表页**（[`TrackList.vue`](frontend/src/views/TrackList.vue)）：
+   - 在名称列显示状态标签
+   - 格式：`实时记录中 · 3 秒前更新`（合并显示）
+   - 支持定时刷新（每 2 秒）
+
+2. **轨迹详情页**（[`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)）：
+   - 地图右上角显示绿色状态按钮
+   - 格式：`3 秒前更新`
+   - 支持定时刷新（每 1 秒）
+
+3. **实时记录对话框**：
+   - 显示最近上传时间和轨迹点时间
+   - 支持定时刷新（每 1 秒）
+
+**实现要点**：
+
+1. **相对时间格式化**（[`relativeTime.ts`](frontend/src/utils/relativeTime.ts)）：
+   - `formatRelativeTime()`: "2025-01-01 11:12:13（12 分钟前）"
+   - `formatTimeShort()`: "刚刚"、"10 秒前更新"、"5 分钟前更新"
+   - 使用 `refreshKey` ref 强制计算属性重新计算，实现自动刷新
+
+2. **自动刷新机制**：
+   - 使用 `setInterval` 定时更新
+   - 列表页标签：每 2 秒刷新时间显示
+   - 列表数据：每 5 秒刷新距离、时长、爬升数据
+   - 详情页状态按钮：每 1 秒刷新
+   - 对话框时间：每 1 秒刷新
+   - 在组件卸载时清理定时器
+
+3. **数据获取**：
+   - 后端 API 返回 `last_upload_at` 和 `last_point_time` 字段
+   - 统一轨迹列表 API（`/api/tracks/unified`）包含实时记录数据
+   - 单个记录状态 API（`/api/live-recordings/{id}/status`）
+
+4. **状态标签合并**：
+   - 原方案：两个独立标签（"实时轨迹记录中" + "3 秒前更新"）
+   - 优化后：单个标签（"实时记录中 · 3 秒前更新"）
+   - 无时间数据时：显示"实时轨迹记录中"
+
+**后端支持**：
+
+- [`UnifiedTrackResponse`](backend/app/schemas/track.py) 添加 `last_upload_at` 和 `last_point_time` 字段
+- [`track_service.py`](backend/app/services/track_service.py) 的 `get_unified_list()` 方法填充这些字段
+- [`live_recording_service.py`](backend/app/services/live_recording_service.py) 提供 `get_last_point_time()` 方法
+
 ## File Structure
 
 ```text
