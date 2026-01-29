@@ -238,17 +238,19 @@
                 </template>
                 <!-- 正常显示 -->
                 <template v-else>
-                  <div class="card-item">
-                    <span class="label">里程</span>
-                    <span class="value">{{ formatDistance(row.distance) }}</span>
-                  </div>
-                  <div class="card-item">
-                    <span class="label">时长</span>
-                    <span class="value">{{ formatDuration(row.duration) }}</span>
-                  </div>
-                  <div class="card-item" v-if="row.elevation_gain > 0">
-                    <span class="label">爬升</span>
-                    <span class="value">{{ formatElevation(row.elevation_gain) }}</span>
+                  <div class="card-stats-row">
+                    <span class="stat-item">
+                      <el-icon class="stat-icon"><Odometer /></el-icon>
+                      {{ formatDistance(row.distance) }}
+                    </span>
+                    <span class="stat-item">
+                      <el-icon class="stat-icon"><Clock /></el-icon>
+                      {{ formatDuration(row.duration) }}
+                    </span>
+                    <span class="stat-item" v-if="row.elevation_gain > 0">
+                      <el-icon class="stat-icon"><Top /></el-icon>
+                      {{ formatElevation(row.elevation_gain) }}
+                    </span>
                   </div>
                 </template>
               </div>
@@ -967,9 +969,9 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   if (hours > 0) {
-    return `${hours}h ${minutes}m`
+    return `${hours}h ${minutes}min`
   }
-  return `${minutes}m`
+  return `${minutes}min`
 }
 
 function formatElevation(meters: number): string {
@@ -1400,10 +1402,27 @@ onUnmounted(() => {
 }
 
 .card-body {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px 16px;
   margin-bottom: 12px;
+}
+
+.card-stats-row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14px;
+  color: #606266;
+}
+
+.stat-icon {
+  font-size: 16px;
+  color: #909399;
 }
 
 .card-item {

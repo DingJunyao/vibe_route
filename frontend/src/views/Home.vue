@@ -768,9 +768,9 @@ function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
   if (hours > 0) {
-    return `${hours}h ${minutes}m`
+    return `${hours}h ${minutes}min`
   }
-  return `${minutes}m`
+  return `${minutes}min`
 }
 
 function formatElevation(meters: number): string {
