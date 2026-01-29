@@ -264,8 +264,12 @@ export const trackApi = {
   },
 
   // 导出轨迹点
-  exportPoints(trackId: number, format: 'csv' | 'xlsx' = 'csv'): string {
-    return `/api/tracks/${trackId}/export?format=${format}`
+  exportPoints(trackId: number, format: 'csv' | 'xlsx' | 'kml' = 'csv', crs?: string): string {
+    let url = `/api/tracks/${trackId}/export?format=${format}`
+    if (crs) {
+      url += `&crs=${crs}`
+    }
+    return url
   },
 
   // 导入轨迹点
@@ -276,6 +280,17 @@ export const trackApi = {
     formData.append('timezone', timezone)
     formData.append('time_tolerance', String(timeTolerance))
     return http.post(`/tracks/${trackId}/import`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+  },
+
+  // 更改坐标系
+  changeCrs(trackId: number, originalCrs: string): Promise<Track> {
+    const formData = new FormData()
+    formData.append('original_crs', originalCrs)
+    return http.post(`/tracks/${trackId}/change-crs`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

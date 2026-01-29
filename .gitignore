@@ -98,3 +98,4 @@ backend/alembic.ini
 tmpclaude*
 
 ref_gpxutil/
+ref/

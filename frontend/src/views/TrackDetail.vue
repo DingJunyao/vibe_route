@@ -52,20 +52,6 @@
             <el-icon><Upload /></el-icon>
             导入数据
           </el-button>
-          <el-button type="primary" @click="downloadDialogVisible = true" class="desktop-only">
-            <el-icon><Document /></el-icon>
-            下载 GPX
-          </el-button>
-          <el-button
-            type="primary"
-            @click="handleFillGeocoding"
-            class="desktop-only"
-            :loading="fillingGeocoding"
-            :disabled="fillProgress.status === 'filling'"
-          >
-            <el-icon><LocationFilled /></el-icon>
-            填充地理信息
-          </el-button>
         </div>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
@@ -93,18 +79,6 @@
               <el-dropdown-item command="import" v-if="isMobile">
                 <el-icon><Upload /></el-icon>
                 导入数据
-              </el-dropdown-item>
-              <el-dropdown-item command="download" v-if="isMobile">
-                <el-icon><Document /></el-icon>
-                下载 GPX
-              </el-dropdown-item>
-              <el-dropdown-item
-                command="fill"
-                v-if="isMobile"
-                :disabled="fillProgress.status === 'filling'"
-              >
-                <el-icon><LocationFilled /></el-icon>
-                {{ fillProgress.status === 'filling' ? '填充中...' : '填充地理信息' }}
               </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
@@ -661,7 +635,7 @@
 
     <!-- 编辑对话框 -->
     <el-dialog v-model="editDialogVisible" title="编辑轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <el-form :model="editForm" label-width="80px" class="dialog-form">
+      <el-form :model="editForm" label-width="100px" class="dialog-form">
         <el-form-item label="名称">
           <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
         </el-form-item>
@@ -669,46 +643,73 @@
           <el-input
             v-model="editForm.description"
             type="textarea"
-            :rows="4"
+            :rows="3"
             placeholder="请输入备注信息"
           />
         </el-form-item>
+
+        <el-divider content-position="left">更改坐标系</el-divider>
+
+        <el-form-item label="原坐标系">
+          <el-radio-group v-model="editForm.original_crs">
+            <el-radio value="wgs84">WGS84 (GPS 原始)</el-radio>
+            <el-radio value="gcj02">GCJ02 (国测局)</el-radio>
+            <el-radio value="bd09">BD09 (百度)</el-radio>
+          </el-radio-group>
+          <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
+        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+        <div class="dialog-footer-content">
+          <el-button
+            type="primary"
+            :loading="fillingGeocoding"
+            :disabled="track?.has_area_info && track?.has_road_info"
+            @click="handleFillGeocoding"
+            class="fill-geo-btn"
+          >
+            <el-icon><LocationFilled /></el-icon>
+            {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '已填充地理信息' : '填充地理信息' }}
+          </el-button>
+          <div class="dialog-footer-right">
+            <el-button @click="editDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="saving || changingCrs" @click="saveEdit">
+              {{ changingCrs ? '更改中...' : '保存' }}
+            </el-button>
+          </div>
+        </div>
       </template>
     </el-dialog>
 
-    <!-- 下载对话框 -->
-    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+    <!-- 导出数据对话框 -->
+    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form label-width="100px" class="dialog-form">
-        <el-form-item label="坐标系">
-          <el-radio-group v-model="downloadCRS">
+        <el-form-item label="文件格式">
+          <el-radio-group v-model="exportFormat">
+            <el-radio value="gpx">GPX</el-radio>
+            <el-radio value="kml">KML (两步路)</el-radio>
+            <el-radio value="csv">CSV (Excel)</el-radio>
+            <el-radio value="xlsx">XLSX (Excel)</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="坐标系" v-if="exportFormat === 'gpx' || exportFormat === 'kml'">
+          <el-radio-group v-model="exportCRS">
             <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
             <el-radio value="wgs84">WGS84</el-radio>
             <el-radio value="gcj02">GCJ02 (火星)</el-radio>
             <el-radio value="bd09">BD09 (百度)</el-radio>
           </el-radio-group>
         </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="downloadDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="downloadTrack">下载</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 导出数据对话框 -->
-    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <el-form label-width="100px" class="dialog-form">
-        <el-form-item label="文件格式">
-          <el-radio-group v-model="exportFormat">
-            <el-radio value="csv">CSV (Excel)</el-radio>
-            <el-radio value="xlsx">XLSX (Excel)</el-radio>
-          </el-radio-group>
-        </el-form-item>
         <el-alert type="info" :closable="false" style="margin-top: 10px">
-          导出后可以编辑地理信息，然后重新导入
+          <template v-if="exportFormat === 'gpx'">
+            导出为 GPX 格式，可导入到各种 GPS 设备和软件。包含时间、坐标、海拔等信息。
+          </template>
+          <template v-else-if="exportFormat === 'kml'">
+            导出为 KML 格式，可导入到两步路等应用。包含时间、坐标、海拔等信息。
+          </template>
+          <template v-else>
+            导出后可以编辑地理信息，然后重新导入
+          </template>
         </el-alert>
       </el-form>
       <template #footer>
@@ -926,15 +927,15 @@ const mapWrapperRef = ref<HTMLElement>()
 const chartRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
-const downloadDialogVisible = ref(false)
-const downloadCRS = ref('original')
 
 // 编辑相关
 const editDialogVisible = ref(false)
 const saving = ref(false)
+const changingCrs = ref(false)
 const editForm = ref({
   name: '',
-  description: ''
+  description: '',
+  original_crs: 'wgs84'
 })
 
 // 填充地理信息相关
@@ -983,7 +984,8 @@ const highlightedSegment = ref<{ start: number; end: number; nodeName: string } 
 
 // 导出相关
 const exportPointsDialogVisible = ref(false)
-const exportFormat = ref<'csv' | 'xlsx'>('csv')
+const exportFormat = ref<'gpx' | 'kml' | 'csv' | 'xlsx'>('gpx')
+const exportCRS = ref('original')
 const exporting = ref(false)
 
 // 导入相关
@@ -1085,8 +1087,6 @@ function handleCommand(command: string) {
     showRecordingDetail()
   } else if (command === 'edit') {
     showEditDialog()
-  } else if (command === 'download') {
-    downloadDialogVisible.value = true
   } else if (command === 'exportPoints') {
     exportPointsDialogVisible.value = true
   } else if (command === 'import') {
@@ -1754,11 +1754,6 @@ function highlightPoint(index: number) {
   // TODO: 在地图上高亮该点
 }
 
-// 显示下载对话框
-function showDownloadDialog() {
-  downloadDialogVisible.value = true
-}
-
 // 显示实时记录详情对话框
 async function showRecordingDetail() {
   if (!track.value?.live_recording_id) return
@@ -1923,6 +1918,7 @@ function showEditDialog() {
   if (track.value) {
     editForm.value.name = track.value.name
     editForm.value.description = track.value.description || ''
+    editForm.value.original_crs = track.value.original_crs || 'wgs84'
   }
   editDialogVisible.value = true
 }
@@ -1938,75 +1934,81 @@ async function saveEdit() {
 
   saving.value = true
   try {
-    const updated = await trackApi.update(track.value.id, {
-      name: editForm.value.name.trim(),
-      description: editForm.value.description.trim() || undefined
-    })
-    track.value = updated
+    // 检查是否需要更改坐标系
+    const needsCrsChange = editForm.value.original_crs !== track.value.original_crs
+
+    if (needsCrsChange) {
+      // 需要更改坐标系
+      try {
+        await ElMessageBox.confirm(
+          `更改坐标系会重新计算所有坐标并保存，此操作不可撤销。如果此前填充了轨迹，可能需要重新填充。是否继续？`,
+          '确认更改坐标系',
+          {
+            confirmButtonText: '继续',
+            cancelButtonText: '取消',
+            type: 'warning',
+          }
+        )
+      } catch {
+        // 用户取消
+        saving.value = false
+        return
+      }
+
+      changingCrs.value = true
+      const updated = await trackApi.changeCrs(track.value.id, editForm.value.original_crs)
+      track.value = updated
+      // 重新加载轨迹点数据
+      await fetchTrackPoints()
+      // 强制刷新地图
+      await nextTick()
+      if (mapRef.value?.resize) {
+        mapRef.value.resize()
+      }
+      if (mapRef.value?.fitBounds) {
+        mapRef.value.fitBounds()
+      }
+      ElMessage.success('坐标系更改成功')
+    } else {
+      // 只更新名称和描述
+      const updated = await trackApi.update(track.value.id, {
+        name: editForm.value.name.trim(),
+        description: editForm.value.description.trim() || undefined
+      })
+      track.value = updated
+      ElMessage.success('保存成功')
+    }
+
     editDialogVisible.value = false
-    ElMessage.success('保存成功')
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
     saving.value = false
+    changingCrs.value = false
   }
 }
 
-// 下载轨迹
-async function downloadTrack() {
-  try {
-    const url = trackApi.download(trackId.value, downloadCRS.value)
-    // 使用 fetch 下载，自动携带认证信息
-    const response = await fetch(url, {
-      headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`
-      }
-    })
-
-    if (!response.ok) {
-      throw new Error('下载失败')
-    }
-
-    // 获取文件名（优先使用 filename* RFC 5987）
-    const contentDisposition = response.headers.get('Content-Disposition')
-    let filename = `track_${trackId.value}.gpx`
-    if (contentDisposition) {
-      // 优先匹配 filename*=UTF-8''encoded-filename
-      const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-      if (starMatch) {
-        // 解码 URL 编码的文件名
-        filename = decodeURIComponent(starMatch[1])
-      } else {
-        // 回退到 filename 参数（URL 编码）
-        const match = contentDisposition.match(/filename="([^"]+)"/)
-        if (match) filename = decodeURIComponent(match[1])
-      }
-    }
-
-    // 创建 blob 并下载
-    const blob = await response.blob()
-    const blobUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = blobUrl
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(blobUrl)
-
-    downloadDialogVisible.value = false
-    ElMessage.success('下载成功')
-  } catch (error) {
-    console.error('Download error:', error)
-    ElMessage.error('下载失败')
-  }
-}
-
-// 导出轨迹点
+// 导出轨迹
 async function exportPoints() {
   try {
     exporting.value = true
-    const url = trackApi.exportPoints(trackId.value, exportFormat.value)
+    let url: string
+    let defaultFilename: string
+
+    if (exportFormat.value === 'gpx') {
+      // GPX 使用 download API
+      url = trackApi.download(trackId.value, exportCRS.value)
+      defaultFilename = `track_${trackId.value}.gpx`
+    } else if (exportFormat.value === 'kml') {
+      // KML 需要 crs 参数
+      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value)
+      defaultFilename = `track_${trackId.value}.kml`
+    } else {
+      // CSV 和 XLSX
+      url = trackApi.exportPoints(trackId.value, exportFormat.value)
+      defaultFilename = `track_${trackId.value}_points.${exportFormat.value}`
+    }
+
     const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -2019,7 +2021,7 @@ async function exportPoints() {
 
     // 获取文件名（优先使用 filename* RFC 5987）
     const contentDisposition = response.headers.get('Content-Disposition')
-    let filename = `track_${trackId.value}_points.${exportFormat.value}`
+    let filename = defaultFilename
     if (contentDisposition) {
       // 优先匹配 filename*=UTF-8''encoded-filename
       const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
@@ -3388,6 +3390,37 @@ onUnmounted(() => {
     width: 80px !important;
     font-size: 14px;
   }
+}
+
+/* 表单提示文本 */
+.form-hint {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+/* 编辑对话框底部 */
+.dialog-footer-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+}
+
+.dialog-footer-right {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.fill-geo-btn {
+  flex-shrink: 0;
+}
+
+:deep(.el-dialog__footer) {
+  padding: 12px 20px;
 }
 
 /* 实时记录详情对话框 */

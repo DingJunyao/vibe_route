@@ -1685,6 +1685,134 @@ class TrackService:
         filename = f"{track.name}_points.xlsx"
         return filename, output.read()
 
+    async def export_points_to_kml(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+        crs: Optional[str] = None,
+    ) -> tuple[str, str]:
+        """
+        导出轨迹点为 KML 格式（两步路兼容格式）
+
+        使用 Google gx:Track 扩展格式，支持时间信息
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+            crs: 坐标系 (original/wgs84/gcj02/bd09)，默认为 original
+
+        Returns:
+            (文件名, KML 内容)
+        """
+        # 检查权限并获取轨迹
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        # 获取轨迹点（按时间排序）
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.time, TrackPoint.created_at)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            raise ValueError("轨迹没有数据点")
+
+        # 确定使用的坐标系
+        if crs == "original" or crs is None:
+            original_crs_value = track.original_crs or "wgs84"
+            target_crs = str(original_crs_value)
+        else:
+            target_crs = crs
+
+        # 构建 KML 内容
+        kml_lines = []
+
+        # KML 头部
+        kml_lines.append('<?xml version="1.0" encoding="UTF-8"?>')
+        kml_lines.append('<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">')
+        kml_lines.append('  <Document>')
+        kml_lines.append(f'    <name>{track.name}</name>')
+        if track.description:
+            kml_lines.append(f'    <description>{track.description}</description>')
+
+        # 添加样式（与两步路类似）
+        kml_lines.append('    <Style id="TrackStyle_n">')
+        kml_lines.append('      <LineStyle>')
+        kml_lines.append('        <color>ffff0000</color>')
+        kml_lines.append('        <width>5</width>')
+        kml_lines.append('      </LineStyle>')
+        kml_lines.append('    </Style>')
+
+        kml_lines.append('    <Style id="TrackStyle_h">')
+        kml_lines.append('      <LineStyle>')
+        kml_lines.append('        <color>ff0000ff</color>')
+        kml_lines.append('        <width>7</width>')
+        kml_lines.append('      </LineStyle>')
+        kml_lines.append('    </Style>')
+
+        kml_lines.append('    <StyleMap id="TrackStyle">')
+        kml_lines.append('      <Pair>')
+        kml_lines.append('        <key>normal</key>')
+        kml_lines.append('        <styleUrl>#TrackStyle_n</styleUrl>')
+        kml_lines.append('      </Pair>')
+        kml_lines.append('      <Pair>')
+        kml_lines.append('        <key>highlight</key>')
+        kml_lines.append('        <styleUrl>#TrackStyle_h</styleUrl>')
+        kml_lines.append('      </Pair>')
+        kml_lines.append('    </StyleMap>')
+
+        # 开始 Placemark
+        kml_lines.append('    <Placemark>')
+        kml_lines.append(f'      <name>{track.name}</name>')
+        kml_lines.append('      <styleUrl>#TrackStyle</styleUrl>')
+        kml_lines.append('      <gx:Track>')
+
+        # 添加坐标（根据选择的坐标系）
+        for point in points:
+            if target_crs == "wgs84":
+                lon, lat = point.longitude_wgs84, point.latitude_wgs84
+            elif target_crs == "gcj02":
+                lon, lat = point.longitude_gcj02, point.latitude_gcj02
+            elif target_crs == "bd09":
+                lon, lat = point.longitude_bd09, point.latitude_bd09
+            else:
+                # 默认使用 WGS84
+                lon, lat = point.longitude_wgs84, point.latitude_wgs84
+            elev = point.elevation if point.elevation is not None else 0
+            kml_lines.append(f'        <gx:coord>{lon} {lat} {elev}</gx:coord>')
+
+        # 添加时间
+        for point in points:
+            if point.time:
+                # ISO 8601 格式，带 Z 后缀表示 UTC
+                time_str = point.time.strftime('%Y-%m-%dT%H:%M:%SZ')
+                kml_lines.append(f'        <when>{time_str}</when>')
+            else:
+                # 如果没有时间，使用占位符（两步路可能不支持无时间的点）
+                kml_lines.append('        <when></when>')
+
+        kml_lines.append('      </gx:Track>')
+        kml_lines.append('    </Placemark>')
+
+        # KML 尾部
+        kml_lines.append('  </Document>')
+        kml_lines.append('</kml>')
+
+        # 生成文件名（使用轨迹名称）
+        # 如果坐标系不是原坐标系，在文件名中加上坐标系后缀
+        original_crs_str = str(track.original_crs or "wgs84")
+        target_crs_str = str(target_crs) if target_crs else "wgs84"
+        crs_suffix = "" if target_crs_str == original_crs_str else f"_{target_crs_str.upper()}"
+        filename = f"{track.name}{crs_suffix}.kml"
+        content = '\n'.join(kml_lines)
+
+        return filename, content
+
     async def import_points_from_file(
         self,
         db: AsyncSession,
@@ -2059,6 +2187,1043 @@ class TrackService:
             "total": len(points),
             "matched_by": matched_by
         }
+
+
+    async def create_from_csv(
+        self,
+        db: AsyncSession,
+        user: User,
+        filename: str,
+        csv_content: str,
+        name: str,
+        description: Optional[str] = None,
+        original_crs: CoordinateType = 'wgs84',
+        convert_to: Optional[CoordinateType] = None,
+        fill_geocoding: bool = False,
+    ) -> Track:
+        """
+        从 CSV 内容创建轨迹
+
+        支持两种 CSV 格式：
+
+        1. GPS Logger 应用格式：
+           - time: ISO 8601 格式时间（UTC），如 2026-01-29T14:20:28.000Z
+           - lat: 纬度
+           - lon: 经度
+           - elevation: 海拔（米）
+           - speed: 速度（m/s）
+           - bearing: 方向角（度）
+
+        2. 本项目导出格式：
+           - index, time_date, time_time, time_microsecond, elapsed_time
+           - longitude_wgs84, latitude_wgs84
+           - longitude_gcj02, latitude_gcj02
+           - longitude_bd09, latitude_bd09
+           - elevation, distance, course, speed
+           - province, city, area, province_en, city_en, area_en
+           - road_num, road_name, road_name_en, memo
+
+        Args:
+            db: 数据库会话
+            user: 用户对象
+            filename: 原始文件名
+            csv_content: CSV 文件内容
+            name: 轨迹名称
+            description: 轨迹描述
+            original_crs: 原始坐标系（仅用于 GPS Logger 格式）
+            convert_to: 转换到目标坐标系（仅用于 GPS Logger 格式）
+            fill_geocoding: 是否填充行政区划和道路信息（仅用于 GPS Logger 格式）
+
+        Returns:
+            创建的轨迹对象
+        """
+        import csv
+        from io import StringIO
+        from datetime import datetime
+
+        # 解析 CSV
+        reader = csv.DictReader(StringIO(csv_content))
+        rows = list(reader)
+
+        if not rows:
+            raise ValueError("CSV 文件中没有数据")
+
+        # 检测 CSV 格式类型
+        is_project_export = (
+            reader.fieldnames and
+            'longitude_wgs84' in reader.fieldnames and
+            'latitude_wgs84' in reader.fieldnames
+        )
+
+        if is_project_export:
+            # 使用本项目导出格式解析
+            return await self._create_from_csv_project_format(
+                db, user, filename, rows, name, description
+            )
+
+        # GPS Logger 格式
+        # 验证必需的列
+        required_columns = ['time', 'lat', 'lon']
+        for col in required_columns:
+            if col not in reader.fieldnames:
+                raise ValueError(f"CSV 文件缺少必需的列: {col}")
+
+        # 计算统计信息
+        total_distance = 0
+        elevation_gain = 0
+        elevation_loss = 0
+        prev_elevation = None
+        start_time = None
+        end_time = None
+
+        points_data = []
+        prev_point_data = None
+
+        for idx, row in enumerate(rows):
+            # 解析时间
+            point_time = None
+            time_str = row.get('time', '').strip()
+            if time_str:
+                try:
+                    # GPS Logger 使用 ISO 8601 格式，如 2026-01-29T14:20:28.000Z
+                    # 解析为 UTC 时间
+                    point_time = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                    # 移除时区信息（与数据库保持一致）
+                    point_time = point_time.replace(tzinfo=None)
+
+                    if start_time is None:
+                        start_time = point_time
+                    end_time = point_time
+                except ValueError as e:
+                    logger.warning(f"无法解析时间 '{time_str}': {e}")
+
+            # 解析坐标
+            try:
+                lat = float(row['lat'])
+                lon = float(row['lon'])
+            except (ValueError, KeyError) as e:
+                logger.warning(f"跳过无效坐标的行 {idx}: {e}")
+                continue
+
+            # 坐标转换
+            all_coords = convert_point_to_all(lon, lat, original_crs)
+
+            # 解析海拔
+            elevation = None
+            elev_str = row.get('elevation', '').strip()
+            if elev_str:
+                try:
+                    elevation = float(elev_str)
+                    # 海拔变化
+                    if prev_elevation is not None:
+                        diff = elevation - prev_elevation
+                        if diff > 0:
+                            elevation_gain += diff
+                        else:
+                            elevation_loss += abs(diff)
+                    prev_elevation = elevation
+                except ValueError:
+                    pass
+
+            # 解析速度（CSV 中已有）
+            speed = None
+            speed_str = row.get('speed', '').strip()
+            if speed_str:
+                try:
+                    speed = float(speed_str)
+                except ValueError:
+                    pass
+
+            # 解析方向角（CSV 中已有）
+            bearing = None
+            bearing_str = row.get('bearing', '').strip()
+            if bearing_str:
+                try:
+                    bearing = float(bearing_str)
+                except ValueError:
+                    pass
+
+            # 如果 CSV 没有提供速度或方向角，计算它们
+            distance_from_prev = 0
+            if idx > 0 and prev_point_data:
+                # 使用 WGS84 坐标计算 3D 距离
+                from math import sqrt, radians, sin, cos, atan2
+
+                lat1 = radians(prev_point_data['latitude_wgs84'])
+                lon1 = radians(prev_point_data['longitude_wgs84'])
+                lat2 = radians(all_coords['wgs84'][1])
+                lon2 = radians(all_coords['wgs84'][0])
+
+                # Haversine 公式计算水平距离
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+                c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                horizontal_distance = 6371000 * c  # 地球半径 6371km
+
+                # 计算垂直距离
+                elev1 = prev_point_data.get('elevation') or 0
+                elev2 = elevation or 0
+                vertical_distance = elev2 - elev1
+
+                # 3D 距离
+                distance_from_prev = sqrt(horizontal_distance ** 2 + vertical_distance ** 2)
+                total_distance += distance_from_prev
+
+                # 如果 CSV 没有提供速度，计算速度
+                if speed is None:
+                    speed = self._calculate_speed(point_time, prev_point_data['time'], distance_from_prev)
+
+                # 如果 CSV 没有提供方向角，计算方向角
+                if bearing is None:
+                    bearing = self._calculate_bearing(
+                        prev_point_data['latitude_wgs84'],
+                        prev_point_data['longitude_wgs84'],
+                        all_coords['wgs84'][1],
+                        all_coords['wgs84'][0]
+                    )
+
+            point_data = {
+                'point_index': idx,
+                'time': point_time,
+                'latitude_wgs84': all_coords['wgs84'][1],
+                'longitude_wgs84': all_coords['wgs84'][0],
+                'latitude_gcj02': all_coords['gcj02'][1],
+                'longitude_gcj02': all_coords['gcj02'][0],
+                'latitude_bd09': all_coords['bd09'][1],
+                'longitude_bd09': all_coords['bd09'][0],
+                'elevation': elevation,
+                'speed': speed,
+                'bearing': bearing if idx > 0 else None,  # 第一个点没有方位角
+            }
+            points_data.append(point_data)
+            prev_point_data = point_data
+
+        if not points_data:
+            raise ValueError("CSV 文件中没有有效的轨迹点")
+
+        # 计算时长（秒）
+        duration = 0
+        if start_time and end_time:
+            duration = int((end_time - start_time).total_seconds())
+
+        # 创建轨迹记录，带审计字段
+        track_obj = Track(
+            user_id=user.id,
+            name=name,
+            description=description,
+            original_filename=filename,
+            original_crs=original_crs,
+            distance=round(total_distance, 2),
+            duration=duration,
+            elevation_gain=round(elevation_gain, 2),
+            elevation_loss=round(elevation_loss, 2),
+            start_time=start_time,
+            end_time=end_time,
+            has_area_info=False,
+            has_road_info=False,
+            created_by=user.id,
+            updated_by=user.id,
+            is_valid=True,
+        )
+        db.add(track_obj)
+        await db.flush()  # 获取 track_id
+
+        # 批量创建轨迹点
+        insert_values = []
+        for point_data in points_data:
+            insert_values.append({
+                "track_id": track_obj.id,
+                "point_index": point_data["point_index"],
+                "time": point_data["time"],
+                "latitude_wgs84": point_data["latitude_wgs84"],
+                "longitude_wgs84": point_data["longitude_wgs84"],
+                "latitude_gcj02": point_data["latitude_gcj02"],
+                "longitude_gcj02": point_data["longitude_gcj02"],
+                "latitude_bd09": point_data["latitude_bd09"],
+                "longitude_bd09": point_data["longitude_bd09"],
+                "elevation": point_data["elevation"],
+                "speed": point_data["speed"],
+                "bearing": point_data["bearing"],
+                "province": None,
+                "city": None,
+                "district": None,
+                "province_en": None,
+                "city_en": None,
+                "district_en": None,
+                "road_name": None,
+                "road_number": None,
+                "road_name_en": None,
+                "created_by": user.id,
+                "updated_by": user.id,
+                "is_valid": True,
+            })
+
+        # 分批插入，每批 500 条
+        batch_size = 500
+        for i in range(0, len(insert_values), batch_size):
+            batch = insert_values[i:i + batch_size]
+            try:
+                await db.execute(
+                    TrackPoint.__table__.insert().values(batch)
+                )
+            except Exception as e:
+                logger.error(f"Error inserting batch {i//batch_size}: {e}")
+                raise
+
+        await db.commit()
+        await db.refresh(track_obj)
+
+        # 异步填充地理信息（如果启用）
+        if fill_geocoding:
+            task = asyncio.create_task(
+                self.fill_geocoding_info(db, track_obj.id, user.id)
+            )
+            task.add_done_callback(self._background_tasks.discard)
+            self._background_tasks.add(task)
+
+        return track_obj
+
+    async def _create_from_csv_project_format(
+        self,
+        db: AsyncSession,
+        user: User,
+        filename: str,
+        rows: list,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Track:
+        """
+        从本项目导出的 CSV 格式创建轨迹
+
+        支持的字段：
+        - index, time_date, time_time, time_microsecond, elapsed_time
+        - longitude_wgs84, latitude_wgs84
+        - longitude_gcj02, latitude_gcj02
+        - longitude_bd09, latitude_bd09
+        - elevation, distance, course, speed
+        - province, city, area, province_en, city_en, area_en
+        - road_num, road_name, road_name_en, memo
+        """
+        from datetime import datetime
+
+        # 计算统计信息
+        total_distance = 0
+        elevation_gain = 0
+        elevation_loss = 0
+        prev_elevation = None
+        start_time = None
+        end_time = None
+
+        points_data = []
+        prev_point_data = None
+
+        # 用于检测是否有地理信息
+        has_area_info = False
+        has_road_info = False
+
+        for idx, row in enumerate(rows):
+            # 解析时间
+            point_time = None
+            time_date = row.get('time_date', '').strip()
+            time_time = row.get('time_time', '').strip()
+
+            if time_date and time_time:
+                try:
+                    # 格式: 2026/01/29 和 14:20:28
+                    time_str = f"{time_date} {time_time}"
+                    point_time = datetime.strptime(time_str, "%Y/%m/%d %H:%M:%S")
+
+                    # 解析微秒
+                    time_microsecond = row.get('time_microsecond', '').strip()
+                    if time_microsecond and time_microsecond.isdigit():
+                        point_time = point_time.replace(microsecond=int(time_microsecond))
+
+                    if start_time is None:
+                        start_time = point_time
+                    end_time = point_time
+                except ValueError as e:
+                    logger.warning(f"无法解析时间 '{time_date} {time_time}': {e}")
+
+            # 解析多坐标系坐标
+            try:
+                lon_wgs84 = self._parse_float(row.get('longitude_wgs84'))
+                lat_wgs84 = self._parse_float(row.get('latitude_wgs84'))
+                lon_gcj02 = self._parse_float(row.get('longitude_gcj02'))
+                lat_gcj02 = self._parse_float(row.get('latitude_gcj02'))
+                lon_bd09 = self._parse_float(row.get('longitude_bd09'))
+                lat_bd09 = self._parse_float(row.get('latitude_bd09'))
+
+                # 如果 WGS84 坐标缺失，尝试从其他坐标系转换
+                if lon_wgs84 is None or lat_wgs84 is None:
+                    if lon_gcj02 is not None and lat_gcj02 is not None:
+                        # 从 GCJ02 转换到 WGS84
+                        from app.gpxutil_wrapper.coord_transform import gcj02_to_wgs84
+                        lon_wgs84, lat_wgs84 = gcj02_to_wgs84(lon_gcj02, lat_gcj02)
+                    elif lon_bd09 is not None and lat_bd09 is not None:
+                        # 从 BD09 转换到 WGS84
+                        from app.gpxutil_wrapper.coord_transform import bd09_to_wgs84
+                        lon_wgs84, lat_wgs84 = bd09_to_wgs84(lon_bd09, lat_bd09)
+                    else:
+                        raise ValueError("缺少有效坐标")
+
+                # 如果其他坐标系缺失，从 WGS84 转换
+                if lon_gcj02 is None or lat_gcj02 is None:
+                    from app.gpxutil_wrapper.coord_transform import wgs84_to_gcj02
+                    lon_gcj02, lat_gcj02 = wgs84_to_gcj02(lon_wgs84, lat_wgs84)
+
+                if lon_bd09 is None or lat_bd09 is None:
+                    from app.gpxutil_wrapper.coord_transform import wgs84_to_bd09
+                    lon_bd09, lat_bd09 = wgs84_to_bd09(lon_wgs84, lat_wgs84)
+
+            except (ValueError, TypeError) as e:
+                logger.warning(f"跳过无效坐标的行 {idx}: {e}")
+                continue
+
+            # 解析海拔
+            elevation = self._parse_float(row.get('elevation'))
+
+            # 计算海拔变化
+            if elevation is not None and prev_elevation is not None:
+                diff = elevation - prev_elevation
+                if diff > 0:
+                    elevation_gain += diff
+                else:
+                    elevation_loss += abs(diff)
+            prev_elevation = elevation
+
+            # 解析速度和方向角（从 CSV 中读取）
+            speed = self._parse_float(row.get('speed'))
+            bearing = self._parse_float(row.get('course'))  # course 即 bearing
+
+            # 解析地理信息
+            province = row.get('province', '').strip() or None
+            city = row.get('city', '').strip() or None
+            district = row.get('area', '').strip() or None  # area 对应 district
+            province_en = row.get('province_en', '').strip() or None
+            city_en = row.get('city_en', '').strip() or None
+            district_en = row.get('area_en', '').strip() or None
+            road_number = row.get('road_num', '').strip() or None
+            road_name = row.get('road_name', '').strip() or None
+            road_name_en = row.get('road_name_en', '').strip() or None
+
+            # 检测是否有地理信息
+            if province or city or district or province_en or city_en or district_en:
+                has_area_info = True
+            if road_number or road_name or road_name_en:
+                has_road_info = True
+
+            # 计算距离和速度（如果未提供）
+            distance_from_prev = 0
+            if idx > 0 and prev_point_data:
+                # 使用 WGS84 坐标计算 3D 距离
+                from math import sqrt, radians, sin, cos, atan2
+
+                lat1 = radians(prev_point_data['latitude_wgs84'])
+                lon1 = radians(prev_point_data['longitude_wgs84'])
+                lat2 = radians(lat_wgs84)
+                lon2 = radians(lon_wgs84)
+
+                # Haversine 公式计算水平距离
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+                c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                horizontal_distance = 6371000 * c  # 地球半径 6371km
+
+                # 计算垂直距离
+                elev1 = prev_point_data.get('elevation') or 0
+                elev2 = elevation or 0
+                vertical_distance = elev2 - elev1
+
+                # 3D 距离
+                distance_from_prev = sqrt(horizontal_distance ** 2 + vertical_distance ** 2)
+                total_distance += distance_from_prev
+
+                # 如果 CSV 没有提供速度，计算速度
+                if speed is None:
+                    speed = self._calculate_speed(point_time, prev_point_data['time'], distance_from_prev)
+
+                # 如果 CSV 没有提供方向角，计算方向角
+                if bearing is None:
+                    bearing = self._calculate_bearing(
+                        prev_point_data['latitude_wgs84'],
+                        prev_point_data['longitude_wgs84'],
+                        lat_wgs84,
+                        lon_wgs84
+                    )
+
+            # 获取索引
+            point_index = idx
+            if 'index' in row and row['index']:
+                try:
+                    point_index = int(row['index'])
+                except ValueError:
+                    pass
+
+            point_data = {
+                'point_index': point_index,
+                'time': point_time,
+                'latitude_wgs84': lat_wgs84,
+                'longitude_wgs84': lon_wgs84,
+                'latitude_gcj02': lat_gcj02,
+                'longitude_gcj02': lon_gcj02,
+                'latitude_bd09': lat_bd09,
+                'longitude_bd09': lon_bd09,
+                'elevation': elevation,
+                'speed': speed,
+                'bearing': bearing if idx > 0 else None,  # 第一个点没有方位角
+                'province': province,
+                'city': city,
+                'district': district,
+                'province_en': province_en,
+                'city_en': city_en,
+                'district_en': district_en,
+                'road_number': road_number,
+                'road_name': road_name,
+                'road_name_en': road_name_en,
+            }
+            points_data.append(point_data)
+            prev_point_data = point_data
+
+        if not points_data:
+            raise ValueError("CSV 文件中没有有效的轨迹点")
+
+        # 计算时长（秒）
+        duration = 0
+        if start_time and end_time:
+            duration = int((end_time - start_time).total_seconds())
+
+        # 确定原始坐标系（使用 WGS84 作为默认，因为导出包含所有坐标系）
+        original_crs = 'wgs84'
+
+        # 创建轨迹记录，带审计字段
+        track_obj = Track(
+            user_id=user.id,
+            name=name,
+            description=description,
+            original_filename=filename,
+            original_crs=original_crs,
+            distance=round(total_distance, 2),
+            duration=duration,
+            elevation_gain=round(elevation_gain, 2),
+            elevation_loss=round(elevation_loss, 2),
+            start_time=start_time,
+            end_time=end_time,
+            has_area_info=has_area_info,
+            has_road_info=has_road_info,
+            created_by=user.id,
+            updated_by=user.id,
+            is_valid=True,
+        )
+        db.add(track_obj)
+        await db.flush()  # 获取 track_id
+
+        # 批量创建轨迹点
+        insert_values = []
+        for point_data in points_data:
+            insert_values.append({
+                "track_id": track_obj.id,
+                "point_index": point_data["point_index"],
+                "time": point_data["time"],
+                "latitude_wgs84": point_data["latitude_wgs84"],
+                "longitude_wgs84": point_data["longitude_wgs84"],
+                "latitude_gcj02": point_data["latitude_gcj02"],
+                "longitude_gcj02": point_data["longitude_gcj02"],
+                "latitude_bd09": point_data["latitude_bd09"],
+                "longitude_bd09": point_data["longitude_bd09"],
+                "elevation": point_data["elevation"],
+                "speed": point_data["speed"],
+                "bearing": point_data["bearing"],
+                "province": point_data.get("province"),
+                "city": point_data.get("city"),
+                "district": point_data.get("district"),
+                "province_en": point_data.get("province_en"),
+                "city_en": point_data.get("city_en"),
+                "district_en": point_data.get("district_en"),
+                "road_name": point_data.get("road_name"),
+                "road_number": point_data.get("road_number"),
+                "road_name_en": point_data.get("road_name_en"),
+                "created_by": user.id,
+                "updated_by": user.id,
+                "is_valid": True,
+            })
+
+        # 分批插入，每批 500 条
+        batch_size = 500
+        for i in range(0, len(insert_values), batch_size):
+            batch = insert_values[i:i + batch_size]
+            try:
+                await db.execute(
+                    TrackPoint.__table__.insert().values(batch)
+                )
+            except Exception as e:
+                logger.error(f"Error inserting batch {i//batch_size}: {e}")
+                raise
+
+        await db.commit()
+        await db.refresh(track_obj)
+
+        return track_obj
+
+    def _parse_float(self, value: Optional[str]) -> Optional[float]:
+        """安全地解析浮点数"""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    async def create_from_kml(
+        self,
+        db: AsyncSession,
+        user: User,
+        filename: str,
+        kml_content: str,
+        name: str,
+        description: Optional[str] = None,
+        original_crs: CoordinateType = 'wgs84',
+        convert_to: Optional[CoordinateType] = None,
+        fill_geocoding: bool = False,
+    ) -> Track:
+        """
+        从两步路 KML 内容创建轨迹
+
+        支持的 KML 格式（两步路使用的 Google gx:Track 扩展）：
+        - gx:coord: 经度 纬度 海拔
+        - when: ISO 8601 格式时间
+
+        Args:
+            db: 数据库会话
+            user: 用户对象
+            filename: 原始文件名
+            kml_content: KML 文件内容
+            name: 轨迹名称
+            description: 轨迹描述
+            original_crs: 原始坐标系
+            convert_to: 转换到目标坐标系
+            fill_geocoding: 是否填充行政区划和道路信息
+
+        Returns:
+            创建的轨迹对象
+        """
+        from lxml import etree
+
+        # 解析 KML
+        try:
+            root = etree.fromstring(kml_content.encode('utf-8'))
+        except etree.ParseError as e:
+            raise ValueError(f"无法解析 KML 文件: {e}")
+
+        # 定义命名空间
+        ns = {
+            'kml': 'http://www.opengis.net/kml/2.2',
+            'gx': 'http://www.google.com/kml/ext/2.2'
+        }
+
+        # 查找 gx:Track 元素（两步路"轨迹"格式，带时间）
+        tracks = root.xpath('.//gx:Track', namespaces=ns)
+        if tracks:
+            # 使用第一个轨迹
+            track_element = tracks[0]
+
+            # 提取坐标和时间
+            coord_elements = track_element.xpath('gx:coord', namespaces=ns)
+            when_elements = track_element.xpath('kml:when', namespaces=ns)
+
+            if not coord_elements:
+                raise ValueError("KML 文件中没有坐标数据")
+
+            # 配对坐标和时间
+            # 两者按索引顺序配对，取较小值防止索引越界
+            count = min(len(coord_elements), len(when_elements))
+        else:
+            # 检查是否是两步路"路径"格式（LineString，无时间）
+            linestrings = root.xpath('.//kml:LineString', namespaces=ns)
+            if linestrings:
+                raise ValueError(
+                    "检测到这是两步路的“路径”格式（无时间信息）。"
+                    "请在两步路应用中导出时选择“KML 格式（轨迹）”，而不是“KML 格式（路径）”。"
+                    "轨迹格式包含完整的时间信息，可用于记录运动轨迹。"
+                )
+
+            # 检查是否有标准 KML LineString（非两步路）
+            linestrings = root.xpath('.//LineString')
+            if linestrings:
+                raise ValueError(
+                    "KML 文件使用 LineString 格式，该格式不包含时间信息。"
+                    "请使用包含时间数据的轨迹文件（如 GPX 或两步路“KML 格式（轨迹）”格式）。"
+                )
+
+            raise ValueError("KML 文件中没有找到轨迹数据。支持格式：两步路“KML 格式（轨迹）”(KML 中需包含 gx:Track)、GPX")
+
+        # 计算统计信息
+        total_distance = 0
+        elevation_gain = 0
+        elevation_loss = 0
+        prev_elevation = None
+        start_time = None
+        end_time = None
+
+        points_data = []
+        prev_point_data = None
+
+        for idx in range(count):
+            # 解析坐标 (格式: longitude latitude elevation)
+            coord_text = coord_elements[idx].text.strip()
+            if not coord_text:
+                continue
+
+            coord_parts = coord_text.split()
+            if len(coord_parts) < 2:
+                logger.warning(f"跳过无效坐标的行 {idx}: {coord_text}")
+                continue
+
+            try:
+                lon = float(coord_parts[0])
+                lat = float(coord_parts[1])
+                elevation = float(coord_parts[2]) if len(coord_parts) > 2 else None
+            except ValueError as e:
+                logger.warning(f"跳过无效坐标的行 {idx}: {e}")
+                continue
+
+            # 解析时间
+            point_time = None
+            if idx < len(when_elements):
+                time_str = when_elements[idx].text.strip()
+                if time_str:
+                    try:
+                        # ISO 8601 格式，如 2026-01-09T06:53:49Z
+                        if time_str.endswith('Z'):
+                            time_str = time_str[:-1] + '+00:00'
+                        point_time = datetime.fromisoformat(time_str)
+                        # 移除时区信息（与数据库保持一致）
+                        point_time = point_time.replace(tzinfo=None)
+
+                        if start_time is None:
+                            start_time = point_time
+                        end_time = point_time
+                    except ValueError as e:
+                        logger.warning(f"无法解析时间 '{time_str}': {e}")
+
+            # 坐标转换
+            all_coords = convert_point_to_all(lon, lat, original_crs)
+
+            # 海拔变化
+            if elevation is not None and prev_elevation is not None:
+                diff = elevation - prev_elevation
+                if diff > 0:
+                    elevation_gain += diff
+                else:
+                    elevation_loss += abs(diff)
+            prev_elevation = elevation
+
+            # 计算距离和速度
+            distance_from_prev = 0
+            speed = None
+            if idx > 0 and prev_point_data:
+                # 使用 WGS84 坐标计算 3D 距离
+                from math import sqrt, radians, sin, cos, atan2
+
+                lat1 = radians(prev_point_data['latitude_wgs84'])
+                lon1 = radians(prev_point_data['longitude_wgs84'])
+                lat2 = radians(all_coords['wgs84'][1])
+                lon2 = radians(all_coords['wgs84'][0])
+
+                # Haversine 公式计算水平距离
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+                c = 2 * atan2(sqrt(a), sqrt(1 - a))
+                horizontal_distance = 6371000 * c  # 地球半径 6371km
+
+                # 计算垂直距离
+                elev1 = prev_point_data.get('elevation') or 0
+                elev2 = elevation or 0
+                vertical_distance = elev2 - elev1
+
+                # 3D 距离
+                distance_from_prev = sqrt(horizontal_distance ** 2 + vertical_distance ** 2)
+                total_distance += distance_from_prev
+
+                # 计算速度
+                speed = self._calculate_speed(point_time, prev_point_data['time'], distance_from_prev)
+
+                # 计算方位角
+                bearing = self._calculate_bearing(
+                    prev_point_data['latitude_wgs84'],
+                    prev_point_data['longitude_wgs84'],
+                    all_coords['wgs84'][1],
+                    all_coords['wgs84'][0]
+                )
+
+            point_data = {
+                'point_index': idx,
+                'time': point_time,
+                'latitude_wgs84': all_coords['wgs84'][1],
+                'longitude_wgs84': all_coords['wgs84'][0],
+                'latitude_gcj02': all_coords['gcj02'][1],
+                'longitude_gcj02': all_coords['gcj02'][0],
+                'latitude_bd09': all_coords['bd09'][1],
+                'longitude_bd09': all_coords['bd09'][0],
+                'elevation': elevation,
+                'speed': speed,
+                'bearing': bearing if idx > 0 else None,  # 第一个点没有方位角
+            }
+            points_data.append(point_data)
+            prev_point_data = point_data
+
+        if not points_data:
+            raise ValueError("KML 文件中没有有效的轨迹点")
+
+        # 计算时长（秒）
+        duration = 0
+        if start_time and end_time:
+            duration = int((end_time - start_time).total_seconds())
+
+        # 创建轨迹记录，带审计字段
+        track_obj = Track(
+            user_id=user.id,
+            name=name,
+            description=description,
+            original_filename=filename,
+            original_crs=original_crs,
+            distance=round(total_distance, 2),
+            duration=duration,
+            elevation_gain=round(elevation_gain, 2),
+            elevation_loss=round(elevation_loss, 2),
+            start_time=start_time,
+            end_time=end_time,
+            has_area_info=False,
+            has_road_info=False,
+            created_by=user.id,
+            updated_by=user.id,
+            is_valid=True,
+        )
+        db.add(track_obj)
+        await db.flush()  # 获取 track_id
+
+        # 批量创建轨迹点
+        insert_values = []
+        for point_data in points_data:
+            insert_values.append({
+                "track_id": track_obj.id,
+                "point_index": point_data["point_index"],
+                "time": point_data["time"],
+                "latitude_wgs84": point_data["latitude_wgs84"],
+                "longitude_wgs84": point_data["longitude_wgs84"],
+                "latitude_gcj02": point_data["latitude_gcj02"],
+                "longitude_gcj02": point_data["longitude_gcj02"],
+                "latitude_bd09": point_data["latitude_bd09"],
+                "longitude_bd09": point_data["longitude_bd09"],
+                "elevation": point_data["elevation"],
+                "speed": point_data["speed"],
+                "bearing": point_data["bearing"],
+                "province": None,
+                "city": None,
+                "district": None,
+                "province_en": None,
+                "city_en": None,
+                "district_en": None,
+                "road_name": None,
+                "road_number": None,
+                "road_name_en": None,
+                "created_by": user.id,
+                "updated_by": user.id,
+                "is_valid": True,
+            })
+
+        # 分批插入，每批 500 条
+        batch_size = 500
+        for i in range(0, len(insert_values), batch_size):
+            batch = insert_values[i:i + batch_size]
+            try:
+                await db.execute(
+                    TrackPoint.__table__.insert().values(batch)
+                )
+            except Exception as e:
+                logger.error(f"Error inserting batch {i//batch_size}: {e}")
+                raise
+
+        await db.commit()
+        await db.refresh(track_obj)
+
+        # 异步填充地理信息（如果启用）
+        if fill_geocoding:
+            task = asyncio.create_task(
+                self.fill_geocoding_info(db, track_obj.id, user.id)
+            )
+            task.add_done_callback(self._background_tasks.discard)
+            self._background_tasks.add(task)
+
+        return track_obj
+
+    async def create_from_xlsx(
+        self,
+        db: AsyncSession,
+        user: User,
+        filename: str,
+        xlsx_content: bytes,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Track:
+        """
+        从本项目导出的 XLSX 文件创建轨迹
+
+        支持的字段：
+        - index, time_date, time_time, time_microsecond, elapsed_time
+        - longitude_wgs84, latitude_wgs84
+        - longitude_gcj02, latitude_gcj02
+        - longitude_bd09, latitude_bd09
+        - elevation, distance, course, speed
+        - province, city, area, province_en, city_en, area_en
+        - road_num, road_name, road_name_en, memo
+
+        Args:
+            db: 数据库会话
+            user: 用户对象
+            filename: 原始文件名
+            xlsx_content: XLSX 文件二进制内容
+            name: 轨迹名称
+            description: 轨迹描述
+
+        Returns:
+            创建的轨迹对象
+        """
+        from openpyxl import load_workbook
+        from io import BytesIO
+
+        # 读取 XLSX 文件
+        wb = load_workbook(BytesIO(xlsx_content), read_only=True)
+        ws = wb.active
+
+        if ws is None:
+            raise ValueError("XLSX 文件格式错误：没有活动工作表")
+
+        # 获取表头
+        headers = []
+        for cell in ws[1]:
+            headers.append(cell.value)
+
+        if not headers or headers[0] is None:
+            raise ValueError("XLSX 文件格式错误：缺少表头")
+
+        # 检查是否是本项目导出格式
+        if 'longitude_wgs84' not in headers or 'latitude_wgs84' not in headers:
+            raise ValueError("XLSX 文件格式不支持：缺少必需的坐标字段 (longitude_wgs84, latitude_wgs84)")
+
+        # 构建字典列表（类似 CSV DictReader 的格式）
+        rows = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if not row or all(v is None for v in row):
+                continue
+
+            row_dict = {}
+            for col_idx, header in enumerate(headers):
+                if header and col_idx < len(row):
+                    row_dict[header] = str(row[col_idx]) if row[col_idx] is not None else ""
+            rows.append(row_dict)
+
+        if not rows:
+            raise ValueError("XLSX 文件中没有数据")
+
+        # 使用与 CSV 相同的解析逻辑
+        return await self._create_from_csv_project_format(
+            db, user, filename, rows, name, description
+        )
+
+    async def change_original_crs(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+        new_original_crs: CoordinateType,
+    ) -> Track:
+        """
+        更改轨迹的原始坐标系，并重新计算所有坐标系
+
+        场景：用户上传时选错了坐标系，现在要更正。
+        例如：上传时选了 WGS84，但实际数据是 GCJ02。
+
+        处理逻辑：
+        - 从旧的 original_crs 对应字段读取坐标（这些数据实际是新坐标系的坐标）
+        - 使用新坐标系重新计算所有坐标系的坐标
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+            user_id: 用户 ID
+            new_original_crs: 新的原始坐标系（实际数据的坐标系）
+
+        Returns:
+            更新后的轨迹对象
+        """
+        # 获取轨迹
+        track = await self.get_by_id(db, track_id, user_id)
+        if not track:
+            raise ValueError("轨迹不存在")
+
+        old_original_crs = track.original_crs
+
+        # 如果坐标系相同，直接返回
+        if old_original_crs == new_original_crs:
+            return track
+
+        # 获取所有轨迹点
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.point_index)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            raise ValueError("轨迹没有数据点")
+
+        # 重新计算所有坐标系
+        # 从旧的 original_crs 对应字段读取坐标，这些数据实际是新坐标系的坐标
+        for point in points:
+            # 从旧坐标系字段读取原始坐标（这些数据实际是新坐标系的坐标）
+            if old_original_crs == 'wgs84':
+                actual_lon = point.longitude_wgs84
+                actual_lat = point.latitude_wgs84
+            elif old_original_crs == 'gcj02':
+                actual_lon = point.longitude_gcj02
+                actual_lat = point.latitude_gcj02
+            elif old_original_crs == 'bd09':
+                actual_lon = point.longitude_bd09
+                actual_lat = point.latitude_bd09
+            else:
+                raise ValueError(f"不支持的坐标系: {old_original_crs}")
+
+            if actual_lon is None or actual_lat is None:
+                logger.warning(f"点 {point.point_index} 缺少坐标数据，跳过")
+                continue
+
+            # 使用新坐标系重新计算所有坐标系
+            all_coords = convert_point_to_all(actual_lon, actual_lat, new_original_crs)
+
+            # 更新坐标
+            point.longitude_wgs84 = all_coords['wgs84'][0]
+            point.latitude_wgs84 = all_coords['wgs84'][1]
+            point.longitude_gcj02 = all_coords['gcj02'][0]
+            point.latitude_gcj02 = all_coords['gcj02'][1]
+            point.longitude_bd09 = all_coords['bd09'][0]
+            point.latitude_bd09 = all_coords['bd09'][1]
+
+            point.updated_by = user_id
+
+        # 更新轨迹的原始坐标系
+        track.original_crs = new_original_crs
+        track.updated_by = user_id
+
+        await db.commit()
+        await db.refresh(track)
+
+        logger.info(f"Track {track_id}: changed original_crs to {new_original_crs}, updated {len(points)} points")
+
+        return track
 
 
 track_service = TrackService()

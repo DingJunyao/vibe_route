@@ -39,12 +39,12 @@ async def upload_track(
     """
     上传轨迹
 
-    - file: GPX 文件
+    - file: GPX、CSV、XLSX、KML 或 KMZ 文件（支持 GPS Logger CSV 格式、本项目 CSV/XLSX 导出格式、两步路 KML 格式）
     - name: 轨迹名称
     - description: 轨迹描述（可选）
-    - original_crs: 原始坐标系 (wgs84, gcj02, bd09)
-    - convert_to: 转换到目标坐标系（可选）
-    - fill_geocoding: 是否填充行政区划和道路信息
+    - original_crs: 原始坐标系 (wgs84, gcj02, bd09)，仅用于 GPX、GPS Logger CSV 和 KML
+    - convert_to: 转换到目标坐标系（可选），仅用于 GPX、GPS Logger CSV 和 KML
+    - fill_geocoding: 是否填充行政区划和道路信息，仅用于 GPX、GPS Logger CSV 和 KML
     """
     # 验证坐标系
     valid_crs = ['wgs84', 'gcj02', 'bd09']
@@ -61,37 +61,131 @@ async def upload_track(
         )
 
     # 验证文件类型
-    if not file.filename or not file.filename.lower().endswith('.gpx'):
+    if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="只支持 GPX 文件格式",
+            detail="文件名不能为空",
+        )
+
+    file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
+    if file_ext not in ('gpx', 'csv', 'xlsx', 'kml', 'kmz'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="只支持 GPX、CSV、XLSX、KML 或 KMZ 文件格式",
         )
 
     # 读取文件内容
     content = await file.read()
 
-    # 尝试解析 GPX
-    try:
-        gpx_content = content.decode('utf-8')
-    except UnicodeDecodeError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="无法解析 GPX 文件，请确保文件编码为 UTF-8",
-        )
-
     # 创建轨迹
     try:
-        track = await track_service.create_from_gpx(
-            db=db,
-            user=current_user,
-            filename=file.filename,
-            gpx_content=gpx_content,
-            name=name,
-            description=description,
-            original_crs=original_crs,
-            convert_to=convert_to,
-            fill_geocoding=fill_geocoding,
-        )
+        if file_ext == 'gpx':
+            # 解析 GPX
+            try:
+                gpx_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="无法解析 GPX 文件，请确保文件编码为 UTF-8",
+                )
+
+            track = await track_service.create_from_gpx(
+                db=db,
+                user=current_user,
+                filename=file.filename,
+                gpx_content=gpx_content,
+                name=name,
+                description=description,
+                original_crs=original_crs,
+                convert_to=convert_to,
+                fill_geocoding=fill_geocoding,
+            )
+        elif file_ext == 'csv':
+            # 解析 CSV
+            try:
+                csv_content = content.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="无法解析 CSV 文件，请确保文件编码为 UTF-8",
+                )
+
+            track = await track_service.create_from_csv(
+                db=db,
+                user=current_user,
+                filename=file.filename,
+                csv_content=csv_content,
+                name=name,
+                description=description,
+                original_crs=original_crs,
+                convert_to=convert_to,
+                fill_geocoding=fill_geocoding,
+            )
+        elif file_ext == 'xlsx':
+            # 解析 XLSX（本项目导出格式）
+            track = await track_service.create_from_xlsx(
+                db=db,
+                user=current_user,
+                filename=file.filename,
+                xlsx_content=content,
+                name=name,
+                description=description,
+            )
+        elif file_ext == 'kmz':
+            # 解析 KMZ (ZIP 压缩的 KML)
+            import zipfile
+            from io import BytesIO
+
+            try:
+                with zipfile.ZipFile(BytesIO(content)) as zf:
+                    # 查找 KML 文件
+                    kml_files = [f for f in zf.namelist() if f.endswith('.kml')]
+                    if not kml_files:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="KMZ 文件中没有找到 KML 文件",
+                        )
+
+                    # 读取第一个 KML 文件
+                    kml_content = zf.read(kml_files[0]).decode('utf-8')
+            except zipfile.BadZipFile:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="KMZ 文件格式错误",
+                )
+
+            track = await track_service.create_from_kml(
+                db=db,
+                user=current_user,
+                filename=file.filename,
+                kml_content=kml_content,
+                name=name,
+                description=description,
+                original_crs=original_crs,
+                convert_to=convert_to,
+                fill_geocoding=fill_geocoding,
+            )
+        else:  # kml
+            # 解析 KML
+            try:
+                kml_content = content.decode('utf-8')
+            except UnicodeDecodeError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="无法解析 KML 文件，请确保文件编码为 UTF-8",
+                )
+
+            track = await track_service.create_from_kml(
+                db=db,
+                user=current_user,
+                filename=file.filename,
+                kml_content=kml_content,
+                name=name,
+                description=description,
+                original_crs=original_crs,
+                convert_to=convert_to,
+                fill_geocoding=fill_geocoding,
+            )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -317,6 +411,46 @@ async def fill_track_geocoding(
     )
 
     return {"message": "开始填充行政区划和道路信息", "track_id": track_id}
+
+
+@router.post("/{track_id}/change-crs", response_model=TrackResponse)
+async def change_track_crs(
+    track_id: int,
+    original_crs: str = Form(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    更改轨迹的原始坐标系，并重新计算所有坐标系
+
+    - original_crs: 新的原始坐标系 (wgs84, gcj02, bd09)
+    - 会重新计算所有坐标系的坐标并保存
+    """
+    # 验证坐标系
+    valid_crs = ['wgs84', 'gcj02', 'bd09']
+    if original_crs not in valid_crs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"无效的坐标系，可选值: {', '.join(valid_crs)}",
+        )
+
+    track = await track_service.get_by_id(db, track_id, current_user.id)
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在",
+        )
+
+    try:
+        updated_track = await track_service.change_original_crs(
+            db, track_id, current_user.id, original_crs
+        )
+        return TrackResponse.model_validate(updated_track)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
 
 
 @router.get("/{track_id}/fill-progress")
@@ -561,15 +695,18 @@ async def get_track_regions(
 @router.get("/{track_id}/export")
 async def export_track_points(
     track_id: int,
-    format: str = Query("csv", pattern="^(csv|xlsx)$"),
+    format: str = Query("csv", pattern="^(csv|xlsx|kml)$"),
+    crs: Optional[str] = Query(None, description="坐标系 (仅用于 kml 格式)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    导出轨迹点数据为 CSV 或 XLSX 格式
+    导出轨迹点数据为 CSV、XLSX 或 KML 格式
 
-    - format: 导出格式 (csv 或 xlsx)
+    - format: 导出格式 (csv、xlsx 或 kml)
+    - crs: 坐标系 (仅用于 kml 格式，可选 original/wgs84/gcj02/bd09)
     - CSV 格式使用 UTF-8 编码带 BOM，确保 Excel 正确显示中文
+    - KML 格式使用 Google gx:Track 扩展，支持两步路导入
     - 导出文件包含所有轨迹点的详细数据，便于编辑行政区划和道路信息
     """
     from fastapi.responses import Response
@@ -597,7 +734,7 @@ async def export_track_points(
                     "Content-Disposition": encode_filename(filename),
                 },
             )
-        else:  # xlsx
+        elif format == "xlsx":
             filename, content = await track_service.export_points_to_xlsx(
                 db, track_id, current_user.id
             )
@@ -605,6 +742,18 @@ async def export_track_points(
             return Response(
                 content=content,
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={
+                    "Content-Disposition": encode_filename(filename),
+                },
+            )
+        else:  # kml
+            filename, content = await track_service.export_points_to_kml(
+                db, track_id, current_user.id, crs
+            )
+            logger.info(f"KML export successful: {filename}")
+            return Response(
+                content=content,
+                media_type="application/vnd.google-earth.kml+xml",
                 headers={
                     "Content-Disposition": encode_filename(filename),
                 },

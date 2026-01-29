@@ -19,23 +19,23 @@
           @submit.prevent="handleSubmit"
         >
           <!-- 文件上传 -->
-          <el-form-item label="GPX 文件" prop="file" required>
+          <el-form-item label="轨迹文件" prop="file" required>
             <el-upload
               ref="uploadRef"
               :auto-upload="false"
               :limit="1"
               :on-change="handleFileChange"
               :on-remove="handleFileRemove"
-              accept=".gpx"
+              accept=".gpx,.csv,.xlsx,.kml,.kmz"
               drag
             >
               <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
               <div class="el-upload__text">
-                将 GPX 文件拖到此处，或<em>点击上传</em>
+                将 GPX、CSV、XLSX、KML 或 KMZ 文件拖到此处，或<em>点击上传</em>
               </div>
               <template #tip>
                 <div class="el-upload__tip">
-                  只支持 GPX 格式的轨迹文件
+                  支持 GPX、GPS Logger CSV、本项目导出 CSV/XLSX、两步路 KML/KMZ 格式的轨迹文件
                 </div>
               </template>
             </el-upload>
@@ -138,7 +138,7 @@ const form = reactive({
 })
 
 const rules: FormRules = {
-  file: [{ required: true, message: '请选择 GPX 文件', trigger: 'change' }],
+  file: [{ required: true, message: '请选择轨迹文件（GPX、CSV、XLSX、KML 或 KMZ）', trigger: 'change' }],
   name: [
     { required: true, message: '请输入轨迹名称', trigger: 'blur' },
     { min: 1, max: 200, message: '轨迹名称长度应为1-200个字符', trigger: 'blur' },
@@ -150,7 +150,7 @@ function handleFileChange(file: UploadFile) {
     form.file = file.raw
     // 如果名称为空，使用文件名作为默认名称
     if (!form.name && file.name) {
-      form.name = file.name.replace(/\.gpx$/i, '')
+      form.name = file.name.replace(/\.(gpx|csv|xlsx|kml|kmz)$/i, '')
     }
   }
 }
@@ -166,7 +166,7 @@ async function handleSubmit() {
     if (!valid) return
 
     if (!form.file) {
-      ElMessage.warning('请选择要上传的 GPX 文件')
+      ElMessage.warning('请选择要上传的轨迹文件')
       return
     }
 
