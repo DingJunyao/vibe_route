@@ -1,6 +1,7 @@
 <template>
   <div class="tencent-map-container">
     <div ref="mapContainer" class="tencent-map"></div>
+    <div ref="customTooltip" class="custom-tooltip"></div>
   </div>
 </template>
 
@@ -160,11 +161,12 @@ const configStore = useConfigStore()
 
 // 腾讯地图实例
 const mapContainer = ref<HTMLElement>()
+const customTooltip = ref<HTMLElement>()
 let TMapInstance: any = null
 let polylineLayer: any = null
 let highlightPolylineLayer: any = null  // 路径段高亮图层
 let mouseMarker: any = null  // 腾讯地图 Marker 实例
-let infoWindow: any = null  // 信息提示框
+let lastTooltipPosition: any = null  // 上次 tooltip 显示的位置
 
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
@@ -301,67 +303,190 @@ function updateMarkerPosition(position: any) {
   mouseMarker.setMap(TMapInstance)
 }
 
-// 创建信息提示框
-function createTooltip() {
-  // 腾讯地图的 InfoWindow 需要时创建
+// 更新自定义 tooltip 的位置
+function updateCustomTooltipPosition(position: any, offsetX = 0, offsetY = -20, align: 'center' | 'left' | 'right' = 'center') {
+  if (!TMapInstance || !customTooltip.value) return
+
+  const TMap = (window as any).TMap
+
+  // 将地理坐标转换为容器像素坐标
+  const pointPixel = TMapInstance.projectToContainer(position)
+  if (!pointPixel) return
+
+  const containerWidth = mapContainer.value?.clientWidth || 0
+  const containerHeight = mapContainer.value?.clientHeight || 0
+
+  // 先设置内容以获取实际尺寸
+  customTooltip.value.style.visibility = 'hidden'
+  customTooltip.value.style.display = 'block'
+
+  // 获取实际尺寸
+  const tooltipWidth = customTooltip.value.offsetWidth
+  const tooltipHeight = customTooltip.value.offsetHeight
+
+  // 根据 align 方式计算 x 坐标
+  let x: number
+  if (align === 'left') {
+    // tooltip 左对齐到点（tooltip 在点右侧）
+    x = pointPixel.x + 10
+  } else if (align === 'right') {
+    // tooltip 右对齐到点（tooltip 在点左侧）
+    x = pointPixel.x - tooltipWidth - 10
+  } else {
+    // 居中
+    x = pointPixel.x - tooltipWidth / 2 + offsetX
+  }
+
+  // 计算 y 坐标
+  let y: number
+  if (offsetY < 0) {
+    // tooltip 在点上方
+    y = pointPixel.y - tooltipHeight - 10
+  } else {
+    // tooltip 在点下方
+    y = pointPixel.y + 10
+  }
+
+  // 边界检测：确保 tooltip 不超出容器
+  const padding = 10
+  if (x < padding) x = padding
+  if (x + tooltipWidth > containerWidth - padding) x = containerWidth - tooltipWidth - padding
+  if (y < padding) y = padding
+  if (y + tooltipHeight > containerHeight - padding) y = containerHeight - tooltipHeight - padding
+
+  customTooltip.value.style.visibility = ''
+  customTooltip.value.style.left = `${x}px`
+  customTooltip.value.style.top = `${y}px`
+}
+
+// 计算腾讯地图智能偏移量，避免 InfoWindow 超出地图边界
+function calculateTencentOffset(position: any): { x: number; y: number; align: 'center' | 'left' | 'right' } {
+  if (!TMapInstance || !mapContainer.value) {
+    return { x: 0, y: -20, align: 'center' }
+  }
+
+  const TMap = (window as any).TMap
+
+  // 将地图坐标转换为容器像素坐标（使用正确的 API）
+  const pointPixel = TMapInstance.projectToContainer(position)
+  if (!pointPixel) {
+    return { x: 0, y: -20, align: 'center' }
+  }
+
+  const containerWidth = mapContainer.value.clientWidth
+  const containerHeight = mapContainer.value.clientHeight
+
+  // Tooltip 的估计尺寸
+  const tooltipWidth = 200
+  const tooltipHeight = 100
+  const padding = 10
+
+  const pixelX = pointPixel.x
+  const pixelY = pointPixel.y
+
+  // 计算水平偏移和对齐方式
+  let offsetX = 0
+  let align: 'center' | 'left' | 'right' = 'center'
+
+  // 检查是否靠近左右边界
+  const tooltipLeft = pixelX - tooltipWidth / 2
+  const tooltipRight = pixelX + tooltipWidth / 2
+
+  if (tooltipRight > containerWidth - padding) {
+    // 靠右边界
+    if (pixelY < 180) {
+      // 顶部区域：保持居中（tooltip 在点下方，不会遮挡）
+      align = 'center'
+      offsetX = (containerWidth - padding) - tooltipRight
+    } else {
+      // 非顶部区域：tooltip 放在点左侧，避免遮挡轨迹点
+      // 使用 right 对齐，这样 tooltip 右边缘在点位置
+      align = 'right'
+      offsetX = -10
+    }
+  } else if (tooltipLeft < padding) {
+    // 靠左边界：tooltip 放在点右侧
+    align = 'left'
+    offsetX = 10
+  }
+
+  // 顶部区域：tooltip 显示在点下方，避免被遮住
+  let offsetY = -20
+  if (pixelY < 180) {
+    offsetY = 15
+  }
+
+  return { x: offsetX, y: offsetY, align }
 }
 
 // 更新标记和提示框
 function updateMarker(nearest: { point: Point; index: number; position: any }) {
-  // 如果是同一个点，跳过更新
-  if (nearest.index === lastHoverIndex) return
-
-  lastHoverIndex = nearest.index
-
   if (!TMapInstance) return
 
   const TMap = (window as any).TMap
 
-  // 更新标记位置并显示
+  // 始终更新标记位置
   updateMarkerPosition(nearest.position)
 
-  // 保存当前显示的点（用于异步更新）
-  currentTooltipPoint = nearest.point
+  // 如果是同一个点，只更新位置（用于地图移动/缩放）
+  if (nearest.index === lastHoverIndex) {
+    if (lastTooltipPosition && customTooltip.value) {
+      const offset = calculateTencentOffset(nearest.position)
+      updateCustomTooltipPosition(nearest.position, offset.x, offset.y, offset.align)
+    }
+    return
+  }
 
-  // 更新提示框内容
+  // 新的点，完整更新
+  lastHoverIndex = nearest.index
+  currentTooltipPoint = nearest.point
+  lastTooltipPosition = nearest.position
+
   const { point, index } = nearest
   const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
   const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
   const locationResult = formatLocationInfo(point)
 
-  const content = `
-    <div style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
-      ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
-      <div style="color: #666;">时间: ${timeStr}</div>
-      <div style="color: #666;">速度: ${speed}</div>
-      <div style="color: #666;">海拔: ${elevation}</div>
-    </div>
-  `
+  // 使用自定义 tooltip
+  if (customTooltip.value) {
+    const htmlContent = `
+      <div class="tooltip-content" style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+        <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
+        ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
+        <div style="color: #666;">时间: ${timeStr}</div>
+        <div style="color: #666;">速度: ${speed}</div>
+        <div style="color: #666;">海拔: ${elevation}</div>
+      </div>
+    `
+    customTooltip.value.innerHTML = htmlContent
+    customTooltip.value.style.display = 'block'
 
-  // 关闭旧的 InfoWindow
-  if (infoWindow) {
-    infoWindow.close()
-    infoWindow = null
+    const offset = calculateTencentOffset(nearest.position)
+    updateCustomTooltipPosition(nearest.position, offset.x, offset.y, offset.align)
   }
-
-  // 创建新的 InfoWindow
-  infoWindow = new TMap.InfoWindow({
-    map: TMapInstance,
-    position: nearest.position,
-    content: content,
-    offset: { x: 0, y: -40 },
-    enableCustom: true,
-  })
-  infoWindow.open()
 
   // 异步加载道路标志 SVG
   if (locationResult.needLoad.length > 0) {
+    const savedIndex = index
+    const savedPoint = point
     nextTick(async () => {
       const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
-      if (loaded && currentTooltipPoint === point) {
-        showMarker(nearest)
+      if (loaded && currentTooltipPoint === savedPoint && customTooltip.value) {
+        const newLocationResult = formatLocationInfo(savedPoint)
+        const newTimeStr = savedPoint.time ? new Date(savedPoint.time).toLocaleTimeString('zh-CN') : '-'
+        const newElevation = savedPoint.elevation != null ? `${savedPoint.elevation.toFixed(1)} m` : '-'
+        const newSpeed = savedPoint.speed != null ? `${(savedPoint.speed * 3.6).toFixed(1)} km/h` : '-'
+        const htmlContent = `
+          <div class="tooltip-content" style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${savedIndex}</div>
+            ${newLocationResult.html ? `<div style="color: #666;">${newLocationResult.html}</div>` : ''}
+            <div style="color: #666;">时间: ${newTimeStr}</div>
+            <div style="color: #666;">速度: ${newSpeed}</div>
+            <div style="color: #666;">海拔: ${newElevation}</div>
+          </div>
+        `
+        customTooltip.value.innerHTML = htmlContent
       }
     })
   }
@@ -376,14 +501,14 @@ function hideMarker() {
 
   lastHoverIndex = -1
   currentTooltipPoint = null
+  lastTooltipPosition = null
 
   if (mouseMarker) {
     mouseMarker.setMap(null)
   }
 
-  if (infoWindow) {
-    infoWindow.close()
-    infoWindow = null
+  if (customTooltip.value) {
+    customTooltip.value.style.display = 'none'
   }
 
   if (props.mode === 'home') {
@@ -422,42 +547,52 @@ function highlightPoint(index: number) {
 
   // 保存当前显示的点（用于异步更新）
   currentTooltipPoint = point
+  lastTooltipPosition = position
 
   const timeStr = point.time ? new Date(point.time).toLocaleTimeString('zh-CN') : '-'
   const elevation = point.elevation != null ? `${point.elevation.toFixed(1)} m` : '-'
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
   const locationResult = formatLocationInfo(point)
 
-  const content = `
-    <div style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
-      ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
-      <div style="color: #666;">时间: ${timeStr}</div>
-      <div style="color: #666;">速度: ${speed}</div>
-      <div style="color: #666;">海拔: ${elevation}</div>
-    </div>
-  `
+  // 使用自定义 tooltip
+  if (customTooltip.value) {
+    const htmlContent = `
+      <div class="tooltip-content" style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+        <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
+        ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
+        <div style="color: #666;">时间: ${timeStr}</div>
+        <div style="color: #666;">速度: ${speed}</div>
+        <div style="color: #666;">海拔: ${elevation}</div>
+      </div>
+    `
+    customTooltip.value.innerHTML = htmlContent
+    customTooltip.value.style.display = 'block'
 
-  if (infoWindow) {
-    infoWindow.close()
-    infoWindow = null
+    const offset = calculateTencentOffset(position)
+    updateCustomTooltipPosition(position, offset.x, offset.y, offset.align)
   }
-
-  infoWindow = new TMap.InfoWindow({
-    map: TMapInstance,
-    position: position,
-    content: content,
-    offset: { x: 0, y: -40 },
-    enableCustom: true,
-  })
-  infoWindow.open()
 
   // 异步加载道路标志 SVG
   if (locationResult.needLoad.length > 0) {
+    const savedIndex = index
+    const savedPoint = point
     nextTick(async () => {
       const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
-      if (loaded && currentTooltipPoint === point) {
-        highlightPoint(index)
+      if (loaded && currentTooltipPoint === savedPoint && customTooltip.value) {
+        const newLocationResult = formatLocationInfo(savedPoint)
+        const newTimeStr = savedPoint.time ? new Date(savedPoint.time).toLocaleTimeString('zh-CN') : '-'
+        const newElevation = savedPoint.elevation != null ? `${savedPoint.elevation.toFixed(1)} m` : '-'
+        const newSpeed = savedPoint.speed != null ? `${(savedPoint.speed * 3.6).toFixed(1)} km/h` : '-'
+        const htmlContent = `
+          <div class="tooltip-content" style="padding: 8px 12px; margin: 0; background: #fff; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${savedIndex}</div>
+            ${newLocationResult.html ? `<div style="color: #666;">${newLocationResult.html}</div>` : ''}
+            <div style="color: #666;">时间: ${newTimeStr}</div>
+            <div style="color: #666;">速度: ${newSpeed}</div>
+            <div style="color: #666;">海拔: ${newElevation}</div>
+          </div>
+        `
+        customTooltip.value.innerHTML = htmlContent
       }
     })
   }
@@ -533,9 +668,8 @@ async function initMap() {
       },
     })
 
-    // 创建标记和提示框
+    // 创建标记
     createMouseMarker()
-    createTooltip()
 
     // 统一的鼠标处理函数
     const handleMouseMove = (lat: number, lng: number) => {
@@ -627,6 +761,7 @@ async function initMap() {
         if (nearestTrackId === lastHoverIndex) return
 
         lastHoverIndex = nearestTrackId
+        lastTooltipPosition = nearestPosition
 
         // 更新标记位置并显示
         if (mouseMarker) {
@@ -692,7 +827,7 @@ async function initMap() {
           return `${minutes}分钟`
         }
 
-        const content = `
+        const htmlContent = `
           <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
@@ -702,19 +837,14 @@ async function initMap() {
           </div>
         `
 
-        if (infoWindow) {
-          infoWindow.close()
+        // 使用自定义 tooltip
+        if (customTooltip.value) {
+          customTooltip.value.innerHTML = htmlContent
+          customTooltip.value.style.display = 'block'
+
+          const offset = calculateTencentOffset(nearestPosition)
+          updateCustomTooltipPosition(nearestPosition, offset.x, offset.y, offset.align)
         }
-
-        infoWindow = new TMap.InfoWindow({
-          map: TMapInstance,
-          position: nearestPosition,
-          content: content,
-          offset: { x: 0, y: -40 },
-          enableCustom: true,
-        })
-
-        infoWindow.open()
 
         // 发射事件
         emit('track-hover', nearestTrackId)
@@ -723,7 +853,7 @@ async function initMap() {
       }
     }
 
-    // 桌面端：鼠标移动监听
+    // 桌面端：鼠标移动监听（腾讯地图实例）
     TMapInstance.on('mousemove', (evt: any) => {
       const lat = evt.latLng?.lat
       const lng = evt.latLng?.lng
@@ -733,7 +863,6 @@ async function initMap() {
     })
 
     // 鼠标离开地图时隐藏标记（仅桌面端）
-    // 移动端不需要此监听器，因为 touchend 后会触发 mouseout 导致提示框被关闭
     const isMobile = window.innerWidth <= 1366
     if (!isMobile) {
       TMapInstance.on('mouseout', () => {
@@ -837,12 +966,13 @@ async function initMap() {
               return
             }
 
-            // 移动端：显示 InfoWindow
+            // 移动端：显示自定义 tooltip
             const trackData = tracksData.get(nearestTrackId)
             if (!trackData) return
 
             const track = trackData.track
             lastHoverIndex = nearestTrackId
+            lastTooltipPosition = nearestPosition
 
             // 更新标记位置并显示
             if (mouseMarker) {
@@ -908,7 +1038,7 @@ async function initMap() {
               return `${minutes}分钟`
             }
 
-            const content = `
+            const htmlContent = `
               <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
                 <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
                 <div style="color: #666;">时间: ${formatTimeRange()}</div>
@@ -918,19 +1048,14 @@ async function initMap() {
               </div>
             `
 
-            if (infoWindow) {
-              infoWindow.close()
+            // 使用自定义 tooltip
+            if (customTooltip.value) {
+              customTooltip.value.innerHTML = htmlContent
+              customTooltip.value.style.display = 'block'
+
+              const offset = calculateTencentOffset(nearestPosition)
+              updateCustomTooltipPosition(nearestPosition, offset.x, offset.y, offset.align)
             }
-
-            infoWindow = new TMap.InfoWindow({
-              map: TMapInstance,
-              position: nearestPosition,
-              content: content,
-              offset: { x: 0, y: -40 },
-              enableCustom: true,
-            })
-
-            infoWindow.open()
 
             emit('track-hover', nearestTrackId)
           } else {
@@ -992,6 +1117,17 @@ async function initMap() {
           isClickProcessing = false
         }, 300)
       }, true)
+
+    // 监听地图移动/缩放事件，更新 tooltip 位置
+    const updateTooltipPosition = () => {
+      if (lastTooltipPosition && customTooltip.value && customTooltip.value.style.display !== 'none') {
+        const offset = calculateTencentOffset(lastTooltipPosition)
+        updateCustomTooltipPosition(lastTooltipPosition, offset.x, offset.y, offset.align)
+      }
+    }
+
+    TMapInstance.on('moveend', updateTooltipPosition)
+    TMapInstance.on('zoomend', updateTooltipPosition)
     }
 
     // 绘制轨迹
@@ -1185,9 +1321,8 @@ onUnmounted(() => {
     mouseMarker.setMap(null)
     mouseMarker = null
   }
-  if (infoWindow) {
-    infoWindow.close()
-    infoWindow = null
+  if (customTooltip.value) {
+    customTooltip.value.style.display = 'none'
   }
   if (polylineLayer) {
     polylineLayer.setMap(null)
@@ -1280,6 +1415,14 @@ defineExpose({
 .tencent-map {
   width: 100%;
   height: 100%;
+}
+
+/* 自定义 tooltip */
+.custom-tooltip {
+  position: absolute;
+  display: none;
+  pointer-events: none;
+  z-index: 1000;
 }
 
 /* 隐藏指南针控件 */

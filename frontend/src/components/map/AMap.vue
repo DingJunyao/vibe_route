@@ -165,6 +165,7 @@ let polylines: any[] = []
 let highlightPolyline: any = null  // 路径段高亮图层
 let mouseMarker: any = null  // 鼠标位置标记
 let tooltip: any = null  // 信息提示框
+let documentMouseMoveHandler: ((e: MouseEvent) => void) | null = null  // document 鼠标移动处理函数
 
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
@@ -220,9 +221,10 @@ function createMouseMarker() {
 }
 
 // 计算智能偏移量，避免 InfoWindow 超出地图边界
-function calculateSmartOffset(position: [number, number]): { x: number; y: number; anchor: 'top' | 'bottom' | 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' } {
+// 返回 offset 和 anchor，anchor 是 InfoWindow 的锚点位置
+function calculateSmartOffset(position: [number, number]): { x: number; y: number; anchor: 'bottom-center' | 'top-center' } {
   if (!AMapInstance || !mapContainer.value) {
-    return { x: 0, y: -40, anchor: 'top' }
+    return { x: 0, y: -20, anchor: 'bottom-center' }
   }
 
   const AMap = (window as any).AMap
@@ -230,55 +232,57 @@ function calculateSmartOffset(position: [number, number]): { x: number; y: numbe
   // 将地图坐标转换为容器像素坐标
   const pixel = AMapInstance.lngLatToContainer(new AMap.LngLat(position[0], position[1]))
   if (!pixel) {
-    return { x: 0, y: -40, anchor: 'top' }
+    return { x: 0, y: -20, anchor: 'bottom-center' }
   }
 
   const containerWidth = mapContainer.value.clientWidth
   const containerHeight = mapContainer.value.clientHeight
 
-  // InfoWindow 的估计尺寸（根据内容可能变化）
-  const tooltipWidth = 150  // 预估宽度
-  const tooltipHeight = 100 // 预估高度
-  const padding = 10        // 边界留白
+  // InfoWindow 的固定尺寸
+  const tooltipWidth = 200
+  const tooltipHeight = 120  // 估计高度
+  const padding = 60
 
   const pixelX = pixel.getX()
   const pixelY = pixel.getY()
 
-  // 判断点相对于地图容器的位置
-  const isNearLeft = pixelX < tooltipWidth / 2 + padding
-  const isNearRight = pixelX > containerWidth - tooltipWidth / 2 - padding
-  const isNearTop = pixelY < tooltipHeight + padding
-  const isNearBottom = pixelY > containerHeight - tooltipHeight - padding
-
-  // 根据位置确定锚点和偏移
-  // 高德地图 InfoWindow 的 offset 是相对于锚点位置的偏移
-  // anchor 为 'bottom-center' 时，offset 是从点向上偏移
-
-  if (isNearRight && !isNearTop && !isNearBottom) {
-    // 靠近右边缘：显示在点的左侧
-    return { x: -tooltipWidth - 15, y: -20, anchor: 'left' }
-  } else if (isNearLeft && !isNearTop && !isNearBottom) {
-    // 靠近左边缘：显示在点的右侧
-    return { x: 15, y: -20, anchor: 'right' }
-  } else if (isNearBottom && !isNearLeft && !isNearRight) {
-    // 靠近下边缘：显示在点的上方
-    return { x: 0, y: -tooltipHeight - 15, anchor: 'bottom' }
-  } else if (isNearTop && isNearRight) {
-    // 靠近右上角：显示在点的左下方
-    return { x: -tooltipWidth - 10, y: 15, anchor: 'top-right' }
-  } else if (isNearTop && isNearLeft) {
-    // 靠近左上角：显示在点的右下方
-    return { x: 15, y: 15, anchor: 'top-left' }
-  } else if (isNearBottom && isNearRight) {
-    // 靠近右下角：显示在点的左上方
-    return { x: -tooltipWidth - 10, y: -tooltipHeight - 10, anchor: 'bottom-right' }
-  } else if (isNearBottom && isNearLeft) {
-    // 靠近左下角：显示在点的右上方
-    return { x: 15, y: -tooltipHeight - 10, anchor: 'bottom-left' }
+  // 如果点在容器外很远，使用默认值
+  if (pixelX < -50 || pixelX > containerWidth + 50 || pixelY < -50 || pixelY > containerHeight + 50) {
+    return { x: 0, y: -20, anchor: 'bottom-center' }
   }
 
-  // 默认：显示在点的上方
-  return { x: 0, y: -40, anchor: 'top' }
+  let offsetX = 0
+  let offsetY = -10  // 默认小偏移
+  let anchor: 'bottom-center' | 'top-center' = 'bottom-center'
+
+  // 垂直方向：检查上方是否有足够空间
+  const spaceAbove = pixelY
+  const spaceBelow = containerHeight - pixelY
+
+  // 如果上方空间不足，但下方有足够空间，使用 top-center 锚点
+  // top-center 锚点表示 tooltip 的顶部中心附着在点上，tooltip 会向下延伸
+  if (spaceAbove < tooltipHeight + 20 && spaceBelow > tooltipHeight + 20) {
+    anchor = 'top-center'
+    offsetY = 10  // 小偏移，tooltip 会在点下方
+  } else {
+    // 默认使用 bottom-center 锚点，tooltip 会在点上方
+    anchor = 'bottom-center'
+    offsetY = -10
+  }
+
+  // 水平方向：计算偏移避免超出边界
+  const tooltipRight = pixelX + tooltipWidth / 2
+  const tooltipLeft = pixelX - tooltipWidth / 2
+
+  if (tooltipRight > containerWidth - padding) {
+    // 靠右边界：向左偏移
+    offsetX = -(tooltipRight - (containerWidth - padding))
+  } else if (tooltipLeft < padding) {
+    // 靠左边界：向右偏移
+    offsetX = padding - tooltipLeft
+  }
+
+  return { x: offsetX, y: offsetY, anchor }
 }
 
 // 创建信息提示框
@@ -290,7 +294,8 @@ function createTooltip() {
   tooltip = new AMap.InfoWindow({
     isCustom: true,
     content: '',
-    offset: new AMap.Pixel(0, -40),
+    offset: new AMap.Pixel(0, -20),
+    autoMove: false,  // 禁用自动调整，使用我们的手动偏移
     closeWhenClickMap: false,
     showShadow: false,
   })
@@ -422,7 +427,7 @@ function updateMarker(nearest: { point: Point; index: number; position: [number,
   const speed = point.speed != null ? `${(point.speed * 3.6).toFixed(1)} km/h` : '-'
 
   const content = `
-    <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+    <div style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
       <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
       <div style="color: #666;">时间: ${timeStr}</div>
       <div style="color: #666;">速度: ${speed}</div>
@@ -433,6 +438,7 @@ function updateMarker(nearest: { point: Point; index: number; position: [number,
   if (tooltip) {
     // 计算智能偏移
     const smartOffset = calculateSmartOffset(nearest.position)
+    tooltip.setAnchor(smartOffset.anchor)
     tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
     tooltip.setContent(content)
     tooltip.setPosition(new AMap.LngLat(nearest.position[0], nearest.position[1]))
@@ -452,6 +458,7 @@ function hideMarker() {
   currentTooltipTrackId = null  // 清除保存的轨迹 ID
   if (mouseMarker) mouseMarker.setMap(null)
   if (tooltip) tooltip.close()
+
   if (props.mode === 'home') {
     emit('track-hover', null)
   } else {
@@ -496,7 +503,7 @@ function highlightPoint(index: number) {
   const locationResult = formatLocationInfo(point)
 
   const content = `
-    <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+    <div style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
       <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${index}</div>
       ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
       <div style="color: #666;">时间: ${timeStr}</div>
@@ -507,6 +514,7 @@ function highlightPoint(index: number) {
 
   // 计算智能偏移
   const smartOffset = calculateSmartOffset([position.lng, position.lat])
+  tooltip.setAnchor(smartOffset.anchor)
   tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
   tooltip.setContent(content)
   tooltip.setPosition(new AMap.LngLat(position.lng, position.lat))
@@ -668,17 +676,22 @@ async function initMap() {
       // 更新或隐藏标记
       if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
         const point = trackPoints[nearestIndex]
-        // 如果是同一个点，跳过更新
-        if (nearestIndex !== lastHoverIndex) {
+        const AMap = (window as any).AMap
+
+        // 始终更新标记位置
+        mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+        mouseMarker.setMap(AMapInstance)
+
+        // 如果是同一个点，只更新位置和偏移量，不更新内容
+        if (nearestIndex === lastHoverIndex) {
+          // 重新计算偏移量并更新 tooltip 位置
+          const smartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setAnchor(smartOffset.anchor)
+          tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
+          tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+        } else {
+          // 新的点，完整更新
           lastHoverIndex = nearestIndex
-
-          const AMap = (window as any).AMap
-
-          // 更新标记位置并显示
-          mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-          mouseMarker.setMap(AMapInstance)
-
-          // 保存当前显示的点（用于异步更新）
           currentTooltipPoint = point
 
           // 更新提示框内容
@@ -688,7 +701,7 @@ async function initMap() {
           const locationResult = formatLocationInfo(point)
 
           const content = `
-            <div style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+            <div style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
               ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
               <div style="color: #666;">时间: ${timeStr}</div>
@@ -699,6 +712,7 @@ async function initMap() {
 
           // 计算智能偏移
           const smartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setAnchor(smartOffset.anchor)
           tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
           tooltip.setContent(content)
           tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
@@ -758,121 +772,126 @@ async function initMap() {
         if (!trackData) return
 
         const track = trackData.track
-
-        // 如果是同一条轨迹，跳过更新
-        if (nearestTrackId === lastHoverIndex) return
-
-        lastHoverIndex = nearestTrackId
-
         const AMap = (window as any).AMap
 
-        // 更新标记位置并显示
+        // 始终更新标记位置
         mouseMarker.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
         mouseMarker.setMap(AMapInstance)
 
-        // 格式化时间和里程
-        const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
-          if (!time) return '-'
-          const date = new Date(time)
-          if (endDate) {
+        // 如果是同一条轨迹，只更新位置和偏移量
+        if (nearestTrackId === lastHoverIndex) {
+          const smartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setAnchor(smartOffset.anchor)
+          tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
+          tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+        } else {
+          // 新的轨迹，完整更新
+          lastHoverIndex = nearestTrackId
+
+          // 格式化时间和里程
+          const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+            if (!time) return '-'
+            const date = new Date(time)
+            if (endDate) {
+              return date.toLocaleString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
             return date.toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
               hour: '2-digit',
               minute: '2-digit',
             })
           }
-          return date.toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-          })
-        }
 
-        const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
-          if (!start || !end) return false
-          const startDate = new Date(start)
-          const endDate = new Date(end)
-          return startDate.getFullYear() === endDate.getFullYear() &&
-                 startDate.getMonth() === endDate.getMonth() &&
-                 startDate.getDate() === endDate.getDate()
-        }
-
-        const formatTimeRange = () => {
-          const startTime = formatTime(track.start_time, false)
-          const endTime = isSameDay(track.start_time, track.end_time)
-            ? formatTime(track.end_time, true)
-            : formatTime(track.end_time, false)
-          return `${startTime} ~ ${endTime}`
-        }
-
-        const formatDistance = (meters: number | undefined) => {
-          if (meters === undefined) return '-'
-          if (meters < 1000) return `${meters.toFixed(1)} m`
-          return `${(meters / 1000).toFixed(2)} km`
-        }
-
-        const formatDuration = (seconds: number | undefined) => {
-          if (seconds === undefined) return '-'
-          const hours = Math.floor(seconds / 3600)
-          const minutes = Math.floor((seconds % 3600) / 60)
-          if (hours > 0) {
-            return `${hours}小时${minutes}分钟`
+          const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+            if (!start || !end) return false
+            const startDate = new Date(start)
+            const endDate = new Date(end)
+            return startDate.getFullYear() === endDate.getFullYear() &&
+                   startDate.getMonth() === endDate.getMonth() &&
+                   startDate.getDate() === endDate.getDate()
           }
-          return `${minutes}分钟`
+
+          const formatTimeRange = () => {
+            const startTime = formatTime(track.start_time, false)
+            const endTime = isSameDay(track.start_time, track.end_time)
+              ? formatTime(track.end_time, true)
+              : formatTime(track.end_time, false)
+            return `${startTime} ~ ${endTime}`
+          }
+
+          const formatDistance = (meters: number | undefined) => {
+            if (meters === undefined) return '-'
+            if (meters < 1000) return `${meters.toFixed(1)} m`
+            return `${(meters / 1000).toFixed(2)} km`
+          }
+
+          const formatDuration = (seconds: number | undefined) => {
+            if (seconds === undefined) return '-'
+            const hours = Math.floor(seconds / 3600)
+            const minutes = Math.floor((seconds % 3600) / 60)
+            if (hours > 0) {
+              return `${hours}小时${minutes}分钟`
+            }
+            return `${minutes}分钟`
+          }
+
+          const content = `
+            <div class="track-tooltip" data-track-id="${track.id}" style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="color: #666;">时间: ${formatTimeRange()}</div>
+              <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+              <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
+            </div>
+          `
+
+          // 计算智能偏移
+          const smartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setAnchor(smartOffset.anchor)
+          tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
+          tooltip.setContent(content)
+          tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+          tooltip.open(AMapInstance)
+
+          // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
+          currentTooltipTrackId = nearestTrackId
+
+          // 发射事件
+          emit('track-hover', nearestTrackId)
         }
-
-        const content = `
-          <div class="track-tooltip" data-track-id="${track.id}" style="min-width: 120px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-            <div style="color: #666;">时间: ${formatTimeRange()}</div>
-            <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-            <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
-            ${isMobile ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
-          </div>
-        `
-
-        // 计算智能偏移
-        const smartOffset = calculateSmartOffset(nearestPosition)
-        tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
-        tooltip.setContent(content)
-        tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-        tooltip.open(AMapInstance)
-
-        // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
-        currentTooltipTrackId = nearestTrackId
-
-        // 发射事件
-        emit('track-hover', nearestTrackId)
       } else {
         hideMarker()
       }
     }
 
-    // 高德地图 mousemove 监听（作为主要事件源）
-    AMapInstance.on('mousemove', (e: any) => {
-      const lngLat = e.lnglat
+    // 在 document 级别监听鼠标移动，避免被 AMap 内部元素阻挡
+    documentMouseMoveHandler = (e: MouseEvent) => {
+      if (!AMapInstance || !mapContainer.value) return
+
+      // 检查鼠标是否在地图容器内
+      const rect = mapContainer.value.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+
+      // 如果鼠标在容器外，隐藏标记
+      if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+        hideMarker()
+        return
+      }
+
+      // 将容器坐标转换为地图坐标
+      const lngLat = AMapInstance.containerToLngLat(new AMap.Pixel(x, y))
+      if (!lngLat) return
       const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
       handleMouseMove(mouseLngLat)
-    })
-
-    // 备用方案：在 DOM 容器级别监听鼠标移动（捕获阶段）
-    // 这样即使 polyline 阻止了事件冒泡，也能捕获到鼠标移动
-    if (mapContainer.value) {
-      mapContainer.value.addEventListener('mousemove', (e: MouseEvent) => {
-        if (!AMapInstance) return
-        // 将容器坐标转换为地图坐标
-        const lngLat = AMapInstance.containerToLngLat(new AMap.Pixel(e.offsetX, e.offsetY))
-        if (!lngLat) return
-        const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
-        handleMouseMove(mouseLngLat)
-      }, true)  // 使用捕获阶段
-
-      // 监听鼠标离开
-      mapContainer.value.addEventListener('mouseleave', () => {
-        hideMarker()
-      }, true)
     }
+
+    document.addEventListener('mousemove', documentMouseMoveHandler, true)  // 捕获阶段
 
     // 点击地图显示轨迹信息或跳转
     // 定义点击处理函数（桌面端和移动端共用）
@@ -958,108 +977,107 @@ async function initMap() {
               })
             }
             return date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          }
+
+          const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+            if (!start || !end) return false
+            const startDate = new Date(start)
+            const endDate = new Date(end)
+            return startDate.getFullYear() === endDate.getFullYear() &&
+                   startDate.getMonth() === endDate.getMonth() &&
+                   startDate.getDate() === endDate.getDate()
+          }
+
+          const formatTimeRange = () => {
+            const startTime = formatTime(track.start_time, false)
+            const endTime = isSameDay(track.start_time, track.end_time)
+              ? formatTime(track.end_time, true)
+              : formatTime(track.end_time, false)
+            return `${startTime} ~ ${endTime}`
+          }
+
+          const formatDistance = (meters: number | undefined) => {
+            if (meters === undefined) return '-'
+            if (meters < 1000) return `${meters.toFixed(1)} m`
+            return `${(meters / 1000).toFixed(2)} km`
+          }
+
+          const formatDuration = (seconds: number | undefined) => {
+            if (seconds === undefined) return '-'
+            const hours = Math.floor(seconds / 3600)
+            const minutes = Math.floor((seconds % 3600) / 60)
+            if (hours > 0) {
+              return `${hours}小时${minutes}分钟`
             }
+            return `${minutes}分钟`
+          }
 
-            const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
-              if (!start || !end) return false
-              const startDate = new Date(start)
-              const endDate = new Date(end)
-              return startDate.getFullYear() === endDate.getFullYear() &&
-                     startDate.getMonth() === endDate.getMonth() &&
-                     startDate.getDate() === endDate.getDate()
-            }
+          const content = `
+            <div class="track-tooltip" data-track-id="${track.id}" style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="color: #666;">时间: ${formatTimeRange()}</div>
+              <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+              <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              ${isMobileNow ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
+            </div>
+          `
 
-            const formatTimeRange = () => {
-              const startTime = formatTime(track.start_time, false)
-              const endTime = isSameDay(track.start_time, track.end_time)
-                ? formatTime(track.end_time, true)
-                : formatTime(track.end_time, false)
-              return `${startTime} ~ ${endTime}`
-            }
+          // 计算智能偏移
+          const clickSmartOffset = calculateSmartOffset(nearestPosition)
+          tooltip.setAnchor(clickSmartOffset.anchor)
+          tooltip.setOffset(new AMap.Pixel(clickSmartOffset.x, clickSmartOffset.y))
+          tooltip.setContent(content)
+          tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
+          tooltip.open(AMapInstance)
 
-            const formatDistance = (meters: number | undefined) => {
-              if (meters === undefined) return '-'
-              if (meters < 1000) return `${meters.toFixed(1)} m`
-              return `${(meters / 1000).toFixed(2)} km`
-            }
+          // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
+          currentTooltipTrackId = nearestTrackId
 
-            const formatDuration = (seconds: number | undefined) => {
-              if (seconds === undefined) return '-'
-              const hours = Math.floor(seconds / 3600)
-              const minutes = Math.floor((seconds % 3600) / 60)
-              if (hours > 0) {
-                return `${hours}小时${minutes}分钟`
-              }
-              return `${minutes}分钟`
-            }
+          // 在 InfoWindow 打开后，给其内容添加点击事件监听器
+          // 使用 nextTick 确保 DOM 已经更新
+          nextTick(() => {
+            const trackTooltip = document.querySelector('.track-tooltip')
+            if (trackTooltip) {
+              const parent = trackTooltip.parentElement
+              if (parent) {
+                // 处理 InfoWindow 内的点击和触摸事件
+                const handleTooltipInteraction = (e: Event) => {
+                  e.stopImmediatePropagation()
+                  e.stopPropagation()
+                  e.preventDefault()
+                  if (currentTooltipTrackId !== null) {
+                    emit('track-click', currentTooltipTrackId)
+                  }
+                }
 
-            const content = `
-              <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-                <div style="color: #666;">时间: ${formatTimeRange()}</div>
-                <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-                <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
-                ${isMobileNow ? '<div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>' : ''}
-              </div>
-            `
+                // 直接给 track-tooltip 添加点击事件（优先级最高）
+                trackTooltip.addEventListener('click', handleTooltipInteraction, { capture: true })
 
-            // 计算智能偏移
-            const clickSmartOffset = calculateSmartOffset(nearestPosition)
-            tooltip.setOffset(new AMap.Pixel(clickSmartOffset.x, clickSmartOffset.y))
-            tooltip.setContent(content)
-            tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
-            tooltip.open(AMapInstance)
+                // 添加 touchstart 监听器（移动端）
+                trackTooltip.addEventListener('touchstart', handleTooltipInteraction, { capture: true })
 
-            // 保存当前 InfoWindow 显示的轨迹 ID（用于点击跳转）
-            currentTooltipTrackId = nearestTrackId
-
-            // 在 InfoWindow 打开后，给其内容添加点击事件监听器
-            // 使用 nextTick 确保 DOM 已经更新
-            nextTick(() => {
-              const trackTooltip = document.querySelector('.track-tooltip')
-              if (trackTooltip) {
-                const parent = trackTooltip.parentElement
-                if (parent) {
-                  // 处理 InfoWindow 内的点击和触摸事件
-                  const handleTooltipInteraction = (e: Event) => {
-                    e.stopImmediatePropagation()
+                // 同时给父元素添加点击监听器（备用）
+                parent.addEventListener('click', (e) => {
+                  if (currentTooltipTrackId !== null) {
+                    emit('track-click', currentTooltipTrackId)
                     e.stopPropagation()
                     e.preventDefault()
-                    if (currentTooltipTrackId !== null) {
-                      emit('track-click', currentTooltipTrackId)
-                    }
                   }
-
-                  // 直接给 track-tooltip 添加点击事件（优先级最高）
-                  trackTooltip.addEventListener('click', handleTooltipInteraction, { capture: true })
-
-                  // 添加 touchstart 监听器（移动端）
-                  trackTooltip.addEventListener('touchstart', handleTooltipInteraction, { capture: true })
-
-                  // 同时给父元素添加点击监听器（备用）
-                  parent.addEventListener('click', (e) => {
-                    if (currentTooltipTrackId !== null) {
-                      emit('track-click', currentTooltipTrackId)
-                      e.stopPropagation()
-                      e.preventDefault()
-                    }
-                  })
-                }
+                })
               }
-            })
+            }
+          })
 
-            emit('track-hover', nearestTrackId)
-          } else {
-            hideMarker()
-          }
-        } else {
-          // detail 模式：显示点信息
+          emit('track-hover', nearestTrackId)
+        }
+      } else {
+        // detail 模式：显示点信息
           if (trackPath.length < 2) {
             hideMarker()
             return
@@ -1105,7 +1123,7 @@ async function initMap() {
             const locationResult = formatLocationInfo(point)
 
             const content = `
-              <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
+              <div style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
                 <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
                 ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
                 <div style="color: #666;">时间: ${timeStr}</div>
@@ -1116,6 +1134,7 @@ async function initMap() {
 
             // 计算智能偏移
             const clickSmartOffset = calculateSmartOffset(nearestPosition)
+            tooltip.setAnchor(clickSmartOffset.anchor)
             tooltip.setOffset(new AMap.Pixel(clickSmartOffset.x, clickSmartOffset.y))
             tooltip.setContent(content)
             tooltip.setPosition(new AMap.LngLat(nearestPosition[0], nearestPosition[1]))
@@ -1312,6 +1331,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 清理 document 鼠标移动监听器
+  if (documentMouseMoveHandler) {
+    document.removeEventListener('mousemove', documentMouseMoveHandler, true)
+    documentMouseMoveHandler = null
+  }
+
   // 清理节流定时器
   if (throttleTimer) {
     clearTimeout(throttleTimer)

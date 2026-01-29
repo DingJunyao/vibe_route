@@ -319,7 +319,7 @@ function initMap() {
       // 每次鼠标移动都更新 tooltip 位置（轻量级操作）
       if (customTooltip.value && mapContainer) {
         const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
         updateCustomTooltipPosition(pointPixel, containerSize)
       }
     } else {
@@ -447,7 +447,7 @@ function initMap() {
       // 使用自定义 tooltip
       if (customTooltip.value && mapContainer) {
         const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
         updateCustomTooltip(content, pointPixel, containerSize)
       }
 
@@ -471,7 +471,7 @@ function initMap() {
       if (currentHoverTrack.value && customTooltip.value && mapContainer) {
         const { track, position } = currentHoverTrack.value
         const pointPixel = map.value!.latLngToContainerPoint([position[1], position[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
 
         // 重新生成内容
         const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
@@ -663,7 +663,7 @@ function initMap() {
 
           if (customTooltip.value && mapContainer) {
             const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-            const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+            const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
             updateCustomTooltip(content, pointPixel, containerSize)
           }
 
@@ -729,7 +729,7 @@ function initMap() {
 
           if (customTooltip.value && mapContainer) {
             const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-            const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+            const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
             updateCustomTooltip(content, pointPixel, containerSize)
           }
 
@@ -1087,7 +1087,7 @@ function recreateMap() {
       // 每次鼠标移动都更新 tooltip 位置（轻量级操作）
       if (customTooltip.value && mapContainer) {
         const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
         updateCustomTooltipPosition(pointPixel, containerSize)
       }
     } else {
@@ -1215,7 +1215,7 @@ function recreateMap() {
       // 使用自定义 tooltip
       if (customTooltip.value && mapContainer) {
         const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
         updateCustomTooltip(content, pointPixel, containerSize)
       }
 
@@ -1239,7 +1239,7 @@ function recreateMap() {
       if (currentHoverTrack.value && customTooltip.value && mapContainer) {
         const { track, position } = currentHoverTrack.value
         const pointPixel = map.value!.latLngToContainerPoint([position[1], position[0]])
-        const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+        const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
 
         // 重新生成内容
         const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
@@ -1431,7 +1431,7 @@ function recreateMap() {
 
           if (customTooltip.value && mapContainer) {
             const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-            const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+            const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
             updateCustomTooltip(content, pointPixel, containerSize)
           }
 
@@ -1497,7 +1497,7 @@ function recreateMap() {
 
           if (customTooltip.value && mapContainer) {
             const pointPixel = map.value!.latLngToContainerPoint([nearestPosition[1], nearestPosition[0]])
-            const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+            const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
             updateCustomTooltip(content, pointPixel, containerSize)
           }
 
@@ -1784,7 +1784,7 @@ function updateTooltipForPoint(index: number, point: Point) {
 
   // 获取点的像素位置和容器尺寸
   const pointPixel = mapInstance.latLngToContainerPoint(pointLatLng)
-  const containerSize = { x: mapContainer.clientWidth, y: mapContainer.clientHeight }
+  const containerSize = { x: mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800, y: mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600 }
 
   // 更新自定义 tooltip
   updateCustomTooltip(content, pointPixel, containerSize)
@@ -1840,8 +1840,9 @@ function createCustomTooltip() {
   tooltipDiv.style.cssText = `
     position: absolute;
     z-index: 1000;
-    pointer-events: auto;
+    pointer-events: none;
     display: none;
+    min-width: 150px;
   `
 
   mapContainer.value.appendChild(tooltipDiv)
@@ -1878,10 +1879,46 @@ function updateCustomTooltipPosition(pointPixel: L.Point, containerSize: { x: nu
     if (!pendingUpdate || !customTooltip.value) return
 
     const tooltip = customTooltip.value
-    // 直接设置位置，使用 transform 居中
-    tooltip.style.left = `${pendingUpdate.pointPixel.x}px`
-    tooltip.style.top = `${pendingUpdate.pointPixel.y}px`
-    tooltip.style.transform = 'translate(-50%, -100%) translateY(-10px)'
+    const px = pendingUpdate.pointPixel.x
+    const py = pendingUpdate.pointPixel.y
+    const cw = pendingUpdate.containerSize.x
+    const ch = pendingUpdate.containerSize.y
+
+    // 获取实际的 tooltip 尺寸
+    const rect = tooltip.getBoundingClientRect()
+    const tooltipWidth = rect.width || 150
+    const tooltipHeight = rect.height || 100
+    const padding = 60
+
+    // 计算水平偏移
+    let offsetX = 0
+
+    if (px - tooltipWidth / 2 < padding) {
+      offsetX = padding - (px - tooltipWidth / 2)
+    } else if (px + tooltipWidth / 2 > cw - padding) {
+      offsetX = -(px + tooltipWidth / 2 - (cw - padding))
+    }
+
+    // 顶部区域：tooltip 显示在点下方，避免被遮住
+    let offsetY = -10
+    let translateY = '-100%'
+    if (py < 180) {
+      translateY = '0'
+      offsetY = 15
+    }
+
+    console.log('[Leaflet] updateCustomTooltipPosition:', {
+      px, py, cw, ch, tooltipWidth, tooltipHeight, offsetX, offsetY, padding,
+      tooltipLeft: px - tooltipWidth / 2 + offsetX,
+      tooltipRight: px + tooltipWidth / 2 + offsetX,
+      containerLeft: padding,
+      containerRight: cw - padding
+    })
+
+    // 设置位置和 transform
+    tooltip.style.left = `${px}px`
+    tooltip.style.top = `${py}px`
+    tooltip.style.transform = `translate(calc(-50% + ${offsetX}px), ${translateY}) translateY(${offsetY}px)`
 
     rafId = null
     pendingUpdate = null
@@ -1903,15 +1940,48 @@ function updateCustomTooltip(content: string, pointPixel: L.Point, containerSize
   tooltip.innerHTML = content
   tooltip.style.display = 'block'
 
-  // 内容更新后，重新获取并缓存尺寸
-  const tooltipRect = tooltip.getBoundingClientRect()
-  cachedTooltipWidth = tooltipRect.width
-  cachedTooltipHeight = tooltipRect.height
+  // 内容更新后，获取并缓存尺寸
+  const rect = tooltip.getBoundingClientRect()
+  cachedTooltipWidth = rect.width
+  cachedTooltipHeight = rect.height
+
+  const px = pointPixel.x
+  const py = pointPixel.y
+  const cw = containerSize.x
+  const ch = containerSize.y
+  const tooltipWidth = rect.width
+  const tooltipHeight = rect.height
+  const padding = 60
+
+  // 计算水平偏移
+  let offsetX = 0
+
+  if (px - tooltipWidth / 2 < padding) {
+    offsetX = padding - (px - tooltipWidth / 2)
+  } else if (px + tooltipWidth / 2 > cw - padding) {
+    offsetX = -(px + tooltipWidth / 2 - (cw - padding))
+  }
+
+  // 顶部区域：tooltip 显示在点下方，避免被遮住
+  let offsetY = -10
+  let translateY = '-100%'
+  if (py < 100) {
+    translateY = '0'
+    offsetY = 15
+  }
+
+  console.log('[Leaflet] updateCustomTooltip:', {
+    px, py, cw, ch, tooltipWidth, tooltipHeight, offsetX, offsetY, padding,
+    tooltipLeft: px - tooltipWidth / 2 + offsetX,
+    tooltipRight: px + tooltipWidth / 2 + offsetX,
+    containerLeft: padding,
+    containerRight: cw - padding
+  })
 
   // 设置位置和 transform
-  tooltip.style.left = `${pointPixel.x}px`
-  tooltip.style.top = `${pointPixel.y}px`
-  tooltip.style.transform = 'translate(-50%, -100%) translateY(-10px)'
+  tooltip.style.left = `${px}px`
+  tooltip.style.top = `${py}px`
+  tooltip.style.transform = `translate(calc(-50% + ${offsetX}px), ${translateY}) translateY(${offsetY}px)`
 }
 
 // 绘制轨迹
@@ -2091,8 +2161,8 @@ function fitBounds() {
 
   // 获取地图容器尺寸，计算 5% 的 padding
   const mapContainer = map.value.getContainer()
-  const width = mapContainer.clientWidth
-  const height = mapContainer.clientHeight
+  const width = mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800
+  const height = mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600
   const padding = Math.round(Math.max(width, height) * 0.05)
 
   // 使用 L.point() 创建 padding 对象

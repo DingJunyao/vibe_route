@@ -364,6 +364,81 @@ const hasActiveFilters = computed(() => {
 - 后端通过 WebSocket 推送日志
 - 日志自动解析标签（如 `[AMap]`）
 
+### 地图 Tooltip 定位调试（重要）
+
+**问题现象**：高德地图在轨迹上悬停时，tooltip 显示不稳定，某些区域完全不显示。
+
+**根本原因**：AMap 的 polyline 或其他内部元素会阻止事件冒泡，导致容器级别的 mousemove 监听器无法接收事件。
+
+**解决方案**：在 `document` 级别监听鼠标移动，手动检查鼠标是否在地图容器内。
+
+**实现要点**（[`AMap.vue`](frontend/src/components/map/AMap.vue)）：
+
+```typescript
+// 存储 document 监听器引用以便清理
+let documentMouseMoveHandler: ((e: MouseEvent) => void) | null = null
+
+// 在 document 级别监听（不会被内部元素阻挡）
+documentMouseMoveHandler = (e: MouseEvent) => {
+  if (!AMapInstance || !mapContainer.value) return
+
+  // 检查鼠标是否在地图容器内
+  const rect = mapContainer.value.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+
+  // 如果鼠标在容器外，隐藏标记
+  if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+    hideMarker()
+    return
+  }
+
+  // 将容器坐标转换为地图坐标
+  const lngLat = AMapInstance.containerToLngLat(new AMap.Pixel(x, y))
+  if (!lngLat) return
+  const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
+  handleMouseMove(mouseLngLat)
+}
+
+document.addEventListener('mousemove', documentMouseMoveHandler, true)
+
+// 在 onUnmounted 时清理
+if (documentMouseMoveHandler) {
+  document.removeEventListener('mousemove', documentMouseMoveHandler, true)
+  documentMouseMoveHandler = null
+}
+```
+
+**其他技术要点**：
+
+1. **使用 anchor 而非大偏移**：当上方空间不足时，使用 `top-center` 锚点（tooltip 顶部附着在点上，向下延伸），而非使用大正数偏移
+
+2. **anchor 值**：
+   - `bottom-center`（默认）：tooltip 在点上方
+   - `top-center`：tooltip 在点下方
+
+3. **计算逻辑**（[`calculateSmartOffset`](frontend/src/components/map/AMap.vue:224)）：
+   ```typescript
+   if (spaceAbove < tooltipHeight + 20 && spaceBelow > tooltipHeight + 20) {
+     anchor = 'top-center'
+     offsetY = 10
+   } else {
+     anchor = 'bottom-center'
+     offsetY = -10
+   }
+   ```
+
+4. **调用顺序**：
+   ```typescript
+   tooltip.setAnchor(smartOffset.anchor)  // 先设置锚点
+   tooltip.setOffset(new AMap.Pixel(smartOffset.x, smartOffset.y))
+   tooltip.setContent(content)
+   tooltip.setPosition(new AMap.LngLat(lng, lat))
+   tooltip.open(AMapInstance)
+   ```
+
+5. **content 固定宽度**：所有 tooltip 内容 div 都设置 `width: 200px`，防止 tooltip 变窄变高
+
 ### 实时轨迹记录功能
 
 系统支持通过 GPS Logger 等应用实时记录轨迹点，无需登录即可上传。

@@ -343,7 +343,7 @@ function createCustomTooltip() {
   tooltipDiv.style.cssText = `
     position: absolute;
     z-index: 1000;
-    pointer-events: auto;
+    pointer-events: none;
     display: none;
   `
   mapContainer.value.appendChild(tooltipDiv)
@@ -424,11 +424,13 @@ function showTooltip(nearestIndex: number, point: Point, position: { lng: number
   const locationResult = formatLocationInfo(point)
 
   const content = `
-    <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
-    ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
-    <div style="color: #666;">时间: ${timeStr}</div>
-    <div style="color: #666;">速度: ${speed}</div>
-    <div style="color: #666;">海拔: ${elevation}</div>
+    <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; pointer-events: auto;">
+      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${nearestIndex}</div>
+      ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
+      <div style="color: #666;">时间: ${timeStr}</div>
+      <div style="color: #666;">速度: ${speed}</div>
+      <div style="color: #666;">海拔: ${elevation}</div>
+    </div>
   `
 
   // 保存当前高亮的点信息
@@ -566,11 +568,13 @@ async function initMap() {
           const locationResult = formatLocationInfo(currentHighlightPoint.point)
 
           const content = `
-            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${currentHighlightPoint.index}</div>
-            ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
-            <div style="color: #666;">时间: ${timeStr}</div>
-            <div style="color: #666;">速度: ${speed}</div>
-            <div style="color: #666;">海拔: ${elevation}</div>
+            <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; pointer-events: auto;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">点 #${currentHighlightPoint.index}</div>
+              ${locationResult.html ? `<div style="color: #666;">${locationResult.html}</div>` : ''}
+              <div style="color: #666;">时间: ${timeStr}</div>
+              <div style="color: #666;">速度: ${speed}</div>
+              <div style="color: #666;">海拔: ${elevation}</div>
+            </div>
           `
 
           const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
@@ -785,7 +789,7 @@ async function initMap() {
         }
 
         const content = `
-          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
+          <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer; pointer-events: auto;">
             <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
@@ -950,7 +954,7 @@ async function initMap() {
             }
 
             const content = `
-              <div class="track-tooltip" data-track-id="${track.id}" style="cursor: pointer;">
+              <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer; pointer-events: auto;">
                 <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
                 <div style="color: #666;">时间: ${formatTimeRange()}</div>
                 <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
