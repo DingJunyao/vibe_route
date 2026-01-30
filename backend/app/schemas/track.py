@@ -126,6 +126,8 @@ class TrackPointResponse(BaseModel):
     id: int
     point_index: int
     time: Optional[datetime]
+    latitude: float  # 主坐标系（根据 crs 参数确定）
+    longitude: float  # 主坐标系
     latitude_wgs84: float
     longitude_wgs84: float
     latitude_gcj02: Optional[float]
@@ -134,11 +136,17 @@ class TrackPointResponse(BaseModel):
     longitude_bd09: Optional[float]
     elevation: Optional[float]
     speed: Optional[float]
+    bearing: Optional[float]  # 方位角（度），范围 [0, 360)
     province: Optional[str]
     city: Optional[str]
     district: Optional[str]
+    province_en: Optional[str]
+    city_en: Optional[str]
+    district_en: Optional[str]
     road_name: Optional[str]
     road_number: Optional[str]
+    road_name_en: Optional[str]
+    memo: Optional[str]  # 备注
 
     @field_serializer('time')
     def serialize_time(self, dt: Optional[datetime]) -> Optional[str]:

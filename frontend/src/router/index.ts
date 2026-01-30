@@ -100,7 +100,7 @@ const router = createRouter({
 })
 
 // 路由守卫
-router.beforeEach((to, from, next) => {
+router.beforeEach(async (to, from, next) => {
   const authStore = useAuthStore()
   const isDev = import.meta.env.DEV
 
@@ -122,8 +122,7 @@ router.beforeEach((to, from, next) => {
   } else if (to.meta.requiresAdmin) {
     // 需要管理员权限 - 如果没有用户信息，先尝试获取
     if (!authStore.user && authStore.isLoggedIn) {
-      // 异步获取用户信息，同时放行（会在组件内再次检查）
-      authStore.fetchCurrentUser()
+      await authStore.fetchCurrentUser()
     }
     if (authStore.user && !authStore.user.is_admin) {
       next({ name: 'Home' })

@@ -1888,7 +1888,8 @@ async function confirmEndRecording() {
       if (recordingDetail.value.last_point_time) {
         confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(recordingDetail.value.last_point_time)}</p>`
       }
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">如果觉得轨迹点时间对不上，请先检查 GPS Logger 是否正常上传。</p>'
+      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">出于应用程序、网络等多方面的原因，在手机的 App 上停止记录轨迹后，不一定上传了全部的轨迹，会继续传输。</p>'
+      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">请务必确认你已经上传了全部轨迹点。如果觉得轨迹点时间对不上，请先检查你的 GPS 记录程序（如 GPS Logger）是否正常上传。</p>'
     }
     confirmMessage += '<p style="margin-top: 12px;">结束后将无法继续上传轨迹点。</p>'
 
@@ -2077,7 +2078,7 @@ async function importPoints() {
 
   try {
     importing.value = true
-    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value)
+    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value, false)
 
     const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
     ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
@@ -2092,8 +2093,60 @@ async function importPoints() {
     await fetchTrackDetail()
     await fetchTrackPoints()
     await fetchRegions()
-  } catch (error) {
+  } catch (error: any) {
     console.error('Import error:', error)
+    console.error('Error response:', error.response)
+    console.error('Error data:', error.response?.data)
+
+    // 检查是否是 409 Conflict（正在填充地理信息）
+    if (error.response?.status === 409) {
+      // JSONResponse 直接返回 content，不需要 .detail
+      const detail = error.response?.data
+      console.log('Parsed detail:', detail)
+      if (detail?.code === 'FILLING_IN_PROGRESS') {
+        // 弹窗确认
+        try {
+          await ElMessageBox.confirm(
+            detail.message || '当前正在填充地理信息，如果继续导入，会立即停止，改用导入的结果。是否继续导入？',
+            '确认导入',
+            {
+              confirmButtonText: '继续导入',
+              cancelButtonText: '取消',
+              type: 'warning',
+            }
+          )
+
+          // 用户确认，重新调用 API 并带上 confirm=true
+          importing.value = true
+          const result = await trackApi.importPoints(
+            trackId.value,
+            importFile.value,
+            importMatchMode.value,
+            importTimezone.value,
+            importTimeTolerance.value,
+            true  // confirm=true
+          )
+
+          const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
+          ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
+
+          importDialogVisible.value = false
+          importFile.value = null
+          if (uploadRef.value) {
+            uploadRef.value.clearFiles()
+          }
+
+          // 重新加载轨迹数据
+          await fetchTrackDetail()
+          await fetchTrackPoints()
+          await fetchRegions()
+        } catch {
+          // 用户取消确认，不做任何操作
+        }
+        return
+      }
+    }
+
     ElMessage.error('导入失败，请检查文件格式是否正确')
   } finally {
     importing.value = false

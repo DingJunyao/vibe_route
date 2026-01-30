@@ -1,7 +1,7 @@
 """
 认证相关 API 路由
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -12,12 +12,15 @@ from app.schemas.user import UserCreate, UserLogin, UserResponse, TokenResponse
 from app.schemas.config import FontConfig, PublicConfigResponse
 from app.services.user_service import user_service
 from app.services.config_service import config_service
+from app.core.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
 
 @router.post("/register", response_model=TokenResponse)
+@limiter.limit("5/minute")
 async def register(
+    request: Request,
     user_data: UserCreate,
     db: AsyncSession = Depends(get_db),
 ):
@@ -94,7 +97,9 @@ async def register(
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 async def login(
+    request: Request,
     user_data: UserLogin,
     db: AsyncSession = Depends(get_db),
 ):

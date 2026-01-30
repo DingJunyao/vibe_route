@@ -6,16 +6,23 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Dict, Set
 from loguru import logger
 import json
+import asyncio
+from datetime import datetime, timedelta, timezone
 
 
 class LiveTrackManager:
     """实时轨迹 WebSocket 连接管理器"""
+
+    # 心跳超时时间（秒）
+    HEARTBEAT_TIMEOUT = 300  # 5 分钟无心跳则断开
 
     def __init__(self):
         # recording_id -> Set[WebSocket]
         self.recording_connections: Dict[int, Set[WebSocket]] = {}
         # track_id -> Set[WebSocket]
         self.track_connections: Dict[int, Set[WebSocket]] = {}
+        # WebSocket -> 最后心跳时间
+        self.last_heartbeat: Dict[WebSocket, datetime] = {}
 
     async def connect_to_recording(self, websocket: WebSocket, recording_id: int):
         """连接到实时记录"""
@@ -23,7 +30,11 @@ class LiveTrackManager:
         if recording_id not in self.recording_connections:
             self.recording_connections[recording_id] = set()
         self.recording_connections[recording_id].add(websocket)
+        self.last_heartbeat[websocket] = datetime.now(timezone.utc)
         logger.info(f"WebSocket connected to recording {recording_id}")
+
+        # 启动心跳检查任务
+        asyncio.create_task(self._check_heartbeat(websocket, recording_id, "recording"))
 
     async def connect_to_track(self, websocket: WebSocket, track_id: int):
         """连接到轨迹"""
@@ -31,7 +42,37 @@ class LiveTrackManager:
         if track_id not in self.track_connections:
             self.track_connections[track_id] = set()
         self.track_connections[track_id].add(websocket)
+        self.last_heartbeat[websocket] = datetime.now(timezone.utc)
         logger.info(f"WebSocket connected to track {track_id}")
+
+        # 启动心跳检查任务
+        asyncio.create_task(self._check_heartbeat(websocket, track_id, "track"))
+
+    async def _check_heartbeat(self, websocket: WebSocket, id: int, connection_type: str):
+        """检查心跳，超时则断开连接"""
+        while True:
+            try:
+                await asyncio.sleep(60)  # 每分钟检查一次
+                if websocket not in self.last_heartbeat:
+                    break
+
+                last_time = self.last_heartbeat[websocket]
+                if datetime.now(timezone.utc) - last_time > timedelta(seconds=self.HEARTBEAT_TIMEOUT):
+                    logger.warning(f"WebSocket heartbeat timeout for {connection_type} {id}")
+                    try:
+                        await websocket.close(code=1001, reason="Heartbeat timeout")
+                    except Exception:
+                        pass
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Heartbeat check error: {e}")
+                break
+
+    def update_heartbeat(self, websocket: WebSocket):
+        """更新心跳时间"""
+        self.last_heartbeat[websocket] = datetime.now(timezone.utc)
 
     def disconnect_from_recording(self, websocket: WebSocket, recording_id: int):
         """断开与实时记录的连接"""
@@ -39,6 +80,7 @@ class LiveTrackManager:
             self.recording_connections[recording_id].discard(websocket)
             if not self.recording_connections[recording_id]:
                 del self.recording_connections[recording_id]
+        self.last_heartbeat.pop(websocket, None)
         logger.info(f"WebSocket disconnected from recording {recording_id}")
 
     def disconnect_from_track(self, websocket: WebSocket, track_id: int):
@@ -47,6 +89,7 @@ class LiveTrackManager:
             self.track_connections[track_id].discard(websocket)
             if not self.track_connections[track_id]:
                 del self.track_connections[track_id]
+        self.last_heartbeat.pop(websocket, None)
         logger.info(f"WebSocket disconnected from track {track_id}")
 
     async def broadcast_to_recording(self, recording_id: int, message: dict):
@@ -189,6 +232,7 @@ async def websocket_live_recording(
             # 保持连接，接收客户端消息（心跳等）
             data = await websocket.receive_text()
             if data == "ping":
+                live_track_manager.update_heartbeat(websocket)
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         live_track_manager.disconnect_from_recording(websocket, recording_id)
@@ -256,6 +300,7 @@ async def websocket_track(
         while True:
             data = await websocket.receive_text()
             if data == "ping":
+                live_track_manager.update_heartbeat(websocket)
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
         live_track_manager.disconnect_from_track(websocket, track_id)

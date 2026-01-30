@@ -41,6 +41,7 @@ class Track(Base, AuditMixin):
     # 关系
     user = relationship("User", back_populates="tracks")
     points = relationship("TrackPoint", back_populates="track", cascade="all, delete-orphan")
+    live_recordings = relationship("LiveRecording", foreign_keys="LiveRecording.current_track_id")
 
     def __repr__(self):
         return f"<Track(id={self.id}, name='{self.name}', user_id={self.user_id})>"
@@ -89,6 +90,31 @@ class TrackPoint(Base, AuditMixin):
 
     # 关系
     track = relationship("Track", back_populates="points")
+
+    def get_coords(self, crs: str = "wgs84") -> tuple[float, float]:
+        """
+        根据坐标系获取坐标
+
+        Args:
+            crs: 坐标系 (wgs84, gcj02, bd09)
+
+        Returns:
+            (latitude, longitude) 元组
+        """
+        if crs == "wgs84":
+            return self.latitude_wgs84, self.longitude_wgs84
+        elif crs == "gcj02":
+            # 如果 gcj02 坐标为空，返回 wgs84 坐标
+            if self.latitude_gcj02 is None or self.longitude_gcj02 is None:
+                return self.latitude_wgs84, self.longitude_wgs84
+            return self.latitude_gcj02, self.longitude_gcj02
+        elif crs == "bd09":
+            # 如果 bd09 坐标为空，返回 wgs84 坐标
+            if self.latitude_bd09 is None or self.longitude_bd09 is None:
+                return self.latitude_wgs84, self.longitude_wgs84
+            return self.latitude_bd09, self.longitude_bd09
+        # 默认返回 wgs84
+        return self.latitude_wgs84, self.longitude_wgs84
 
     def __repr__(self):
         return f"<TrackPoint(id={self.id}, track_id={self.track_id}, index={self.point_index})>"

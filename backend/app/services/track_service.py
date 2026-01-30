@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import select, func, delete, insert, and_, update
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.track import Track, TrackPoint
@@ -80,17 +81,32 @@ class TrackService:
 
         return self._geocoding_service
 
-    async def get_by_id(self, db: AsyncSession, track_id: int, user_id: int) -> Optional[Track]:
-        """获取轨迹（带用户权限检查）"""
-        result = await db.execute(
-            select(Track).where(
-                and_(
-                    Track.id == track_id,
-                    Track.user_id == user_id,
-                    Track.is_valid == True
-                )
+    async def get_by_id(self, db: AsyncSession, track_id: int, user_id: int, load_recording: bool = False) -> Optional[Track]:
+        """
+        获取轨迹（带用户权限检查）
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹ID
+            user_id: 用户ID
+            load_recording: 是否预加载关联的实时记录
+
+        Returns:
+            轨迹对象，如果不存在则返回 None
+        """
+        query = select(Track).where(
+            and_(
+                Track.id == track_id,
+                Track.user_id == user_id,
+                Track.is_valid == True
             )
         )
+
+        # 如果需要预加载关联的实时记录
+        if load_recording:
+            query = query.options(selectinload(Track.live_recordings))
+
+        result = await db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_id_no_check(self, db: AsyncSession, track_id: int) -> Optional[Track]:

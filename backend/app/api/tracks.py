@@ -1,13 +1,17 @@
 """
 轨迹相关 API 路由
 """
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
 from app.models.live_recording import LiveRecording
 from app.schemas.track import (
@@ -23,6 +27,7 @@ from app.schemas.track import (
 from app.services.track_service import track_service
 
 router = APIRouter(prefix="/tracks", tags=["轨迹"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/upload", response_model=TrackResponse)
@@ -76,6 +81,14 @@ async def upload_track(
 
     # 读取文件内容
     content = await file.read()
+
+    # 检查文件大小
+    if len(content) > settings.MAX_UPLOAD_SIZE:
+        size_mb = settings.MAX_UPLOAD_SIZE / (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"文件大小超过限制（最大 {size_mb:.0f} MB）",
+        )
 
     # 创建轨迹
     try:
@@ -187,11 +200,13 @@ async def upload_track(
                 fill_geocoding=fill_geocoding,
             )
     except ValueError as e:
+        logger.error(f"ValueError in upload_track for user {current_user.id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Exception in upload_track for user {current_user.id}, file {file.filename}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"处理轨迹时出错: {str(e)}",
@@ -294,22 +309,24 @@ async def get_track(
 ):
     """
     获取轨迹详情
+
+    使用 selectinload 优化查询，一次性获取轨迹和关联的实时记录数据
     """
-    track = await track_service.get_by_id(db, track_id, current_user.id)
+    # 使用优化的查询，预加载关联的实时记录
+    track = await track_service.get_by_id(db, track_id, current_user.id, load_recording=True)
     if not track:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="轨迹不存在",
         )
 
-    # 查询关联的实时记录
-    result = await db.execute(
-        select(LiveRecording).where(
-            LiveRecording.current_track_id == track_id,
-            LiveRecording.is_valid == True
-        )
-    )
-    recording = result.scalar_one_or_none()
+    # 从预加载的数据中查找活跃的实时记录
+    recording = None
+    if hasattr(track, 'live_recordings') and track.live_recordings:
+        for rec in track.live_recordings:
+            if rec.is_valid and rec.status == "active" and rec.current_track_id == track_id:
+                recording = rec
+                break
 
     # 构建响应
     response_data = {
@@ -330,7 +347,7 @@ async def get_track(
         "created_at": track.created_at,
         "updated_at": track.updated_at,
         # 实时记录相关
-        "is_live_recording": recording is not None and recording.status == "active",
+        "is_live_recording": recording is not None,
         "live_recording_id": recording.id if recording else None,
         "live_recording_status": recording.status if recording else None,
         "live_recording_token": recording.token if recording else None,
@@ -404,11 +421,19 @@ async def fill_track_geocoding(
     if progress.get("status") == "filling":
         return {"message": "正在填充中", "progress": progress}
 
-    # 启动异步填充
+    # 启动异步填充（创建新的数据库会话）
     import asyncio
-    asyncio.create_task(
-        track_service.fill_geocoding_info(db, track_id, current_user.id)
-    )
+
+    async def fill_task():
+        """异步填充任务，创建自己的数据库会话"""
+        from app.core.database import async_session_maker
+        async with async_session_maker() as new_db:
+            try:
+                await track_service.fill_geocoding_info(new_db, track_id, current_user.id)
+            except Exception as e:
+                logger.exception(f"Fill geocoding task error for track {track_id}, user {current_user.id}")
+
+    asyncio.create_task(fill_task())
 
     return {"message": "开始填充行政区划和道路信息", "track_id": track_id}
 
@@ -759,7 +784,7 @@ async def export_track_points(
                 },
             )
     except ValueError as e:
-        logger.error(f"Export ValueError: {e}")
+        logger.error(f"Export ValueError for track {track_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
@@ -779,6 +804,7 @@ async def import_track_points(
     match_mode: str = Form("index"),
     timezone: str = Form("UTC"),
     time_tolerance: float = Form(1.0),
+    confirm: bool = Form(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -789,9 +815,25 @@ async def import_track_points(
     - match_mode: 匹配方式，index=索引匹配，time=时间匹配
     - timezone: 导入文件的时间戳时区（如 UTC、UTC+8、Asia/Shanghai），默认 UTC
     - time_tolerance: 时间匹配误差（秒），默认 1 秒（不含）
+    - confirm: 是否确认停止正在进行的地理信息填充并继续导入
     - 只更新可编辑字段：行政区划、道路信息、备注
     - 坐标、海拔、速度等原始数据不会被修改
     """
+    # 检查是否正在填充地理信息
+    progress = track_service.get_fill_progress(track_id)
+    if progress.get("status") == "filling":
+        if not confirm:
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "message": "当前正在填充地理信息，如果继续导入，会立即停止，改用导入的结果",
+                    "code": "FILLING_IN_PROGRESS",
+                    "confirm_required": True,
+                },
+            )
+        # 用户确认，停止填充任务
+        logger.info(f"User confirmed to stop filling for track {track_id}")
+        track_service.stop_fill_geocoding(track_id)
     # 验证匹配方式
     if match_mode not in ("index", "time"):
         raise HTTPException(
@@ -823,11 +865,13 @@ async def import_track_points(
         )
         return result
     except ValueError as e:
+        logger.error(f"Import ValueError for track {track_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Import failed for track {track_id}, user {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导入失败: {str(e)}",

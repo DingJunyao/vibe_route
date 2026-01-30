@@ -1,6 +1,7 @@
 """
 任务相关 API
 """
+import logging
 import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -12,6 +13,8 @@ from app.models.user import User
 from app.models.task import Task
 from app.services.task_service import task_service
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -84,8 +87,10 @@ async def generate_overlay(
         )
         return task_to_response(task)
     except ValueError as e:
+        logger.error(f"ValueError in generate_overlay for track {request.track_id}: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception(f"Exception in generate_overlay for track {request.track_id}, user {current_user.id}")
         raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
 
 

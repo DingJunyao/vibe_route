@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     EXPORT_DIR: str = "data/exports"
     ROAD_SIGN_DIR: str = "data/road_signs"
 
+    # 文件大小限制（字节）
+    MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100 MB
+
     # CORS 配置
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 

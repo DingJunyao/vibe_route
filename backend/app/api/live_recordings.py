@@ -454,6 +454,9 @@ async def upload_to_recording(
         )
 
     # 创建轨迹
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         track = await track_service.create_from_gpx(
             db=db,
@@ -467,11 +470,13 @@ async def upload_to_recording(
             fill_geocoding=fill_geocoding,
         )
     except ValueError as e:
+        logger.error(f"ValueError in create_from_gpx: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Exception in create_from_gpx for user {recording.user_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"处理轨迹时出错: {str(e)}",
@@ -639,6 +644,9 @@ async def log_track_point(
         )
 
     # 添加轨迹点
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         result = await live_recording_service.add_point_to_recording(
             db=db,
@@ -655,11 +663,13 @@ async def log_track_point(
         )
         return LogPointResponse(**result)
     except ValueError as e:
+        logger.error(f"ValueError in add_point_to_recording: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Exception in add_point_to_recording for recording {recording_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"添加轨迹点时出错: {str(e)}",

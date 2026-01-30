@@ -2,7 +2,7 @@
 依赖注入模块
 """
 from typing import Optional
-from fastapi import Depends, HTTPException, status, Header, Request
+from fastapi import Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db

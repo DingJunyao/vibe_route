@@ -1,6 +1,7 @@
 """
 道路标志相关 API
 """
+import logging
 import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,8 @@ from app.models.road_sign import RoadSignCache
 from app.services.road_sign_service import road_sign_service
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/road-signs", tags=["road-signs"])
 
@@ -141,8 +144,10 @@ async def generate_road_sign(
             name=request.name,
         )
     except ValueError as e:
+        logger.error(f"ValueError in generate_road_sign: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.exception(f"Exception in generate_road_sign for {request.sign_type}/{request.code}")
         raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
 
 

@@ -10,10 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config, InviteCode
 from app.models.user import User
+from app.utils.cache import config_cache
 
 
 class ConfigService:
     """配置服务类"""
+
+    # 缓存键
+    CACHE_KEY_ALL_CONFIGS = "all_configs"
 
     # 默认配置
     DEFAULT_CONFIGS = {
@@ -180,13 +184,23 @@ class ConfigService:
 
         await self.set(db, key, str_value, user_id)
 
-    async def get_all_configs(self, db: AsyncSession) -> dict:
+    async def get_all_configs(self, db: AsyncSession, use_cache: bool = True) -> dict:
         """
         获取所有配置
 
         使用智能解析来读取配置值
         对于 map_layers 和 geocoding_config，会与默认配置进行深度合并
+
+        Args:
+            db: 数据库会话
+            use_cache: 是否使用缓存，默认 True
         """
+        # 尝试从缓存获取
+        if use_cache:
+            cached = config_cache.get(self.CACHE_KEY_ALL_CONFIGS)
+            if cached is not None:
+                return cached
+
         configs = self.DEFAULT_CONFIGS.copy()
 
         # 从数据库获取配置并覆盖默认值
@@ -236,6 +250,10 @@ class ConfigService:
                             # 返回原始字符串
                             configs[config.key] = raw_value
 
+        # 存入缓存
+        if use_cache:
+            config_cache.set(self.CACHE_KEY_ALL_CONFIGS, configs)
+
         return configs
 
     def _parse_config_value(self, value: str):
@@ -260,6 +278,10 @@ class ConfigService:
         """更新配置"""
         for key, value in updates.items():
             await self.set_json(db, key, value, user_id)
+
+        # 清除缓存
+        config_cache.delete(self.CACHE_KEY_ALL_CONFIGS)
+
         return await self.get_all_configs(db)
 
     async def init_default_configs(self, db: AsyncSession, user_id: int = 1) -> None:

@@ -914,7 +914,8 @@ async function confirmEndRecording() {
       if (currentRecording.value.last_point_time) {
         confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(currentRecording.value.last_point_time)}</p>`
       }
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">如果觉得轨迹点时间对不上，请先检查 GPS Logger 是否正常上传。</p>'
+      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">出于应用程序、网络等多方面的原因，在手机的 App 上停止记录轨迹后，不一定上传了全部的轨迹，会继续传输。</p>'
+      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">请务必确认你已经上传了全部轨迹点。如果觉得轨迹点时间对不上，请先检查你的 GPS 记录程序（如 GPS Logger）是否正常上传。</p>'
     }
     confirmMessage += '<p style="margin-top: 12px;">结束后将无法继续上传轨迹点。</p>'
 

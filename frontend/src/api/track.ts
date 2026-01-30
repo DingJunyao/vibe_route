@@ -273,12 +273,13 @@ export const trackApi = {
   },
 
   // 导入轨迹点
-  importPoints(trackId: number, file: File, matchMode: 'index' | 'time', timezone: string = 'UTC+8', timeTolerance: number = 1.0): Promise<ImportResponse> {
+  importPoints(trackId: number, file: File, matchMode: 'index' | 'time', timezone: string = 'UTC+8', timeTolerance: number = 1.0, confirm: boolean = false): Promise<ImportResponse> {
     const formData = new FormData()
     formData.append('file', file)
     formData.append('match_mode', matchMode)
     formData.append('timezone', timezone)
     formData.append('time_tolerance', String(timeTolerance))
+    formData.append('confirm', String(confirm))
     return http.post(`/tracks/${trackId}/import`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',

@@ -596,7 +596,9 @@ async def delete_font(
     file_path.unlink()
 
     # 更新配置（如果删除的文件是激活字体，则清除该配置）
-    async for db in get_db():
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
         try:
             configs = await config_service.get_all_configs(db)
             font_config = configs.get("font_config", {})
@@ -617,7 +619,6 @@ async def delete_font(
                 {"font_config": font_config},
                 current_admin.id,
             )
-            break
         finally:
             await db.close()
 
