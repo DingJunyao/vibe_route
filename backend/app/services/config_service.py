@@ -23,7 +23,7 @@ class ConfigService:
     DEFAULT_CONFIGS = {
         "registration_enabled": True,
         "invite_code_required": False,
-        "default_map_provider": "osm",
+        "default_map_provider": "amap",
         "geocoding_provider": "nominatim",
         "show_road_sign_in_region_tree": True,
         "geocoding_config": {
@@ -86,19 +86,20 @@ class ConfigService:
                 "attribution": "&copy; 天地图",
                 "max_zoom": 18,
                 "min_zoom": 1,
-                "enabled": True,
+                "enabled": False,
                 "order": 3,
             },
             "osm": {
                 "id": "osm",
                 "name": "OpenStreetMap",
+                "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
                 "crs": "wgs84",
                 "attribution": "&copy; OpenStreetMap contributors",
                 "max_zoom": 19,
                 "min_zoom": 1,
                 "enabled": True,
                 "order": 4,
-                "subdomains": "abc",
+                "subdomains": "abc"
             },
         },
     }

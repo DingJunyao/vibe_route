@@ -1925,8 +1925,8 @@ class TrackService:
         sample_timestamps = list(points_by_time.keys())[:3]
         logger.info(f"Database sample timestamps: {sample_timestamps}")
 
-        # 记录使用的匹配方式
-        matched_by = "none"
+        # 记录是否有成功的匹配（任何模式）
+        has_successful_match = False
 
         # 调试日志 - 显示数据库时间范围
         if db_time_range["min"] is not None:
@@ -2111,7 +2111,7 @@ class TrackService:
                             index = int(index_str)
                             if index in points_map:
                                 point = points_map[index]
-                                matched_by = "index"
+                                has_successful_match = True
                         except ValueError:
                             pass
                 else:  # match_mode == "time"
@@ -2121,7 +2121,7 @@ class TrackService:
                     if parsed_time:
                         point = find_point_by_time(parsed_time)
                         if point:
-                            matched_by = "time"
+                            has_successful_match = True
 
                 if point:
                     update_point_fields(point, row)
@@ -2159,7 +2159,7 @@ class TrackService:
                                 index = int(row[idx])
                                 if index in points_map:
                                     point = points_map[index]
-                                    matched_by = "index"
+                                    has_successful_match = True
                             except (ValueError, TypeError):
                                 pass
                 else:  # match_mode == "time"
@@ -2169,7 +2169,7 @@ class TrackService:
                     if parsed_time:
                         point = find_point_by_time(parsed_time)
                         if point:
-                            matched_by = "time"
+                            has_successful_match = True
 
                 if point:
                     update_point_fields(point, row, headers)
@@ -2196,12 +2196,16 @@ class TrackService:
 
         await db.commit()
 
-        logger.info(f"Imported data for track {track_id}: {updated_count}/{len(points)} points updated, matched by {matched_by}")
+        # 确定实际使用的匹配方式：
+        # 如果有成功匹配，使用用户选择的模式；否则为 none
+        actual_matched_by = match_mode if has_successful_match else "none"
+
+        logger.info(f"Imported data for track {track_id}: {updated_count}/{len(points)} points updated, matched by {actual_matched_by}")
 
         return {
             "updated": updated_count,
             "total": len(points),
-            "matched_by": matched_by
+            "matched_by": actual_matched_by
         }
 
 

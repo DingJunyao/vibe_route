@@ -4,7 +4,7 @@
 from datetime import datetime
 from sqlalchemy import (
     Boolean, Column, Integer, String, Float, Text, DateTime, ForeignKey, BigInteger,
-    Sequence,
+    Sequence, Double,
 )
 from sqlalchemy.orm import relationship
 
@@ -59,18 +59,18 @@ class TrackPoint(Base, AuditMixin):
     # 时间
     time = Column(DateTime, nullable=True)
 
-    # 三种坐标系
-    latitude_wgs84 = Column(Float, nullable=False)
-    longitude_wgs84 = Column(Float, nullable=False)
-    latitude_gcj02 = Column(Float, nullable=True)
-    longitude_gcj02 = Column(Float, nullable=True)
-    latitude_bd09 = Column(Float, nullable=True)
-    longitude_bd09 = Column(Float, nullable=True)
+    # 三种坐标系（使用 Double 确保经纬度精度）
+    latitude_wgs84 = Column(Double, nullable=False)
+    longitude_wgs84 = Column(Double, nullable=False)
+    latitude_gcj02 = Column(Double, nullable=True)
+    longitude_gcj02 = Column(Double, nullable=True)
+    latitude_bd09 = Column(Double, nullable=True)
+    longitude_bd09 = Column(Double, nullable=True)
 
     # 数据
-    elevation = Column(Float, nullable=True)  # 海拔（米）
-    speed = Column(Float, nullable=True)  # 速度（m/s）
-    bearing = Column(Float, nullable=True)  # 方位角（度），范围 [0, 360)
+    elevation = Column(Double, nullable=True)  # 海拔（米）
+    speed = Column(Double, nullable=True)  # 速度（m/s）
+    bearing = Column(Double, nullable=True)  # 方位角（度），范围 [0, 360)
 
     # 行政区划信息
     province = Column(String(50), nullable=True)

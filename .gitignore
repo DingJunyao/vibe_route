@@ -63,6 +63,9 @@ backend/data/exports/
 .env
 .env.local
 .env.*.local
+.env.sqlite
+.env.mysql
+.env.postgresql
 
 # Logs
 *.log
