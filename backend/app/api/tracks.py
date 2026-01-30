@@ -543,11 +543,13 @@ async def get_all_fill_progress(
         if progress and progress.get("status") in ("filling", "completed", "failed"):
             current = progress.get("current", 0)
             total_points = progress.get("total", 0)
+            failed = progress.get("failed", 0)
             percent = int((current / total_points * 100)) if total_points > 0 else 0
             result[track.id] = {
                 "status": progress.get("status", "idle"),
                 "current": current,
                 "total": total_points,
+                "failed": failed,
                 "percent": percent,
             }
 

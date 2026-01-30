@@ -1,0 +1,15 @@
+-- ============================================
+-- 添加 is_live_recording 字段到 tracks 表
+-- ============================================
+
+-- MySQL / MariaDB
+-- 执行方式: mysql -u vibe_route -p vibe_route < 009_add_is_live_recording_flag.sql.mysql
+
+ALTER TABLE tracks
+ADD COLUMN is_live_recording BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 验证
+DESCRIBE tracks;
+SELECT COLUMN_NAME, DATA_TYPE, COLUMN_DEFAULT, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'tracks' AND COLUMN_NAME = 'is_live_recording';

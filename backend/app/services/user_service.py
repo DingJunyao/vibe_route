@@ -65,8 +65,8 @@ class UserService:
             deleted_user.is_valid = True
             deleted_user.created_by = created_by
             deleted_user.updated_by = created_by
-            deleted_user.created_at = datetime.now(timezone.utc)
-            deleted_user.updated_at = datetime.now(timezone.utc)
+            deleted_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            deleted_user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await db.commit()
             await db.refresh(deleted_user)
             return deleted_user
@@ -137,7 +137,7 @@ class UserService:
                 setattr(user, key, value)
         if user_id:
             user.updated_by = user_id
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         await db.refresh(user)
         return user
@@ -146,7 +146,7 @@ class UserService:
         """软删除用户"""
         user.is_valid = False
         user.updated_by = operator_id
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
     async def reset_password(
@@ -159,7 +159,7 @@ class UserService:
         """重置用户密码"""
         user.hashed_password = get_password_hash(new_password)
         user.updated_by = operator_id
-        user.updated_at = datetime.now(timezone.utc)
+        user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         await db.refresh(user)
         return user

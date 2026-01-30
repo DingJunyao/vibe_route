@@ -734,3 +734,139 @@ git ls-files -v | grep "^S"
 # 恢复文件
 git update-index --no-skip-worktree <文件路径>
 ```
+
+## 最新更改 (2026-01)
+
+### DateTime 时区处理
+
+**问题**：PostgreSQL 使用 `TIMESTAMP WITHOUT TIME ZONE`，但代码中使用了 timezone-aware datetime，导致 `can't subtract offset-naive and offset-aware datetimes` 错误。
+
+**解决方案**：统一使用 timezone-naive 的 UTC 时间。
+
+```python
+from datetime import datetime, timezone
+
+# 正确：获取不带时区的 UTC 时间
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+# 错误：datetime.utcnow() 已在 Python 3.12+ 废弃
+```
+
+**涉及文件**：
+
+- [`base.py`](backend/app/models/base.py) - `get_utc_now()` 函数
+- [`config.py`](backend/app/models/config.py) - Column 默认值
+- [`user_service.py`](backend/app/services/user_service.py) - 所有 `created_at`/`updated_at` 赋值
+- [`track_service.py`](backend/app/services/track_service.py) - GPX 解析、填充、更新
+- [`live_recording_service.py`](backend/app/services/live_recording_service.py) - 所有 datetime 操作
+- [`config_service.py`](backend/app/services/config_service.py) - `expires_at` 赋值
+- [`query_helper.py`](backend/app/core/query_helper.py) - 所有 `updated_at` 赋值
+- [`overlay.py`](backend/app/gpxutil_wrapper/overlay.py) - 文件命名
+
+### 地理编码失败跟踪
+
+**功能**：填充地理信息时，跟踪失败点数量并显示给用户。
+
+**实现要点**：
+
+- 检查地理编码是否返回有效数据（至少有一个非空字段）
+- 只有获取到有效数据时才增加进度计数
+- 没有数据时增加失败计数
+- 进度显示格式：`12 + 34 失败 / 90 点（0%）`，失败数量为红色
+
+**涉及文件**：
+
+- [`track_service.py`](backend/app/services/track_service.py) - 填充逻辑
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 进度显示
+- [`track.ts`](frontend/src/api/track.ts) - 类型定义
+
+### PostGIS 空间计算支持
+
+**功能**：PostgreSQL + PostGIS 环境可使用高性能空间计算。
+
+**数据库架构**：
+- 使用独立扩展表 `track_points_spatial`，不影响主表
+- 支持 SQLite / MySQL / PostgreSQL 全兼容
+- 可为已有数据启用 PostGIS
+
+**迁移脚本**：
+- SQLite: `009_add_is_live_recording_flag.sql.sqlite`
+- MySQL: `009_add_is_live_recording_flag.sql.mysql`
+- PostgreSQL: `009_add_is_live_recording_flag.sql.postgresql`
+
+**后台管理**：
+- 仅 PostgreSQL 显示空间计算设置
+- 未启用 PostGIS 时显示提示信息
+- 支持 auto / python / postgis 三种模式
+
+**涉及文件**：
+- [`postgis_spatial.py`](backend/app/services/spatial/postgis_spatial.py)
+- [`admin.py`](backend/app/api/admin.py) - `/admin/database-info` 端点
+- [`Admin.vue`](frontend/src/views/Admin.vue) - 条件显示和提示
+- [`config.py`](backend/app/schemas/config.py) - `spatial_backend` 字段
+
+### 实时记录架构改进
+
+**问题**：并发请求导致创建多条轨迹。
+
+**解决方案**：创建 LiveRecording 时同时创建关联的 Track，建立一对一关系。
+
+**实现要点**：
+- `Track` 添加 `is_live_recording` 字段标记实时记录轨迹
+- 轨迹列表过滤掉实时记录轨迹（`is_live_recording = False`）
+- 简化 `add_point_to_recording` 逻辑，无需竞态条件处理
+
+**涉及文件**：
+- [`track.py`](backend/app/models/track.py) - `is_live_recording` 字段
+- [`live_recording_service.py`](backend/app/services/live_recording_service.py) - `create()` 改进
+- [`track_service.py`](backend/app/services/track_service.py) - `get_list()` 过滤
+
+### 地理编码服务配置缓存
+
+**问题**：修改配置后需要重启服务才能生效。
+
+**解决方案**：使用配置哈希检测变化，自动重建服务实例。
+
+```python
+# 计算配置哈希
+config_hash = hash(json.dumps(provider_config, sort_keys=True))
+
+# 检查是否需要重建
+needs_recreate = (
+    self._geocoding_service is None or
+    self._geocoding_provider != provider or
+    self._geocoding_config_hash != config_hash
+)
+```
+
+**涉及文件**：
+- [`track_service.py`](backend/app/services/track_service.py) - `_get_geocoding_service()` 方法
+
+### 实时轨迹点乱序处理
+
+**问题**：WebSocket 推送点按服务器接收顺序，与实际时间顺序不一致，导致轨迹跳线。
+
+**解决方案**：前端接收新点后按时间戳排序。
+
+```typescript
+points.value.push(newPoint)
+// 按时间戳排序
+points.value.sort((a, b) => {
+  const timeA = a.time ? new Date(a.time).getTime() : 0
+  const timeB = b.time ? new Date(b.time).getTime() : 0
+  return timeA - timeB
+})
+```
+
+**涉及文件**：
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - `handleNewPointAdded()` 方法
+
+### UI 修复
+
+**地图卡片滚动条**：等待记录时隐藏地图卡片的滚动条。
+
+```css
+.map-card :deep(.el-card__body) {
+  overflow: hidden !important;
+}
+```

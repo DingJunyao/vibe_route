@@ -37,11 +37,32 @@ async def lifespan(app: FastAPI):
     # 启动时初始化数据库
     await init_db()
 
-    # 初始化默认配置
+    # 初始化默认配置和空间服务
     from app.core.database import async_session_maker, engine
     from app.services.config_service import config_service
+    from app.services.spatial import create_spatial_service, SpatialBackend
+
     async with async_session_maker() as db:
         await config_service.init_default_configs(db)
+
+        # 初始化空间服务
+        configs = await config_service.get_all_configs(db, use_cache=False)
+        spatial_backend_config = configs.get("spatial_backend", "auto")
+        try:
+            spatial_backend = SpatialBackend(spatial_backend_config)
+        except ValueError:
+            spatial_backend = SpatialBackend.AUTO
+
+        spatial_service = await create_spatial_service(db, spatial_backend)
+        capability_info = spatial_service.get_capability_info()
+        logger.info(f"Spatial service initialized: {capability_info['backend']} - {capability_info['description']}")
+
+        # 将空间服务注入到服务实例中
+        from app.services.track_service import track_service
+        from app.services.live_recording_service import live_recording_service
+
+        track_service.spatial_service = spatial_service
+        live_recording_service.spatial_service = spatial_service
 
     try:
         yield

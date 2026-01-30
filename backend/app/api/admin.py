@@ -314,6 +314,7 @@ async def get_config(
         map_layers=configs.get("map_layers", {}),
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
+        spatial_backend=configs.get("spatial_backend", "auto"),
     )
 
 
@@ -348,7 +349,41 @@ async def update_config(
         map_layers=configs.get("map_layers", {}),
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
+        spatial_backend=configs.get("spatial_backend", "auto"),
     )
+
+
+@router.get("/database-info")
+async def get_database_info(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取数据库信息（用于判断是否显示 PostGIS 设置）
+
+    返回：
+    - database_type: sqlite, mysql, postgresql
+    - postgis_enabled: PostGIS 是否可用（仅 PostgreSQL）
+    """
+    from sqlalchemy import text
+    from app.core.config import settings
+
+    result = {
+        "database_type": settings.DATABASE_TYPE,
+        "postgis_enabled": False,
+    }
+
+    # 检测 PostGIS 是否启用（仅 PostgreSQL）
+    if settings.DATABASE_TYPE == "postgresql":
+        try:
+            check_result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+            )
+            result["postgis_enabled"] = check_result.scalar_one()
+        except Exception:
+            result["postgis_enabled"] = False
+
+    return result
 
 
 # ========== 邀请码管理 ==========

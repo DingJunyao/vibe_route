@@ -2,6 +2,7 @@
 查询辅助类
 提供软删除相关的查询过滤
 """
+from datetime import timezone
 from typing import Type, TypeVar
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,7 +123,7 @@ class SoftDeleteMixin:
         if hasattr(item, 'is_valid'):
             item.is_valid = False
         if hasattr(item, 'updated_at'):
-            item.updated_at = datetime.utcnow()
+            item.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         if hasattr(item, 'updated_by'):
             item.updated_by = user_id
 
@@ -148,7 +149,7 @@ class SoftDeleteMixin:
         """
         from datetime import datetime
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         count = 0
 
         for item in items:
@@ -193,4 +194,4 @@ class AuditMixin:
         if hasattr(item, 'updated_by'):
             item.updated_by = user_id
         if hasattr(item, 'updated_at'):
-            item.updated_at = datetime.utcnow()
+            item.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)

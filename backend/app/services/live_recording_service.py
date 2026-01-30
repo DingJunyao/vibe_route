@@ -6,22 +6,34 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import select, and_, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.live_recording import LiveRecording
 from app.models.track import Track, TrackPoint
 from app.gpxutil_wrapper.coord_transform import convert_point_to_all, CoordinateType
 from app.gpxutil_wrapper.geocoding import create_geocoding_service, GeocodingProvider
+from app.core.config import settings
 from loguru import logger
 
 
 class LiveRecordingService:
     """实时记录服务类"""
 
-    def __init__(self):
-        """初始化服务"""
+    def __init__(self, spatial_service=None):
+        """
+        初始化服务
+
+        Args:
+            spatial_service: 空间计算服务实例，如果为 None 则使用默认的 Python 实现
+        """
+        from app.services.spatial import ISpatialService, PythonSpatialService
+
         self._geocoding_service = None
         self._geocoding_provider = None
         self._geocoding_config = None
+
+        # 空间计算服务
+        self.spatial_service: ISpatialService = spatial_service or PythonSpatialService()
 
     async def _get_geocoding_service(self, db: AsyncSession):
         """获取地理编码服务实例"""
@@ -48,7 +60,7 @@ class LiveRecordingService:
         fill_geocoding: bool = False,
     ) -> LiveRecording:
         """
-        创建实时记录会话
+        创建实时记录会话，同时创建关联的 Track
 
         Args:
             db: 数据库会话
@@ -60,9 +72,35 @@ class LiveRecordingService:
         Returns:
             创建的记录对象
         """
+        from app.models.track import Track
+
         # 生成 64 位安全随机 token
         token = secrets.token_hex(32)
 
+        # 先创建 Track
+        track = Track(
+            user_id=user_id,
+            name=name,
+            description=description,
+            original_filename=f"live_recording_{token[:8]}",
+            original_crs="wgs84",
+            distance=0,
+            duration=0,
+            elevation_gain=0,
+            elevation_loss=0,
+            start_time=None,  # 第一个点到达时设置
+            end_time=None,
+            has_area_info=False,
+            has_road_info=False,
+            is_live_recording=True,  # 标记为实时记录轨迹
+            created_by=user_id,
+            updated_by=user_id,
+            is_valid=True,
+        )
+        db.add(track)
+        await db.flush()
+
+        # 再创建 LiveRecording，关联到 Track
         recording = LiveRecording(
             user_id=user_id,
             token=token,
@@ -70,6 +108,7 @@ class LiveRecordingService:
             description=description,
             status="active",
             track_count=0,
+            current_track_id=track.id,  # 直接关联
             fill_geocoding=fill_geocoding,
             created_by=user_id,
             updated_by=user_id,
@@ -77,6 +116,7 @@ class LiveRecordingService:
         db.add(recording)
         await db.commit()
         await db.refresh(recording)
+        logger.info(f"Created live recording {recording.id} with track {track.id}")
         return recording
 
     async def get_by_id(self, db: AsyncSession, recording_id: int, user_id: int) -> Optional[LiveRecording]:
@@ -172,7 +212,7 @@ class LiveRecordingService:
             更新后的记录对象
         """
         recording.status = "ended"
-        recording.ended_at = datetime.now(timezone.utc)
+        recording.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         await db.refresh(recording)
         return recording
@@ -189,7 +229,7 @@ class LiveRecordingService:
             更新后的记录对象
         """
         recording.track_count += 1
-        recording.last_upload_at = datetime.now(timezone.utc)
+        recording.last_upload_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         await db.refresh(recording)
         return recording
@@ -211,6 +251,8 @@ class LiveRecordingService:
         """
         向实时记录添加单个轨迹点
 
+        由于创建 LiveRecording 时已关联 Track，此方法不再创建新 Track。
+
         Args:
             db: 数据库会话
             recording: 记录对象
@@ -231,62 +273,28 @@ class LiveRecordingService:
         if recording.status != "active":
             raise ValueError("记录已结束，无法添加点")
 
+        # 获取关联的 Track
+        if not recording.current_track_id:
+            raise ValueError("记录未关联到任何轨迹，数据异常")
+
+        result = await db.execute(
+            select(Track).where(
+                and_(
+                    Track.id == recording.current_track_id,
+                    Track.is_valid == True
+                )
+            )
+        )
+        track = result.scalar_one_or_none()
+        if not track:
+            raise ValueError(f"关联的轨迹 {recording.current_track_id} 不存在或已删除")
+
+        logger.info(f"Recording {recording.id}: using track {track.id}")
+
         # 转换时间（毫秒 -> 秒）
         point_time = None
         if time is not None:
             point_time = datetime.fromtimestamp(time / 1000, tz=timezone.utc)
-
-        # 获取或创建当前轨迹
-        track = None
-        logger.info(f"Recording {recording.id}: current_track_id={recording.current_track_id}")
-        if recording.current_track_id:
-            # 获取现有轨迹
-            result = await db.execute(
-                select(Track).where(
-                    and_(
-                        Track.id == recording.current_track_id,
-                        Track.is_valid == True
-                    )
-                )
-            )
-            track = result.scalar_one_or_none()
-            if track:
-                logger.info(f"Found existing track {track.id} for recording {recording.id}")
-            else:
-                logger.warning(f"Recording {recording.id} has current_track_id={recording.current_track_id} but track not found or invalid")
-
-        if not track:
-            logger.info(f"Creating new track for recording {recording.id}")
-            # 创建新轨迹
-            # 将带时区的时间转换为不带时区的时间（与数据库一致）
-            track_time = point_time.replace(tzinfo=None) if point_time else None
-
-            track = Track(
-                user_id=recording.user_id,
-                name=recording.name,
-                description=recording.description,
-                original_filename=f"live_recording_{recording.id}",
-                original_crs=original_crs,
-                distance=0,
-                duration=0,
-                elevation_gain=0,
-                elevation_loss=0,
-                start_time=track_time,
-                end_time=track_time,
-                has_area_info=False,
-                has_road_info=False,
-                created_by=recording.user_id,
-                updated_by=recording.user_id,
-                is_valid=True,
-            )
-            db.add(track)
-            await db.flush()
-
-            # 更新记录的当前轨迹
-            recording.current_track_id = track.id
-            # 立即 flush 确保 current_track_id 写入数据库，避免并发请求时创建多条轨迹
-            await db.flush()
-            logger.info(f"Created new track {track.id} and set recording.current_track_id={recording.current_track_id}")
 
         # 坐标转换
         all_coords = convert_point_to_all(lon, lat, original_crs)
@@ -337,7 +345,7 @@ class LiveRecordingService:
                 )
 
             # 计算距离和速度
-            distance_from_prev = self._calculate_distance(
+            distance_from_prev = await self.spatial_service.distance(
                 last_point.latitude_wgs84, last_point.longitude_wgs84,
                 all_coords['wgs84'][1], all_coords['wgs84'][0]
             )
@@ -371,11 +379,11 @@ class LiveRecordingService:
                 else:
                     track.elevation_loss = round(track.elevation_loss + abs(elevation_diff), 2)
 
-        # 创建轨迹点
+        # 创建轨迹点（去除时区信息，数据库使用不带时区的 TIMESTAMP）
         point = TrackPoint(
             track_id=track.id,
             point_index=point_index,
-            time=point_time,
+            time=point_time.replace(tzinfo=None) if point_time else None,
             latitude_wgs84=all_coords['wgs84'][1],
             longitude_wgs84=all_coords['wgs84'][0],
             latitude_gcj02=all_coords['gcj02'][1],
@@ -433,7 +441,7 @@ class LiveRecordingService:
                 logger.warning(f"Failed to fill geocoding for point {point_index}: {e}")
 
         # 更新记录的最后上传时间
-        recording.last_upload_at = datetime.now(timezone.utc)
+        recording.last_upload_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         await db.commit()
         # 刷新 recording 对象，确保 current_track_id 已正确设置
@@ -536,16 +544,6 @@ class LiveRecordingService:
             return None
 
         return round(bearing_deg, 2)
-
-    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """计算两点之间的距离（米），使用 Haversine 公式"""
-        from math import radians, sin, cos, sqrt, atan2
-
-        dlat = radians(lat2 - lat1)
-        dlon = radians(lon2 - lon1)
-        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-        c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return 6371000 * c  # 地球半径 6371km
 
     async def recalculate_track_stats(self, db: AsyncSession, track_id: int) -> dict:
         """

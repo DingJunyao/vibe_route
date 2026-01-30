@@ -38,6 +38,9 @@ class Track(Base, AuditMixin):
     has_area_info = Column(Boolean, default=False)
     has_road_info = Column(Boolean, default=False)
 
+    # 标记是否为实时记录的轨迹
+    is_live_recording = Column(Boolean, default=False, nullable=False)
+
     # 关系
     user = relationship("User", back_populates="tracks")
     points = relationship("TrackPoint", back_populates="track", cascade="all, delete-orphan")
@@ -118,3 +121,29 @@ class TrackPoint(Base, AuditMixin):
 
     def __repr__(self):
         return f"<TrackPoint(id={self.id}, track_id={self.track_id}, index={self.point_index})>"
+
+
+class TrackPointSpatial(Base):
+    """
+    PostGIS 空间扩展表（可选）
+
+    仅用于 PostgreSQL + PostGIS 环境。
+    为轨迹点添加 geometry 字段以支持空间索引加速查询。
+
+    注意：此表为可选，不影响其他数据库的使用。
+    """
+
+    __tablename__ = "track_points_spatial"
+
+    point_id = Column(
+        Integer,
+        ForeignKey("track_points.id", ondelete="CASCADE"),
+        primary_key=True
+    )
+
+    # 注意：geom 字段仅在迁移脚本中创建（使用 Geography 类型）
+    # 这里不定义 geom 列，因为 SQLAlchemy-GeoAlchemy2 是可选依赖
+    # 迁移脚本会使用原生 SQL 创建：geom GEOGRAPHY(POINT, 4326)
+
+    def __repr__(self):
+        return f"<TrackPointSpatial(point_id={self.point_id})>"

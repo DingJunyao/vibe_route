@@ -121,6 +121,7 @@ export interface FillProgressItem {
   status: 'idle' | 'filling' | 'completed' | 'failed'
   current: number
   total: number
+  failed: number
   percent: number
 }
 

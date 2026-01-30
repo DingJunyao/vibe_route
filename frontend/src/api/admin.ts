@@ -45,6 +45,7 @@ export interface SystemConfig {
   map_layers: Record<string, MapLayerConfig>
   font_config?: FontConfig
   show_road_sign_in_region_tree: boolean
+  spatial_backend: string  // 空间计算后端: auto | python | postgis
 }
 
 // 字体配置
@@ -90,6 +91,7 @@ export interface ConfigUpdateData {
   map_layers?: Record<string, Partial<MapLayerConfig>>
   font_config?: FontConfig
   show_road_sign_in_region_tree?: boolean
+  spatial_backend?: string
 }
 
 // 分页响应
@@ -207,4 +209,15 @@ export const adminApi = {
   deleteFont(filename: string): Promise<{ message: string }> {
     return http.delete(`/admin/fonts/${filename}`)
   },
+
+  // 获取数据库信息（用于判断是否显示 PostGIS 设置）
+  getDatabaseInfo(): Promise<DatabaseInfo> {
+    return http.get('/admin/database-info')
+  },
+}
+
+// 数据库信息响应
+export interface DatabaseInfo {
+  database_type: 'sqlite' | 'mysql' | 'postgresql'
+  postgis_enabled: boolean
 }

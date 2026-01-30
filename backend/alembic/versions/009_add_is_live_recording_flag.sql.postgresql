@@ -1,0 +1,15 @@
+-- ============================================
+-- 添加 is_live_recording 字段到 tracks 表
+-- ============================================
+
+-- PostgreSQL
+-- 执行方式: psql -U vibe_route -d vibe_route -f 009_add_is_live_recording_flag.sql.postgresql
+
+ALTER TABLE tracks
+ADD COLUMN is_live_recording BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 验证
+\d tracks
+SELECT column_name, data_type, column_default, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'tracks' AND column_name = 'is_live_recording';

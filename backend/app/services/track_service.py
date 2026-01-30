@@ -20,10 +20,22 @@ from loguru import logger
 class TrackService:
     """轨迹服务类"""
 
-    def __init__(self):
+    def __init__(self, spatial_service=None):
+        """
+        初始化轨迹服务
+
+        Args:
+            spatial_service: 空间计算服务实例，如果为 None 则使用默认的 Python 实现
+        """
+        from app.services.spatial import ISpatialService, PythonSpatialService
+
         self._geocoding_service = None
         self._geocoding_provider = None
         self._geocoding_config = None
+        self._geocoding_config_hash = None
+
+        # 空间计算服务
+        self.spatial_service: ISpatialService = spatial_service or PythonSpatialService()
 
         # 存储当前正在填充的轨迹进度
         self._filling_progress = {}  # {track_id: {"current": 10, "total": 100, "status": "filling"}}
@@ -68,16 +80,29 @@ class TrackService:
     async def _get_geocoding_service(self, db: AsyncSession):
         """获取地理编码服务实例"""
         from app.services.config_service import config_service
+        import json
 
         provider = await config_service.get(db, "geocoding_provider")
         if not provider:
             return None
 
-        if self._geocoding_service is None or self._geocoding_provider != provider:
+        # 获取当前配置的哈希，用于检测配置变化
+        config = await config_service.get_json(db, "geocoding_config", {})
+        provider_config = config.get(provider, {})
+        config_hash = hash(json.dumps(provider_config, sort_keys=True))
+
+        # 检查是否需要重新创建服务（首次创建、provider 改变、或配置改变）
+        needs_recreate = (
+            self._geocoding_service is None or
+            self._geocoding_provider != provider or
+            self._geocoding_config_hash != config_hash
+        )
+
+        if needs_recreate:
             self._geocoding_provider = provider
-            config = await config_service.get_json(db, "geocoding_config", {})
-            provider_config = config.get(provider, {})
+            self._geocoding_config_hash = config_hash
             self._geocoding_service = create_geocoding_service(provider, provider_config)
+            logger.info(f"Geocoding service recreated: provider={provider}, config_hash={config_hash}")
 
         return self._geocoding_service
 
@@ -141,8 +166,8 @@ class TrackService:
         Returns:
             (轨迹列表, 总数)
         """
-        # 构建基础查询条件
-        conditions = [Track.user_id == user_id, Track.is_valid == True]
+        # 构建基础查询条件（排除实时记录的轨迹）
+        conditions = [Track.user_id == user_id, Track.is_valid == True, Track.is_live_recording == False]
 
         # 添加搜索条件
         if search:
@@ -297,11 +322,12 @@ class TrackService:
         prev_point_data = None
 
         for idx, point in enumerate(segment.points):
-            # 时间
-            if point.time:
+            # 时间（去除时区信息，数据库使用不带时区的 TIMESTAMP）
+            point_time = point.time.replace(tzinfo=None) if point.time else None
+            if point_time:
                 if start_time is None:
-                    start_time = point.time
-                end_time = point.time
+                    start_time = point_time
+                end_time = point_time
 
             # 坐标转换
             all_coords = convert_point_to_all(
@@ -349,7 +375,7 @@ class TrackService:
                 total_distance += distance_from_prev
 
                 # 计算速度
-                speed = self._calculate_speed(point.time, prev_point_data['time'], distance_from_prev)
+                speed = self._calculate_speed(point_time, prev_point_data['time'], distance_from_prev)
 
                 # 计算方位角
                 bearing = self._calculate_bearing(
@@ -361,7 +387,7 @@ class TrackService:
 
             point_data = {
                 'point_index': idx,
-                'time': point.time,
+                'time': point_time,
                 'latitude_wgs84': all_coords['wgs84'][1],
                 'longitude_wgs84': all_coords['wgs84'][0],
                 'latitude_gcj02': all_coords['gcj02'][1],
@@ -459,7 +485,7 @@ class TrackService:
 
     def get_fill_progress(self, track_id: int) -> dict:
         """获取地理信息填充进度"""
-        return self._filling_progress.get(track_id, {"current": 0, "total": 0, "status": "idle"})
+        return self._filling_progress.get(track_id, {"current": 0, "total": 0, "failed": 0, "status": "idle"})
 
     def stop_fill_geocoding(self, track_id: int) -> bool:
         """停止地理信息填充"""
@@ -510,6 +536,7 @@ class TrackService:
                 self._filling_progress[track_id] = {
                     "current": 0,
                     "total": total_points,
+                    "failed": 0,
                     "status": "filling"
                 }
 
@@ -544,25 +571,43 @@ class TrackService:
                         lon = point.longitude_wgs84
                         info = await geocoding_service.get_point_info(lat, lon)
 
-                        # 同时填充行政区划和道路信息
-                        point.province = info.get('province', '')
-                        point.city = info.get('city', '')
-                        point.district = info.get('area', '')
-                        point.road_name = info.get('road_name', '')
-                        point.road_number = info.get('road_num', '')
-                        # 英文字段
-                        point.province_en = info.get('province_en', '')
-                        point.city_en = info.get('city_en', '')
-                        point.district_en = info.get('area_en', '')
-                        point.road_name_en = info.get('road_name_en', '')
+                        # 检查是否获取到有效数据（至少有一个非空字段）
+                        has_valid_data = any([
+                            info.get('province'),
+                            info.get('city'),
+                            info.get('area'),
+                            info.get('road_name'),
+                            info.get('road_num'),
+                            info.get('province_en'),
+                            info.get('city_en'),
+                            info.get('area_en'),
+                            info.get('road_name_en'),
+                        ])
 
-                        # 更新审计字段
-                        point.updated_by = user_id
+                        if has_valid_data:
+                            # 同时填充行政区划和道路信息
+                            point.province = info.get('province', '')
+                            point.city = info.get('city', '')
+                            point.district = info.get('area', '')
+                            point.road_name = info.get('road_name', '')
+                            point.road_number = info.get('road_num', '')
+                            # 英文字段
+                            point.province_en = info.get('province_en', '')
+                            point.city_en = info.get('city_en', '')
+                            point.district_en = info.get('area_en', '')
+                            point.road_name_en = info.get('road_name_en', '')
 
-                        updated_count += 1
+                            # 更新审计字段
+                            point.updated_by = user_id
 
-                        # 更新进度
-                        self._filling_progress[track_id]["current"] = idx + 1
+                            updated_count += 1
+
+                            # 更新进度（只有成功时才计数）
+                            self._filling_progress[track_id]["current"] = updated_count
+                        else:
+                            # 没有获取到数据，记录失败
+                            self._filling_progress[track_id]["failed"] += 1
+                            logger.warning(f"No geocoding data for point {idx} ({lat}, {lon})")
 
                         # 每次请求后短暂延迟，避免过载
                         try:
@@ -580,21 +625,23 @@ class TrackService:
                     except Exception as e:
                         logger.error(f"Error getting geocoding for point {idx}: {e}")
 
-                # 更新轨迹标记
+                # 更新轨迹标记（只有成功填充了数据才标记为 True）
                 track_result = await db.execute(
                     select(Track).where(Track.id == track_id)
                 )
                 track = track_result.scalar_one_or_none()
                 if track:
-                    track.has_area_info = True
-                    track.has_road_info = True
+                    # 只有成功填充了至少一个点，才设置标记
+                    if updated_count > 0:
+                        track.has_area_info = True
+                        track.has_road_info = True
                     track.updated_by = user_id
 
                 await db.commit()
 
                 # 标记完成
                 self._filling_progress[track_id]["status"] = "completed"
-                logger.info(f"Geocoding info filled for track {track_id}, updated {updated_count} points")
+                logger.info(f"Geocoding info filled for track {track_id}: updated={updated_count}, failed={self._filling_progress[track_id]['failed']}")
 
             except Exception as e:
                 logger.error(f"Error filling geocoding info for track {track_id}: {e}")
@@ -611,7 +658,7 @@ class TrackService:
                 setattr(track, field, value)
 
             track.updated_by = user_id
-            track.updated_at = datetime.now(timezone.utc)
+            track.updated_at = datetime.now(timezone.utc).replace(tzinfo=None).replace(tzinfo=None)
 
             await db.commit()
             await db.refresh(track)
@@ -622,7 +669,7 @@ class TrackService:
         """软删除轨迹"""
         track.is_valid = False
         track.updated_by = user_id
-        track.updated_at = datetime.now(timezone.utc)
+        track.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # 同时软删除所有轨迹点
         await db.execute(
@@ -631,7 +678,7 @@ class TrackService:
             .values(
                 is_valid=False,
                 updated_by=user_id,
-                updated_at=datetime.now(timezone.utc)
+                updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
             )
         )
 
@@ -1159,16 +1206,6 @@ class TrackService:
 
         return timeline_entries
 
-    def _calculate_distance(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-        """计算两点之间的距离（米），使用 Haversine 公式"""
-        from math import radians, sin, cos, sqrt, atan2
-
-        dlat = radians(lat2 - lat1)
-        dlon = radians(lon2 - lon1)
-        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
-        c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return 6371000 * c  # 地球半径 6371km
-
     def _aggregate_node_stats(self, node: dict) -> dict:
         """
         递归聚合节点统计信息，让上级包含下级的数据
@@ -1407,7 +1444,7 @@ class TrackService:
 
             # 计算距离
             if prev_point:
-                distance = self._calculate_distance(
+                distance = await self.spatial_service.distance(
                     prev_point.latitude_wgs84, prev_point.longitude_wgs84,
                     point.latitude_wgs84, point.longitude_wgs84
                 )
@@ -1498,7 +1535,7 @@ class TrackService:
         for point in points:
             # 计算到前一个点的距离
             if prev_point:
-                distance = self._calculate_distance(
+                distance = await self.spatial_service.distance(
                     prev_point.latitude_wgs84, prev_point.longitude_wgs84,
                     point.latitude_wgs84, point.longitude_wgs84
                 )
@@ -1635,7 +1672,7 @@ class TrackService:
         for row_idx, point in enumerate(points, start=2):
             # 计算到前一个点的距离
             if prev_point:
-                distance = self._calculate_distance(
+                distance = await self.spatial_service.distance(
                     prev_point.latitude_wgs84, prev_point.longitude_wgs84,
                     point.latitude_wgs84, point.longitude_wgs84
                 )
@@ -2944,19 +2981,15 @@ class TrackService:
             speed = None
             if idx > 0 and prev_point_data:
                 # 使用 WGS84 坐标计算 3D 距离
-                from math import sqrt, radians, sin, cos, atan2
+                from math import sqrt
 
-                lat1 = radians(prev_point_data['latitude_wgs84'])
-                lon1 = radians(prev_point_data['longitude_wgs84'])
-                lat2 = radians(all_coords['wgs84'][1])
-                lon2 = radians(all_coords['wgs84'][0])
-
-                # Haversine 公式计算水平距离
-                dlat = lat2 - lat1
-                dlon = lon2 - lon1
-                a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
-                c = 2 * atan2(sqrt(a), sqrt(1 - a))
-                horizontal_distance = 6371000 * c  # 地球半径 6371km
+                # 使用空间服务计算水平距离
+                horizontal_distance = await self.spatial_service.distance(
+                    prev_point_data['latitude_wgs84'],
+                    prev_point_data['longitude_wgs84'],
+                    all_coords['wgs84'][1],
+                    all_coords['wgs84'][0]
+                )
 
                 # 计算垂直距离
                 elev1 = prev_point_data.get('elevation') or 0

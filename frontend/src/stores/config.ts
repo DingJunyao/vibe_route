@@ -41,6 +41,7 @@ export const useConfigStore = defineStore('config', () => {
             registration_enabled: data.registration_enabled,
             font_config: data.font_config,
             show_road_sign_in_region_tree: data.show_road_sign_in_region_tree,
+            spatial_backend: data.spatial_backend,
           }
           return data
         })
@@ -125,6 +126,7 @@ export const useConfigStore = defineStore('config', () => {
     map_layers?: Record<string, unknown>
     font_config?: { font_a?: string; font_b?: string; font_c?: string }
     show_road_sign_in_region_tree?: boolean
+    spatial_backend?: string
   }): Promise<SystemConfig> {
     const result = await adminApi.updateConfig(data)
     adminConfig.value = result
@@ -135,6 +137,7 @@ export const useConfigStore = defineStore('config', () => {
       registration_enabled: result.registration_enabled,
       font_config: result.font_config,
       show_road_sign_in_region_tree: result.show_road_sign_in_region_tree,
+      spatial_backend: result.spatial_backend,
     }
     return result
   }

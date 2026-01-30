@@ -8,8 +8,8 @@ from sqlalchemy.orm import declared_attr
 
 
 def get_utc_now():
-    """获取当前 UTC 时间"""
-    return datetime.now(timezone.utc)
+    """获取当前 UTC 时间（不带时区信息）"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class AuditMixin:

@@ -343,7 +343,14 @@
                         <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
                       </div>
                       <div class="fill-progress-text">
-                        <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
+                        <span v-if="fillProgress.total > 0">
+                          <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
+                            {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
+                          </template>
+                          <template v-else>
+                            {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
+                          </template>
+                        </span>
                         <span v-else>正在准备...</span>
                       </div>
                     </div>
@@ -554,7 +561,14 @@
                     <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
                   </div>
                   <div class="fill-progress-text">
-                    <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
+                    <span v-if="fillProgress.total > 0">
+                      <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
+                        {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
+                      </template>
+                      <template v-else>
+                        {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
+                      </template>
+                    </span>
                     <span v-else>正在准备...</span>
                   </div>
                 </div>
@@ -897,8 +911,9 @@ const fillingGeocoding = ref(false)
 const fillProgress = ref<{
   current: number
   total: number
+  failed: number
   status: 'idle' | 'filling' | 'completed' | 'error' | 'stopped'
-}>({ current: 0, total: 0, status: 'idle' })
+}>({ current: 0, total: 0, failed: 0, status: 'idle' })
 let fillProgressTimer: number | null = null
 
 // 区域树相关
@@ -1624,7 +1639,20 @@ function startPollingProgress() {
       if (response.progress.status === 'completed') {
         stopPollingProgress()
         fillingGeocoding.value = false
-        ElMessage.success('地理信息填充完成')
+        const { current, failed } = response.progress
+        const total = current + failed
+        // 根据失败数量显示不同的提示
+        if (current > 0 && failed === 0) {
+          // 全部成功
+          ElMessage.success('地理信息填充完成')
+        } else if (current > 0 && failed > 0) {
+          // 部分失败
+          const failedPercent = Math.round((failed / total) * 100)
+          ElMessage.warning(`地理信息填充完成，但包含 ${failed} 条失败数据（占 ${failedPercent}%），请自行填充失败部分`)
+        } else if (current === 0 && failed > 0) {
+          // 全部失败
+          ElMessage.error('地理信息填充失败，请自行填充')
+        }
         // 重新加载轨迹数据
         await fetchTrackDetail()
         await fetchTrackPoints()
@@ -2177,6 +2205,13 @@ async function handleNewPointAdded(data: PointAddedData) {
     memo: null,
   })
 
+  // 按时间戳排序，防止乱序到达导致轨迹跳线
+  points.value.sort((a, b) => {
+    const timeA = a.time ? new Date(a.time).getTime() : 0
+    const timeB = b.time ? new Date(b.time).getTime() : 0
+    return timeA - timeB
+  })
+
   // 更新轨迹统计（包括结束时间）
   if (track.value) {
     track.value.distance = stats.distance
@@ -2513,6 +2548,7 @@ onUnmounted(() => {
   padding: 40px 20px;
   gap: 12px;
   text-align: center;
+  overflow: hidden;
 }
 
 .waiting-icon {
@@ -2532,6 +2568,11 @@ onUnmounted(() => {
   font-size: 14px;
   color: #999;
   margin: 0;
+}
+
+/* 地图卡片不显示滚动条 */
+.map-card :deep(.el-card__body) {
+  overflow: hidden !important;
 }
 
 @keyframes pulse {
@@ -2794,6 +2835,11 @@ onUnmounted(() => {
   margin-top: 10px;
   font-size: 13px;
   color: #606266;
+}
+
+.fill-failed-count {
+  color: #f56c6c;
+  font-weight: 500;
 }
 
 .info-missing {

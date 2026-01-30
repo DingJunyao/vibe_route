@@ -26,6 +26,7 @@ class ConfigService:
         "default_map_provider": "amap",
         "geocoding_provider": "nominatim",
         "show_road_sign_in_region_tree": True,
+        "spatial_backend": "auto",  # 空间计算后端: auto | python | postgis
         "geocoding_config": {
             "nominatim": {
                 "url": "http://localhost:8080",
@@ -110,7 +111,19 @@ class ConfigService:
             select(Config).where(and_(Config.key == key, Config.is_valid == True))
         )
         config = result.scalar_one_or_none()
-        return config.value if config else None
+        if config:
+            return config.value  # type: ignore
+        # 如果数据库中没有，返回默认值
+        default_value = self.DEFAULT_CONFIGS.get(key)
+        if default_value is None:
+            return None
+        # 将默认值转换为字符串
+        if isinstance(default_value, bool):
+            return "true" if default_value else "false"
+        elif isinstance(default_value, (dict, list)):
+            return json.dumps(default_value, ensure_ascii=False)
+        else:
+            return str(default_value)
 
     async def get_json(self, db: AsyncSession, key: str, default=None):
         """
@@ -147,7 +160,7 @@ class ConfigService:
         )
         config = result.scalar_one_or_none()
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         if config:
             config.value = value
             config.updated_by = user_id
@@ -307,7 +320,7 @@ class ConfigService:
 
         expires_at = None
         if expires_in_days:
-            expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days)
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_in_days)).replace(tzinfo=None)
 
         invite_code = InviteCode(
             code=code,
@@ -374,7 +387,7 @@ class ConfigService:
         """软删除邀请码"""
         invite_code.is_valid = False
         invite_code.updated_by = user_id
-        invite_code.updated_at = datetime.now(timezone.utc)
+        invite_code.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
 
 

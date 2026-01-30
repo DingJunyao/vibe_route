@@ -70,6 +70,7 @@ class ConfigResponse(BaseModel):
     map_layers: Dict[str, MapLayerConfig] = Field(default_factory=dict)
     font_config: FontConfig = Field(default_factory=FontConfig)
     show_road_sign_in_region_tree: bool = True
+    spatial_backend: str = "auto"
 
     class Config:
         from_attributes = True
@@ -85,6 +86,7 @@ class ConfigUpdate(BaseModel):
     map_layers: Optional[Dict[str, Dict]] = None
     font_config: Optional[FontConfig] = None
     show_road_sign_in_region_tree: Optional[bool] = None
+    spatial_backend: Optional[str] = None
 
 
 class PublicConfigResponse(BaseModel):

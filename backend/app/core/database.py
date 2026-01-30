@@ -8,11 +8,23 @@ from sqlalchemy.orm import DeclarativeBase
 from app.core.config import settings
 
 # 创建异步引擎
-engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    future=True,
-)
+# 对于 PostgreSQL，需要处理时区问题
+if settings.DATABASE_TYPE == "postgresql":
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        future=True,
+        connect_args={
+            "server_settings": {"timezone": "UTC"},
+            "prepared_statement_cache_size": 0,
+        },
+    )
+else:
+    engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        future=True,
+    )
 
 # 创建异步会话工厂
 async_session_maker = async_sessionmaker(

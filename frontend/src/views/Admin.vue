@@ -66,9 +66,10 @@
 
                 <!-- 地图设置 -->
                 <div class="form-section">
-                  <div class="section-title">
-                    地图设置
-                    <span class="section-tip desktop-only">选择单选按钮设为默认地图，使用开关启用/禁用地图，拖拽调整显示顺序</span>
+                  <div class="section-title">地图设置</div>
+                  <div class="section-description">
+                    <p>选择单选按钮设为默认地图，使用开关启用/禁用地图，<span class="desktop-only">拖拽</span><span class="mobile-only">点击左边的向上 / 向下按钮</span>调整显示顺序。</p>
+                    <p>对于高德地图、百度地图、腾讯地图，如果不填 Key，仍然可以使用其点阵图层，但清晰度、更新速度不如矢量图层。</p>
                   </div>
                   <draggable
                     v-model="allMapLayers"
@@ -149,14 +150,14 @@
                           <template v-if="layer.id === 'amap'">
                             <el-input
                               v-model="layer.api_key"
-                              placeholder="API Key（必填）"
+                              placeholder="API Key（矢量图必填）"
                               clearable
                               show-password
                               class="config-input"
                             />
                             <el-input
                               v-model="layer.security_js_code"
-                              placeholder="安全密钥（可选）"
+                              placeholder="安全密钥（矢量图可选）"
                               clearable
                               show-password
                               class="config-input"
@@ -166,7 +167,7 @@
                           <el-input
                             v-if="layer.id === 'tencent'"
                             v-model="layer.api_key"
-                            placeholder="API Key（必填）"
+                            placeholder="API Key（矢量图必填）"
                             clearable
                             show-password
                             class="config-input"
@@ -175,7 +176,7 @@
                           <el-input
                             v-if="layer.id === 'baidu'"
                             v-model="layer.api_key"
-                            placeholder="API Key（必填）"
+                            placeholder="API Key（矢量图必填）"
                             clearable
                             show-password
                             class="config-input"
@@ -236,6 +237,37 @@
                     <el-form-item label="获取英文信息">
                       <el-switch v-model="config.geocoding_config.baidu.get_en_result" />
                       <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
+                    </el-form-item>
+                  </template>
+                </div>
+
+                <!-- 空间计算设置（仅 PostgreSQL 显示） -->
+                <div v-if="databaseInfo && databaseInfo.database_type === 'postgresql'" class="form-section">
+                  <div class="section-title">空间计算设置</div>
+                  <!-- 未启用 PostGIS -->
+                  <div v-if="!databaseInfo.postgis_enabled" class="postgis-notice">
+                    <el-icon><InfoFilled /></el-icon>
+                    <span>启用 PostGIS 可以更高效地处理地理相关数据。请参考相关文档开启。</span>
+                  </div>
+                  <!-- 已启用 PostGIS -->
+                  <template v-else>
+                    <el-form-item label="计算后端">
+                      <el-radio-group v-model="config.spatial_backend">
+                        <el-radio value="auto">自动检测</el-radio>
+                        <el-radio value="python">Python (兼容所有数据库)</el-radio>
+                        <el-radio value="postgis">PostGIS</el-radio>
+                      </el-radio-group>
+                      <div class="radio-hint">
+                        <template v-if="config.spatial_backend === 'auto'">
+                          自动检测数据库能力，PostgreSQL + PostGIS 环境自动使用高性能实现
+                        </template>
+                        <template v-else-if="config.spatial_backend === 'python'">
+                          使用 Python 计算，兼容所有数据库但性能较低
+                        </template>
+                        <template v-else>
+                          使用 PostGIS 空间函数，高性能
+                        </template>
+                      </div>
                     </el-form-item>
                   </template>
                 </div>
@@ -889,9 +921,9 @@
 import { ref, reactive, onMounted, computed, onUnmounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
-import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig } from '@/api/admin'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
@@ -1002,6 +1034,7 @@ const config = reactive<SystemConfig>({
     baidu: { api_key: '', freq: 3, get_en_result: false },
   },
   map_layers: {},
+  spatial_backend: 'auto',
 })
 
 // 所有地图层列表（按固定顺序）
@@ -1009,6 +1042,9 @@ const allMapLayers = ref<MapLayerConfig[]>([])
 
 // 原始配置（用于检测未保存的更改）
 const originalConfig = ref<SystemConfig | null>(null)
+
+// 数据库信息（用于判断是否显示 PostGIS 设置）
+const databaseInfo = ref<DatabaseInfo | null>(null)
 
 // 用户列表
 const users = ref<User[]>([])
@@ -1065,6 +1101,11 @@ async function loadConfig() {
     initMapLayers()
     // 保存原始配置（深拷贝），用于检测未保存的更改
     originalConfig.value = JSON.parse(JSON.stringify(config))
+    // 获取数据库信息（用于判断是否显示 PostGIS 设置）
+    const dbInfo = await adminApi.getDatabaseInfo()
+    if (isMounted.value) {
+      databaseInfo.value = dbInfo
+    }
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
@@ -1905,10 +1946,65 @@ onUnmounted(() => {
   font-weight: normal;
 }
 
+.section-description {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+
+.section-description p {
+  margin: 0;
+  padding: 0;
+}
+
 .form-tip {
   margin-left: 10px;
   font-size: 12px;
   color: #909399;
+}
+
+.form-hint {
+  margin-left: 10px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.radio-hint {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  margin-left: 0;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.postgis-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background-color: #f4f4f5;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.6;
+}
+
+.postgis-notice .el-icon {
+  color: #409eff;
+  flex-shrink: 0;
+}
+
+.postgis-notice a {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.postgis-notice a:hover {
+  text-decoration: underline;
 }
 
 .card-header {
@@ -2037,6 +2133,11 @@ onUnmounted(() => {
 /* 默认隐藏桌面端专用元素 */
 .desktop-only {
   display: none;
+}
+
+/* 默认显示移动端专用元素 */
+.mobile-only {
+  display: inline;
 }
 
 /* 移动端响应式 */
@@ -2388,6 +2489,10 @@ onUnmounted(() => {
 
   .desktop-only {
     display: inline;
+  }
+
+  .mobile-only {
+    display: none;
   }
 
   .pagination {

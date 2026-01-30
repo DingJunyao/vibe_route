@@ -101,22 +101,13 @@
                   </el-link>
 
                   <!-- 轨迹进度标签 -->
-                  <template v-if="!row.is_live_recording && getTrackProgress(row.id)">
+                  <template v-if="!row.is_live_recording && getFillLabel(row.id)">
                     <el-tag
-                      v-if="getTrackProgress(row.id)?.status === 'filling'"
-                      type="primary"
+                      :type="getFillLabel(row.id)!.type"
                       size="small"
                       class="progress-tag"
                     >
-                      填充中 {{ getTrackProgress(row.id)?.percent ?? 0 }}%
-                    </el-tag>
-                    <el-tag
-                      v-else-if="getTrackProgress(row.id)?.status === 'failed'"
-                      type="danger"
-                      size="small"
-                      class="progress-tag"
-                    >
-                      填充失败
+                      {{ getFillLabel(row.id)!.text }}
                     </el-tag>
                   </template>
 
@@ -205,20 +196,12 @@
               <div class="card-header">
                 <div class="track-name">{{ row.name }}</div>
                 <!-- 轨迹进度标签 -->
-                <template v-if="!row.is_live_recording && getTrackProgress(row.id)">
+                <template v-if="!row.is_live_recording && getFillLabel(row.id)">
                   <el-tag
-                    v-if="getTrackProgress(row.id)!.status === 'filling'"
-                    type="primary"
+                    :type="getFillLabel(row.id)!.type"
                     size="small"
                   >
-                    填充中 {{ getTrackProgress(row.id)!.percent }}%
-                  </el-tag>
-                  <el-tag
-                    v-else-if="getTrackProgress(row.id)!.status === 'failed'"
-                    type="danger"
-                    size="small"
-                  >
-                    填充失败
+                    {{ getFillLabel(row.id)!.text }}
                   </el-tag>
                 </template>
                 <!-- 实时记录状态标签 -->
@@ -581,6 +564,25 @@ function getTrackProgress(trackId: number): FillProgressItem | null {
   }
 
   return progress
+}
+
+// 获取填充标签的类型和文本
+function getFillLabel(trackId: number): { type: string; text: string } | null {
+  const progress = getTrackProgress(trackId)
+  if (!progress || progress.status !== 'filling') return null
+
+  const { current = 0, failed = 0, percent = 0 } = progress
+
+  // 全部失败（没有成功）
+  if (current === 0 && failed > 0) {
+    return { type: 'danger', text: '填充有失败' }
+  }
+  // 部分失败
+  if (current > 0 && failed > 0) {
+    return { type: 'warning', text: `填充中 ${percent}%（有失败）` }
+  }
+  // 没有失败
+  return { type: 'primary', text: `填充中 ${percent}%` }
 }
 
 // 处理每页条数变化

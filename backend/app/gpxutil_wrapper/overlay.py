@@ -158,7 +158,7 @@ class OverlayGenerator:
             raise ValueError("轨迹点数据不存在")
 
         # 创建 ZIP 文件
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         zip_filename = f"track_{track_id}_overlay_{timestamp}.zip"
         zip_path = self.output_dir / zip_filename
 

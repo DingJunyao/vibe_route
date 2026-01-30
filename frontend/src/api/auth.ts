@@ -37,6 +37,7 @@ export interface PublicConfig {
   registration_enabled: boolean
   font_config: FontConfig
   show_road_sign_in_region_tree?: boolean
+  spatial_backend?: string  // 空间计算后端: auto | python | postgis
 }
 
 // API 方法
