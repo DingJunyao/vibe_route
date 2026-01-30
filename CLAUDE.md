@@ -42,6 +42,16 @@ npm run dev
 
 这些都可以使用插件或 MCP 解决。优先考虑 MCP。
 
+### Reviewing
+
+在合适的情况下，或者是用户提出审查项目时，使用 code-review-excellence skill 来审查这个项目。排除 ./ref_gpxutil。
+
+审查结果存入 ./ref/CODE_REVIEW_REPORT.md，如果已存在，则覆盖它。
+
+## Summarize
+
+每次大的更改，当用户提出整理要点，都要把要点记录在本文件中。
+
 ## Architecture Overview
 
 ### 认证流程（双重加密）
@@ -584,6 +594,121 @@ frontend/
 - State 用 `ref()`，Getters 用 `computed()`
 - token 同步到 localStorage
 - 初始化时自动恢复状态
+
+## UI 规范
+
+### Header 样式统一
+
+所有页面的 `el-header` 使用 Element Plus 默认设置：
+
+- **默认高度**：`60px`（不显式定义）
+- **默认内边距**：`0 20px`（不显式定义）
+- 不在媒体查询中覆盖这些值
+
+**导航按钮样式**：
+
+```css
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
+}
+```
+
+### 图标统一
+
+- **上传轨迹**：使用 `Plus` 图标（所有页面统一）
+- **后退按钮**：`ArrowLeft`
+- **主页按钮**：`HomeFilled`
+
+### 用户下拉菜单顺序
+
+**主页**（移动端）：
+
+1. 轨迹列表
+2. 上传轨迹
+3. 记录实时轨迹
+4. 道路标志（如配置）
+5. ───────────（分割线）
+6. 后台管理（管理员）
+7. 退出登录
+
+**轨迹列表**（移动端）：
+
+1. 上传轨迹
+2. 记录实时轨迹
+3. ───────────（分割线）
+4. 后台管理（管理员）
+5. 退出登录
+
+**轨迹详情**（移动端）：
+
+1. 记录配置（如有）
+2. 编辑
+3. 导入数据
+4. 导出数据
+5. ───────────（分割线）
+6. 后台管理（管理员）
+7. 退出登录
+
+**轨迹详情**（桌面端按钮顺序）：
+
+1. 记录配置（如有）
+2. 编辑
+3. 导入数据
+4. 导出数据
+
+**后台管理**：不包含"主页"选项
+
+**上传轨迹**：后台管理（管理员）、退出登录
+
+### 下拉菜单分割线实现
+
+Element Plus 没有原生的分割线组件，使用禁用的 `el-dropdown-item` 模拟：
+
+```vue
+<el-dropdown-item class="dropdown-divider" :disabled="true" />
+```
+
+```css
+.dropdown-divider {
+  margin: 4px 0;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+  background-color: var(--el-border-color-lighter);
+}
+```
+
+### 经过区域树形图样式
+
+**道路层级**：不显示图标（省、市、区仍保留 LocationFilled 图标）
+
+**横向滚动**：当宽度不足时自动显示横向滚动条
+
+```css
+.region-tree-container :deep(.el-tree) {
+  display: inline-block;
+  min-width: 100%;
+}
+```
+
+**节点布局**：道路名称和距离之间最小间距 24px
+
+```css
+.region-tree-node {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  min-width: max-content;
+}
+```
 
 ## Important Notes
 

@@ -44,13 +44,13 @@
             <el-icon><Edit /></el-icon>
             编辑
           </el-button>
-          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
-            <el-icon><Download /></el-icon>
-            导出数据
-          </el-button>
           <el-button type="primary" @click="importDialogVisible = true" class="desktop-only">
             <el-icon><Upload /></el-icon>
             导入数据
+          </el-button>
+          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
+            <el-icon><Download /></el-icon>
+            导出数据
           </el-button>
         </div>
         <el-dropdown @command="handleCommand">
@@ -72,14 +72,15 @@
                 <el-icon><Edit /></el-icon>
                 编辑
               </el-dropdown-item>
-              <el-dropdown-item command="exportPoints" v-if="isMobile">
-                <el-icon><Download /></el-icon>
-                导出数据
-              </el-dropdown-item>
               <el-dropdown-item command="import" v-if="isMobile">
                 <el-icon><Upload /></el-icon>
                 导入数据
               </el-dropdown-item>
+              <el-dropdown-item command="exportPoints" v-if="isMobile">
+                <el-icon><Download /></el-icon>
+                导出数据
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -359,16 +360,16 @@
                         :expand-on-click-node="false"
                         node-key="id"
                         :key="treeForceUpdateKey"
+                        :indent="9"
                         @node-click="handleRegionNodeClick"
                       >
                         <template #default="{ data }">
                           <div class="region-tree-node">
                             <div class="node-label">
-                              <el-icon class="node-icon" :class="`icon-${data.type}`">
+                              <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
                                 <LocationFilled v-if="data.type === 'province'" />
                                 <LocationFilled v-else-if="data.type === 'city'" />
                                 <LocationFilled v-else-if="data.type === 'district'" />
-                                <Odometer v-else-if="data.type === 'road'" />
                               </el-icon>
                               <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                               <component v-else :is="() => renderNodeLabel(data)" />
@@ -569,17 +570,17 @@
                     default-expand-all
                     :expand-on-click-node="false"
                     node-key="id"
+                    :indent="9"
                     :key="treeForceUpdateKey"
                     @node-click="handleRegionNodeClick"
                   >
                     <template #default="{ data }">
                       <div class="region-tree-node">
                         <div class="node-label">
-                          <el-icon class="node-icon" :class="`icon-${data.type}`">
+                          <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
                             <LocationFilled v-if="data.type === 'province'" />
                             <LocationFilled v-else-if="data.type === 'city'" />
                             <LocationFilled v-else-if="data.type === 'district'" />
-                            <Odometer v-else-if="data.type === 'road'" />
                           </el-icon>
                           <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                           <component v-else :is="() => renderNodeLabel(data)" />
@@ -611,7 +612,7 @@
                   >
                     <div class="point-header">
                       <span class="point-index">#{{ point.point_index }}</span>
-                      <span class="point-time">{{ formatTime(point.time) }}</span>
+                      <span class="point-time">{{ formatTimeOnly(point.time) }}</span>
                     </div>
                     <div class="point-coords">
                       {{ point.latitude?.toFixed(6) }}, {{ point.longitude?.toFixed(6) }}
@@ -664,12 +665,11 @@
           <el-button
             type="primary"
             :loading="fillingGeocoding"
-            :disabled="track?.has_area_info && track?.has_road_info"
             @click="handleFillGeocoding"
             class="fill-geo-btn"
           >
             <el-icon><LocationFilled /></el-icon>
-            {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '已填充地理信息' : '填充地理信息' }}
+            {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充' : '填充地理信息' }}
           </el-button>
           <div class="dialog-footer-right">
             <el-button @click="editDialogVisible = false">取消</el-button>
@@ -790,63 +790,18 @@
     </el-dialog>
 
     <!-- 实时记录配置对话框 -->
-    <el-dialog v-model="recordingDetailVisible" :title="`实时记录配置 - ${recordingDetail?.name || ''}`" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <div v-if="recordingDetail" class="recording-detail-content">
-        <!-- 最近上传信息 -->
-        <div class="upload-info-section">
-          <div class="info-item">
-            <span class="info-label">最近上传：</span>
-            <span class="info-value">{{ formatTimeWithRelativeDialog(recordingDetail.last_upload_at) }}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">轨迹点时间：</span>
-            <span class="info-value">{{ formatTimeWithRelativeDialog(recordingDetail.last_point_time) }}</span>
-          </div>
-        </div>
-
-        <!-- 填充地理信息开关 -->
-        <div class="setting-section">
-          <div class="setting-item">
-            <span class="setting-label">上传时自动填充地理信息</span>
-            <el-switch
-              v-model="recordingDetail.fill_geocoding"
-              @change="updateRecordingFillGeocoding"
-              :disabled="recordingDetail.live_recording_status !== 'active'"
-            />
-          </div>
-          <div class="setting-tip">
-            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
-          </div>
-        </div>
-
-        <!-- GPS Logger URL -->
-        <div class="url-section">
-          <div class="url-label">GPS Logger URL：</div>
-          <el-input :model-value="recordingDetail.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
-          <el-button @click="copyRecordingUrl" :icon="DocumentCopy" type="primary" class="copy-button">
-            {{ recordingDetailCopyButtonText }}
-          </el-button>
-        </div>
-
-        <!-- 二维码 -->
-        <div class="qrcode-container" v-if="recordingDetail.qrCode">
-          <div class="qrcode" v-html="recordingDetail.qrCode"></div>
-          <p class="qrcode-tip">扫描二维码查看配置说明</p>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="recordingDetailVisible = false">关闭</el-button>
-        <el-button
-          v-if="recordingDetail?.live_recording_status === 'active'"
-          type="danger"
-          @click="confirmEndRecording"
-        >
-          <el-icon><VideoPause /></el-icon>
-          结束记录
-        </el-button>
-      </template>
-    </el-dialog>
+    <LiveRecordingDialog
+      v-model:visible="recordingDetailVisible"
+      :recording-id="recordingDetailId || 0"
+      :token="recordingDetailToken || ''"
+      :name="recordingDetailName || ''"
+      :status="recordingDetailStatus || 'ended'"
+      :fill-geocoding="recordingDetailFillGeocoding || false"
+      :last-upload-at="recordingDetailLastUploadAt"
+      :last-point-time="recordingDetailLastPointTime"
+      @ended="handleRecordingEnded"
+      @fill-geocoding-changed="handleFillGeocodingChanged"
+    />
   </div>
 </template>
 
@@ -875,21 +830,20 @@ import {
   LocationFilled,
   Close,
   Link,
-  DocumentCopy,
-  VideoPause,
   Loading,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
 import UniversalMap from '@/components/map/UniversalMap.vue'
-import QRCode from 'qrcode'
+import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
+import { formatDistance, formatDuration, formatElevation, formatDateTime, formatDate, formatTimeOnly } from '@/utils/format'
 import { formatTimeWithRelative, formatTimeShort } from '@/utils/relativeTime'
 
 const route = useRoute()
@@ -964,20 +918,15 @@ const loadingSigns = ref<Set<string>>(new Set())
 // 强制更新树组件的 key（当 SVG 加载完成后）
 const treeForceUpdateKey = ref(0)
 
-// 实时记录详情相关
+// 实时记录详情相关（使用 LiveRecordingDialog 组件）
 const recordingDetailVisible = ref(false)
-const recordingDetail = ref<{
-  name: string
-  live_recording_status: 'active' | 'ended'
-  live_recording_id: number
-  live_recording_token: string
-  gpsLoggerUrl: string
-  qrCode: string
-  fill_geocoding: boolean
-  last_upload_at: string | null
-  last_point_time: string | null
-} | null>(null)
-const recordingDetailCopyButtonText = ref('复制')
+const recordingDetailId = ref<number | null>(null)
+const recordingDetailToken = ref<string | null>(null)
+const recordingDetailName = ref<string | null>(null)
+const recordingDetailStatus = ref<'active' | 'ended' | null>(null)
+const recordingDetailFillGeocoding = ref<boolean>(false)
+const recordingDetailLastUploadAt = ref<string | null>(null)
+const recordingDetailLastPointTime = ref<string | null>(null)
 
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
@@ -1011,11 +960,6 @@ let liveStatusRefreshTimer: number | null = null
 const LIVE_STATUS_REFRESH_INTERVAL = 1000 // 每秒刷新一次相对时间
 // 用于触发计算属性重新计算的 key
 const liveStatusRefreshKey = ref(0)
-// 对话框内时间刷新定时器
-let dialogRefreshTimer: number | null = null
-const DIALOG_REFRESH_INTERVAL = 1000 // 每秒刷新对话框内时间
-// 对话框时间刷新 key
-const dialogTimeRefreshKey = ref(0)
 
 // 实时状态文字（用于地图上的绿色按钮）
 const liveStatusText = computed(() => {
@@ -1301,17 +1245,7 @@ function renderNodeLabel(node: RegionNode) {
   return h('span', node.name)
 }
 
-// 格式化距离
-function formatDistance(meters: number): string {
-  if (meters >= 1000) {
-    const km = (meters / 1000).toFixed(2)
-    // 去掉末尾的 .00
-    return km.endsWith('.00') ? `${km.slice(0, -3)} km` : `${km} km`
-  }
-  return `${Math.round(meters)} m`
-}
-
-// 格式化时间范围
+// 格式化时间范围（树形图专用）
 function formatTimeRange(start: string | null, end: string | null): string {
   if (!start) return '-'
   const startDate = new Date(start)
@@ -1325,15 +1259,17 @@ function formatTimeRange(start: string | null, end: string | null): string {
   }
 
   if (endDate) {
-    const diff = (endDate.getTime() - startDate.getTime()) / 1000 / 60 // 分钟
-    if (diff < 1) {
-      return `${formatTime(startDate)}`
-    } else if (diff < 60) {
-      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff)}分钟)`
+    const diff = (endDate.getTime() - startDate.getTime()) / 1000 // 秒
+    if (diff < 60) {
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff / 60)}min)`
     } else {
-      const hours = Math.floor(diff / 60)
-      const mins = Math.round(diff % 60)
-      return `${formatTime(startDate)} - ${formatTime(endDate)} (${hours}小时${mins}分钟)`
+      const hours = Math.floor(diff / 3600)
+      const mins = Math.round((diff % 3600) / 60)
+      if (hours > 0) {
+        return `${formatTime(startDate)} - ${formatTime(endDate)} (${hours}h ${mins}min)`
+      } else {
+        return `${formatTime(startDate)} - ${formatTime(endDate)} (${mins}min)`
+      }
     }
   }
   return formatTime(startDate)
@@ -1362,6 +1298,11 @@ function clearSegmentHighlight() {
 // 渲染海拔和速度合并图表
 function renderChart() {
   if (!chartRef.value || !points.value.length) return
+
+  // 如果已有图表实例，先销毁
+  if (chartInstance) {
+    chartInstance.dispose()
+  }
 
   const chart = echarts.init(chartRef.value)
   chartInstance = chart  // 保存图表实例
@@ -1415,7 +1356,7 @@ function renderChart() {
         const point = sampledPoints[dataIndex]
         const speedRaw = point.speed
         const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : '-'
-        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTime(point.time) : '-'}<br/>`
+        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTimeOnly(point.time) : '-'}<br/>`
         for (const param of params) {
           if (param.seriesName === '海拔') {
             const elevationValue = param.value !== null ? param.value.toFixed(1) : '-'
@@ -1632,10 +1573,10 @@ async function handleFillGeocoding() {
   if (track.value?.has_area_info || track.value?.has_road_info) {
     try {
       await ElMessageBox.confirm(
-        '已填充地理信息，再次填充会覆盖已有的信息，是否继续？',
+        '你已填充地理信息，再次填充将会覆盖此前的记录。确认继续？',
         '确认重新填充',
         {
-          confirmButtonText: '继续',
+          confirmButtonText: '确认',
           cancelButtonText: '取消',
           type: 'warning',
         }
@@ -1759,7 +1700,7 @@ async function showRecordingDetail() {
   if (!track.value?.live_recording_id) return
 
   try {
-    // 从后端获取最新的实时记录数据（包含 fill_geocoding）
+    // 从后端获取最新的实时记录数据
     const recording = await liveRecordingApi.getList('active')
     const currentRecording = recording.find(r => r.id === track.value?.live_recording_id)
 
@@ -1768,150 +1709,30 @@ async function showRecordingDetail() {
       return
     }
 
-    const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(currentRecording.token)
-
-    // 生成二维码
-    const qrCode = await QRCode.toString(gpsLoggerUrl, {
-      width: 200,
-      margin: 2,
-      type: 'svg',
-    })
-
-    recordingDetail.value = {
-      name: track.value.name,
-      live_recording_status: currentRecording.status,
-      live_recording_id: currentRecording.id,
-      live_recording_token: currentRecording.token,
-      gpsLoggerUrl,
-      qrCode,
-      fill_geocoding: currentRecording.fill_geocoding || false,
-      last_upload_at: currentRecording.last_upload_at,
-      last_point_time: currentRecording.last_point_time,
-    }
+    recordingDetailId.value = currentRecording.id
+    recordingDetailToken.value = currentRecording.token
+    recordingDetailName.value = track.value.name
+    recordingDetailStatus.value = currentRecording.status
+    recordingDetailFillGeocoding.value = currentRecording.fill_geocoding || false
+    recordingDetailLastUploadAt.value = currentRecording.last_upload_at
+    recordingDetailLastPointTime.value = currentRecording.last_point_time
     recordingDetailVisible.value = true
-
-    // 启动对话框内时间刷新
-    startDialogTimeRefresh()
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')
   }
 }
 
-// 复制实时记录 URL
-function copyRecordingUrl() {
-  if (!recordingDetail.value) return
-  const url = recordingDetail.value.gpsLoggerUrl
-
-  // 检查剪贴板 API 是否可用
-  if (!navigator.clipboard) {
-    const textarea = document.createElement('textarea')
-    textarea.value = url
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-
-    try {
-      const successful = document.execCommand('copy')
-      document.body.removeChild(textarea)
-      if (successful) {
-        recordingDetailCopyButtonText.value = '已复制'
-        ElMessage.success('URL 已复制到剪贴板')
-        setTimeout(() => {
-          recordingDetailCopyButtonText.value = '复制'
-        }, 2000)
-      } else {
-        ElMessage.error('复制失败，请手动选择复制')
-      }
-    } catch (err) {
-      document.body.removeChild(textarea)
-      ElMessage.error('复制失败，请手动选择复制')
-      console.error('复制失败:', err)
-    }
-    return
-  }
-
-  navigator.clipboard.writeText(url).then(() => {
-    recordingDetailCopyButtonText.value = '已复制'
-    ElMessage.success('URL 已复制到剪贴板')
-    setTimeout(() => {
-      recordingDetailCopyButtonText.value = '复制'
-    }, 2000)
-  }).catch((err) => {
-    const isSecureContext = window.isSecureContext
-    if (!isSecureContext) {
-      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
-    } else {
-      ElMessage.error('复制失败，请手动复制')
-    }
-    console.error('复制失败:', err)
-  })
-}
-
-// 更新填充地理信息设置
-async function updateRecordingFillGeocoding(value: boolean) {
-  if (!recordingDetail.value?.live_recording_id) return
-
-  const originalValue = recordingDetail.value.fill_geocoding
-
-  try {
-    await liveRecordingApi.updateFillGeocoding(recordingDetail.value.live_recording_id, value)
-    // 成功后更新本地状态
-    recordingDetail.value.fill_geocoding = value
-    // 同时更新 track 的 fill_geocoding 值（如果存在）
-    if (track.value) {
-      track.value.fill_geocoding = value
-    }
-    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
-  } catch (error) {
-    // 失败时恢复到原来的值
-    recordingDetail.value.fill_geocoding = originalValue
-    console.error('更新填充地理信息设置失败:', error)
+// 处理填充地理信息变更
+function handleFillGeocodingChanged(value: boolean) {
+  if (track.value) {
+    track.value.fill_geocoding = value
   }
 }
 
-// 结束实时记录（带二次确认）
-async function confirmEndRecording() {
-  if (!recordingDetail.value) return
-
-  try {
-    // 先刷新一次时间数据，确保显示最新的
-    await refreshDialogTimes()
-
-    // 构建确认消息，包含最近上传信息
-    let confirmMessage = `确定要结束实时记录"${recordingDetail.value.name}"吗？`
-    if (recordingDetail.value.last_upload_at || recordingDetail.value.last_point_time) {
-      confirmMessage += '<p style="margin-top: 12px;">最近上传信息：</p>'
-      if (recordingDetail.value.last_upload_at) {
-        confirmMessage += `<p style="margin: 4px 0;">最近上传：${formatTimeWithRelative(recordingDetail.value.last_upload_at)}</p>`
-      }
-      if (recordingDetail.value.last_point_time) {
-        confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(recordingDetail.value.last_point_time)}</p>`
-      }
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">出于应用程序、网络等多方面的原因，在手机的 App 上停止记录轨迹后，不一定上传了全部的轨迹，会继续传输。</p>'
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">请务必确认你已经上传了全部轨迹点。如果觉得轨迹点时间对不上，请先检查你的 GPS 记录程序（如 GPS Logger）是否正常上传。</p>'
-    }
-    confirmMessage += '<p style="margin-top: 12px;">结束后将无法继续上传轨迹点。</p>'
-
-    await ElMessageBox.confirm(
-      confirmMessage,
-      '确认结束记录',
-      {
-        confirmButtonText: '确定结束',
-        cancelButtonText: '取消',
-        type: 'warning',
-        dangerouslyUseHTMLString: true,
-      }
-    )
-
-    await liveRecordingApi.end(recordingDetail.value.live_recording_id)
-    ElMessage.success('记录已结束')
-    recordingDetailVisible.value = false
-    // 重新加载轨迹数据
-    await fetchTrackDetail()
-  } catch (error) {
-    // 用户取消或错误已在拦截器中处理
-  }
+// 处理记录结束
+async function handleRecordingEnded() {
+  // 重新加载轨迹数据
+  await fetchTrackDetail()
 }
 
 // 显示编辑对话框
@@ -2153,64 +1974,6 @@ async function importPoints() {
   }
 }
 
-// 格式化函数
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (hours > 0) return `${hours}h ${minutes}min`
-  return `${minutes}min`
-}
-
-function formatElevation(meters: number): string {
-  return `${meters.toFixed(0)} m`
-}
-
-function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  const year = date.getFullYear()
-  const month = (date.getMonth() + 1).toString().padStart(2, '0')
-  const day = date.getDate().toString().padStart(2, '0')
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-}
-
-// 格式化对话框内时间（依赖 dialogTimeRefreshKey 以触发刷新）
-function formatTimeWithRelativeDialog(timeStr: string | null | undefined): string {
-  // 依赖 dialogTimeRefreshKey，确保定时触发重新计算
-  void dialogTimeRefreshKey.value
-  return formatTimeWithRelative(timeStr)
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  const year = date.getFullYear()
-  const month = (date.getMonth() + 1).toString().padStart(2, '0')
-  const day = date.getDate().toString().padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function formatTimeOnly(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${hours}:${minutes}:${seconds}`
-}
-
-function formatTime(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${hours}:${minutes}:${seconds}`
-}
-
 // 判断两个日期是否为同一天（本地时区）
 function isSameDay(dateStr1: string | null, dateStr2: string | null): boolean {
   if (!dateStr1 || !dateStr2) return false
@@ -2333,6 +2096,9 @@ function startLiveUpdate() {
  * 停止实时更新
  */
 function stopLiveUpdate() {
+  if (!isLiveUpdating.value && !liveTrackWs) {
+    return  // 没有启动过实时更新，直接返回
+  }
   console.log('[LiveUpdate] 停止实时更新')
   if (liveTrackWs) {
     liveTrackWs.disconnect()
@@ -2355,40 +2121,6 @@ function stopLiveUpdate() {
 
   // 停止时立即获取一次完整的区域数据
   fetchRegions()
-}
-
-// 刷新对话框内的时间数据
-async function refreshDialogTimes() {
-  if (!track.value?.is_live_recording || !track.value.live_recording_id) return
-
-  try {
-    const status = await liveRecordingApi.getStatus(track.value.live_recording_id)
-    if (recordingDetail.value) {
-      recordingDetail.value.last_upload_at = status.last_upload_at
-      recordingDetail.value.last_point_time = status.last_point_time
-    }
-  } catch (error) {
-    // 静默处理错误
-  }
-  // 更新刷新 key，触发模板重新计算
-  dialogTimeRefreshKey.value++
-}
-
-// 启动对话框时间刷新
-function startDialogTimeRefresh() {
-  if (dialogRefreshTimer) return
-  refreshDialogTimes()
-  dialogRefreshTimer = window.setInterval(() => {
-    refreshDialogTimes()
-  }, DIALOG_REFRESH_INTERVAL)
-}
-
-// 停止对话框时间刷新
-function stopDialogTimeRefresh() {
-  if (dialogRefreshTimer) {
-    clearInterval(dialogRefreshTimer)
-    dialogRefreshTimer = null
-  }
 }
 
 /**
@@ -2472,13 +2204,6 @@ async function handleNewPointAdded(data: PointAddedData) {
     mapRef.value.refresh()
   }
 }
-
-// 监听对话框关闭，停止时间刷新
-watch(recordingDetailVisible, (isVisible) => {
-  if (!isVisible) {
-    stopDialogTimeRefresh()
-  }
-})
 
 onMounted(async () => {
   try {
@@ -2564,13 +2289,22 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
   gap: 16px;
   flex-shrink: 0;
 }
 
 .track-detail-container > .el-main {
   overflow: visible;
+}
+
+/* 下拉菜单分割线 */
+.dropdown-divider {
+  margin: 4px 0;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+  background-color: var(--el-border-color-lighter);
 }
 
 /* 限制地图相关元素的 z-index */
@@ -2910,13 +2644,26 @@ onUnmounted(() => {
 /* 区域树样式 */
 .region-tree-container {
   padding: 10px 0;
+  overflow-x: auto;
+}
+
+/* 让 el-tree 的宽度由内容决定，而不是填充父容器 */
+.region-tree-container :deep(.el-tree) {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.region-tree-container :deep(.el-tree-node__content) {
+  min-width: max-content;
 }
 
 .region-tree-node {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 24px;
   width: 100%;
+  min-width: max-content;
   padding-right: 10px;
 }
 
@@ -2940,10 +2687,6 @@ onUnmounted(() => {
 
 .node-icon.icon-district {
   color: #67c23a;
-}
-
-.node-icon.icon-road {
-  color: #e6a23c;
 }
 
 .node-name {
@@ -3154,7 +2897,6 @@ onUnmounted(() => {
 @media (max-width: 1366px) {
   .el-header {
     flex-wrap: wrap;
-    padding: 10px;
   }
 
   .header-left {

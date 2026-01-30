@@ -19,7 +19,7 @@
         <el-button type="warning" :icon="VideoPlay" @click="showLiveRecordingDialog" class="desktop-only">
           记录实时轨迹
         </el-button>
-        <el-button type="primary" :icon="Upload" @click="$router.push('/upload')" class="desktop-only">
+        <el-button type="primary" :icon="Plus" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
         <el-dropdown @command="handleCommand">
@@ -35,17 +35,18 @@
                 轨迹列表
               </el-dropdown-item>
               <el-dropdown-item command="upload" v-if="isMobile">
-                <el-icon><Upload /></el-icon>
+                <el-icon><Plus /></el-icon>
                 上传轨迹
-              </el-dropdown-item>
-              <el-dropdown-item command="roadSign" v-if="isMobile && fontsConfigured">
-                <el-icon><Flag /></el-icon>
-                道路标志
               </el-dropdown-item>
               <el-dropdown-item command="liveRecording" v-if="isMobile">
                 <el-icon><VideoPlay /></el-icon>
                 记录实时轨迹
               </el-dropdown-item>
+              <el-dropdown-item command="roadSign" v-if="isMobile && fontsConfigured">
+                <el-icon><Flag /></el-icon>
+                道路标志
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -320,7 +321,7 @@ import {
   Odometer,
   Clock,
   Top,
-  Upload,
+  Plus,
   List,
   Loading,
   Flag,
@@ -334,6 +335,7 @@ import { roadSignApi } from '@/api/roadSign'
 import { liveRecordingApi } from '@/api/liveRecording'
 import QRCode from 'qrcode'
 import UniversalMap from '@/components/map/UniversalMap.vue'
+import { formatDistance, formatDuration, formatElevation } from '@/utils/format'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -757,26 +759,6 @@ function copyGpsLoggerUrl() {
   })
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 1000) {
-    return `${meters.toFixed(1)} m`
-  }
-  return `${(meters / 1000).toFixed(2)} km`
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (hours > 0) {
-    return `${hours}h ${minutes}min`
-  }
-  return `${minutes}min`
-}
-
-function formatElevation(meters: number): string {
-  return `${meters.toFixed(0)} m`
-}
-
 // 采样轨迹点（减少数据量，提高渲染性能）
 function samplePoints(points: TrackPoint[], maxPoints: number = 500): TrackPoint[] {
   if (points.length <= maxPoints) return points
@@ -918,7 +900,6 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
   flex-shrink: 0;
   gap: 16px;
 }
@@ -1343,6 +1324,16 @@ onUnmounted(() => {
 .url-tips {
   margin: 0;
   padding-left: 20px;
+}
+
+/* 下拉菜单分割线 */
+.dropdown-divider {
+  margin: 4px 0;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+  background-color: var(--el-border-color-lighter);
 }
 
 .url-tips li {

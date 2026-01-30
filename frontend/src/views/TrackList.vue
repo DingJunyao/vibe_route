@@ -21,14 +21,15 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="liveRecording" v-if="isMobile">
-                <el-icon><VideoPlay /></el-icon>
-                记录实时轨迹
-              </el-dropdown-item>
               <el-dropdown-item command="upload" v-if="isMobile">
                 <el-icon><Plus /></el-icon>
                 上传轨迹
               </el-dropdown-item>
+              <el-dropdown-item command="liveRecording" v-if="isMobile">
+                <el-icon><VideoPlay /></el-icon>
+                记录实时轨迹
+              </el-dropdown-item>
+              <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -302,69 +303,24 @@
           :total="total"
           :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
           @current-change="loadTracks"
-          @size-change="loadTracks"
+          @size-change="handleSizeChange"
         />
       </div>
     </el-main>
 
     <!-- 实时记录详情对话框 -->
-    <el-dialog v-model="recordingDetailVisible" :title="`实时记录配置 - ${currentRecording?.name || ''}`" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <div v-if="currentRecording" class="recording-detail-content">
-        <!-- 最近上传信息 -->
-        <div class="upload-info-section">
-          <div class="info-item">
-            <span class="info-label">最近上传：</span>
-            <span class="info-value">{{ formatTimeWithRelativeDialog(currentRecording.last_upload_at) }}</span>
-          </div>
-          <div class="info-item">
-            <span class="info-label">轨迹点时间：</span>
-            <span class="info-value">{{ formatTimeWithRelativeDialog(currentRecording.last_point_time) }}</span>
-          </div>
-        </div>
-
-        <!-- 填充地理信息开关 -->
-        <div class="setting-section">
-          <div class="setting-item">
-            <span class="setting-label">上传时自动填充地理信息</span>
-            <el-switch
-              v-model="currentRecording.fill_geocoding"
-              @change="updateFillGeocoding"
-              :disabled="currentRecording.live_recording_status !== 'active'"
-            />
-          </div>
-          <div class="setting-tip">
-            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
-          </div>
-        </div>
-
-        <!-- GPS Logger URL -->
-        <div class="url-section">
-          <div class="url-label">GPS Logger URL：</div>
-          <el-input :model-value="currentRecording.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
-          <el-button @click="copyGpsLoggerUrl" :icon="DocumentCopy" type="primary" class="copy-button">
-            {{ copyButtonText }}
-          </el-button>
-        </div>
-
-        <!-- 二维码 -->
-        <div class="qrcode-container" v-if="currentRecording.qrCode">
-          <div class="qrcode" v-html="currentRecording.qrCode"></div>
-          <p class="qrcode-tip">扫描二维码查看配置说明</p>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="recordingDetailVisible = false">关闭</el-button>
-        <el-button
-          v-if="currentRecording?.live_recording_status === 'active'"
-          type="danger"
-          @click="confirmEndRecording"
-        >
-          <el-icon><VideoPause /></el-icon>
-          结束记录
-        </el-button>
-      </template>
-    </el-dialog>
+    <LiveRecordingDialog
+      v-model:visible="recordingDetailVisible"
+      :recording-id="currentRecordingId || 0"
+      :token="currentRecordingToken || ''"
+      :name="currentRecordingName || ''"
+      :status="currentRecordingStatus || 'ended'"
+      :fill-geocoding="currentRecordingFillGeocoding || false"
+      :last-upload-at="currentRecordingLastUploadAt"
+      :last-point-time="currentRecordingLastPointTime"
+      @ended="loadTracks"
+      @fill-geocoding-changed="handleFillGeocodingChanged"
+    />
 
     <!-- 创建实时记录对话框 -->
     <el-dialog v-model="createRecordingDialogVisible" title="创建实时记录" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
@@ -418,7 +374,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, onBeforeUnmount, computed, watch } from 'vue'
+import { ref, onMounted, onUnmounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -439,14 +395,15 @@ import {
   Link,
   Position,
   VideoPlay,
-  VideoPause,
   DocumentCopy,
 } from '@element-plus/icons-vue'
 import { trackApi, type UnifiedTrack, type AllFillProgressResponse, type FillProgressItem } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
 import { useAuthStore } from '@/stores/auth'
-import QRCode from 'qrcode'
+import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
+import { formatDistance, formatDuration, formatElevation, formatDateTime } from '@/utils/format'
 import { formatTimeWithRelative, formatTimeShort } from '@/utils/relativeTime'
+import QRCode from 'qrcode'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -474,20 +431,15 @@ const sortOrder = ref<'asc' | 'desc'>('asc')
 // 标记组件是否已挂载，用于避免卸载后更新状态
 const isMounted = ref(true)
 
-// 实时记录详情对话框
+// 实时记录详情对话框（使用 LiveRecordingDialog 组件）
 const recordingDetailVisible = ref(false)
-const currentRecording = ref<{
-  name: string
-  live_recording_status: 'active' | 'ended' | null
-  live_recording_id: number | null
-  live_recording_token: string | null
-  gpsLoggerUrl: string
-  qrCode: string
-  fill_geocoding: boolean
-  last_upload_at: string | null
-  last_point_time: string | null
-} | null>(null)
-const copyButtonText = ref('复制')
+const currentRecordingId = ref<number | null>(null)
+const currentRecordingToken = ref<string | null>(null)
+const currentRecordingName = ref<string | null>(null)
+const currentRecordingStatus = ref<'active' | 'ended' | null>(null)
+const currentRecordingFillGeocoding = ref<boolean>(false)
+const currentRecordingLastUploadAt = ref<string | null>(null)
+const currentRecordingLastPointTime = ref<string | null>(null)
 
 // 创建实时记录对话框
 const createRecordingDialogVisible = ref(false)
@@ -513,11 +465,6 @@ const timeRefreshKey = ref(0)
 // 实时记录数据刷新定时器
 let liveRecordingsTimer: ReturnType<typeof setInterval> | null = null
 const LIVE_RECORDINGS_REFRESH_INTERVAL = 5000 // 每 5 秒刷新一次实时记录数据
-// 对话框内时间刷新定时器
-let dialogRefreshTimer: ReturnType<typeof setInterval> | null = null
-const DIALOG_REFRESH_INTERVAL = 1000 // 每秒刷新对话框内时间
-// 对话框时间刷新 key
-const dialogTimeRefreshKey = ref(0)
 
 // 排序选项
 const sortOptions = [
@@ -618,40 +565,6 @@ function stopLiveRecordingsPolling() {
   }
 }
 
-// 刷新对话框内的时间数据
-async function refreshDialogTimes() {
-  if (!currentRecording.value?.live_recording_id) return
-
-  try {
-    const status = await liveRecordingApi.getStatus(currentRecording.value.live_recording_id)
-    if (currentRecording.value) {
-      currentRecording.value.last_upload_at = status.last_upload_at
-      currentRecording.value.last_point_time = status.last_point_time
-    }
-  } catch (error) {
-    // 静默处理错误
-  }
-  // 更新刷新 key，触发模板重新计算
-  dialogTimeRefreshKey.value++
-}
-
-// 启动对话框时间刷新
-function startDialogTimeRefresh() {
-  if (dialogRefreshTimer) return
-  refreshDialogTimes()
-  dialogRefreshTimer = setInterval(() => {
-    refreshDialogTimes()
-  }, DIALOG_REFRESH_INTERVAL)
-}
-
-// 停止对话框时间刷新
-function stopDialogTimeRefresh() {
-  if (dialogRefreshTimer) {
-    clearInterval(dialogRefreshTimer)
-    dialogRefreshTimer = null
-  }
-}
-
 // 获取轨迹的进度信息
 function getTrackProgress(trackId: number): FillProgressItem | null {
   const progress = fillProgress.value[trackId]
@@ -668,6 +581,12 @@ function getTrackProgress(trackId: number): FillProgressItem | null {
   }
 
   return progress
+}
+
+// 处理每页条数变化
+function handleSizeChange() {
+  currentPage.value = 1  // 重置到第一页
+  loadTracks()
 }
 
 async function loadTracks() {
@@ -783,159 +702,30 @@ function handleCommand(command: string) {
 async function showRecordingDetail(track: UnifiedTrack) {
   if (!track.live_recording_token || !track.live_recording_id) return
 
-  const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(track.live_recording_token)
-
   try {
     // 从后端获取最新的实时记录数据
     const recording = await liveRecordingApi.getList('active')
     const currentRecordingData = recording.find(r => r.id === track.live_recording_id)
 
-    // 二维码直接使用 GPS Logger API URL（带占位符）
-    // GPS Logger 扫描后可以直接使用
-    // 用户在浏览器打开时，后端会检测占位符并重定向到引导页面
-    const qrCode = await QRCode.toString(gpsLoggerUrl, {
-      width: 200,
-      margin: 2,
-      type: 'svg',
-    })
-
-    currentRecording.value = {
-      name: track.name,
-      live_recording_status: track.live_recording_status,
-      live_recording_id: track.live_recording_id,
-      live_recording_token: track.live_recording_token,
-      gpsLoggerUrl,
-      qrCode,
-      fill_geocoding: currentRecordingData?.fill_geocoding || track.fill_geocoding || false,
-      last_upload_at: currentRecordingData?.last_upload_at || null,
-      last_point_time: currentRecordingData?.last_point_time || null,
-    }
+    currentRecordingId.value = track.live_recording_id
+    currentRecordingToken.value = track.live_recording_token
+    currentRecordingName.value = track.name
+    currentRecordingStatus.value = track.live_recording_status
+    currentRecordingFillGeocoding.value = currentRecordingData?.fill_geocoding || track.fill_geocoding || false
+    currentRecordingLastUploadAt.value = currentRecordingData?.last_upload_at || null
+    currentRecordingLastPointTime.value = currentRecordingData?.last_point_time || null
     recordingDetailVisible.value = true
-
-    // 启动对话框内时间刷新
-    startDialogTimeRefresh()
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')
   }
 }
 
-// 更新填充地理信息设置
-async function updateFillGeocoding(value: boolean) {
-  if (!currentRecording.value?.live_recording_id) return
-
-  const originalValue = currentRecording.value.fill_geocoding
-
-  try {
-    await liveRecordingApi.updateFillGeocoding(currentRecording.value.live_recording_id, value)
-    // 成功后更新本地状态
-    currentRecording.value.fill_geocoding = value
-    // 更新对应 track 的 fill_geocoding 值
-    const track = unifiedTracks.value.find(t => t.live_recording_id === currentRecording.value?.live_recording_id)
-    if (track) {
-      track.fill_geocoding = value
-    }
-    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
-  } catch (error) {
-    // 失败时恢复到原来的值（el-switch 会自动恢复，但我们需要确保状态一致）
-    currentRecording.value.fill_geocoding = originalValue
-    console.error('更新填充地理信息设置失败:', error)
-  }
-}
-
-// 复制 GPS Logger URL
-function copyGpsLoggerUrl() {
-  if (!currentRecording.value) return
-  const url = currentRecording.value.gpsLoggerUrl
-
-  // 检查剪贴板 API 是否可用
-  if (!navigator.clipboard) {
-    // 尝试使用传统的 execCommand 方法作为回退
-    const textarea = document.createElement('textarea')
-    textarea.value = url
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-
-    try {
-      const successful = document.execCommand('copy')
-      document.body.removeChild(textarea)
-      if (successful) {
-        copyButtonText.value = '已复制'
-        ElMessage.success('URL 已复制到剪贴板')
-        setTimeout(() => {
-          copyButtonText.value = '复制'
-        }, 2000)
-      } else {
-        ElMessage.error('复制失败，请手动选择复制')
-      }
-    } catch (err) {
-      document.body.removeChild(textarea)
-      ElMessage.error('复制失败，请手动选择复制')
-      console.error('复制失败:', err)
-    }
-    return
-  }
-
-  // 使用现代剪贴板 API
-  navigator.clipboard.writeText(url).then(() => {
-    copyButtonText.value = '已复制'
-    ElMessage.success('URL 已复制到剪贴板')
-    setTimeout(() => {
-      copyButtonText.value = '复制'
-    }, 2000)
-  }).catch((err) => {
-    // 检查是否是因为非安全上下文（http vs https）
-    const isSecureContext = window.isSecureContext
-    if (!isSecureContext) {
-      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
-    } else {
-      ElMessage.error('复制失败，请手动复制')
-    }
-    console.error('复制失败:', err)
-  })
-}
-
-// 从对话框结束记录（带二次确认）
-async function confirmEndRecording() {
-  if (!currentRecording.value) return
-
-  try {
-    // 先刷新一次时间数据，确保显示最新的
-    await refreshDialogTimes()
-
-    // 构建确认消息，包含最近上传信息
-    let confirmMessage = `确定要结束实时记录"${currentRecording.value.name}"吗？`
-    if (currentRecording.value.last_upload_at || currentRecording.value.last_point_time) {
-      confirmMessage += '<p style="margin-top: 12px;">最近上传信息：</p>'
-      if (currentRecording.value.last_upload_at) {
-        confirmMessage += `<p style="margin: 4px 0;">最近上传：${formatTimeWithRelative(currentRecording.value.last_upload_at)}</p>`
-      }
-      if (currentRecording.value.last_point_time) {
-        confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(currentRecording.value.last_point_time)}</p>`
-      }
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">出于应用程序、网络等多方面的原因，在手机的 App 上停止记录轨迹后，不一定上传了全部的轨迹，会继续传输。</p>'
-      confirmMessage += '<p style="margin-top: 8px; color: #E6A23C;">请务必确认你已经上传了全部轨迹点。如果觉得轨迹点时间对不上，请先检查你的 GPS 记录程序（如 GPS Logger）是否正常上传。</p>'
-    }
-    confirmMessage += '<p style="margin-top: 12px;">结束后将无法继续上传轨迹点。</p>'
-
-    await ElMessageBox.confirm(
-      confirmMessage,
-      '确认结束记录',
-      {
-        confirmButtonText: '确定结束',
-        cancelButtonText: '取消',
-        type: 'warning',
-        dangerouslyUseHTMLString: true,
-      }
-    )
-
-    await liveRecordingApi.end(currentRecording.value.live_recording_id!)
-    ElMessage.success('记录已结束')
-    recordingDetailVisible.value = false
-    loadTracks()
-  } catch (error) {
-    // 用户取消或错误已在拦截器中处理
+// 处理填充地理信息变更
+function handleFillGeocodingChanged(value: boolean) {
+  // 更新对应 track 的 fill_geocoding 值
+  const track = unifiedTracks.value.find(t => t.live_recording_id === currentRecordingId.value)
+  if (track) {
+    track.fill_geocoding = value
   }
 }
 
@@ -1084,58 +874,12 @@ function endRecording(track: UnifiedTrack) {
   })
 }
 
-function formatDistance(meters: number): string {
-  if (meters < 1000) {
-    return `${meters.toFixed(1)} m`
-  }
-  return `${(meters / 1000).toFixed(2)} km`
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  if (hours > 0) {
-    return `${hours}h ${minutes}min`
-  }
-  return `${minutes}min`
-}
-
-function formatElevation(meters: number): string {
-  return `${meters.toFixed(0)} m`
-}
-
-function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '-'
-  const date = new Date(dateStr)
-  const year = date.getFullYear()
-  const month = (date.getMonth() + 1).toString().padStart(2, '0')
-  const day = date.getDate().toString().padStart(2, '0')
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-}
-
 // 格式化更新时间（依赖 timeRefreshKey 以触发刷新）
 function formatTimeShortWithRefresh(timeStr: string | null | undefined): string {
   // 依赖 timeRefreshKey，确保定时触发重新计算
   void timeRefreshKey.value
   return formatTimeShort(timeStr)
 }
-
-// 格式化对话框内时间（依赖 dialogTimeRefreshKey 以触发刷新）
-function formatTimeWithRelativeDialog(timeStr: string | null | undefined): string {
-  // 依赖 dialogTimeRefreshKey，确保定时触发重新计算
-  void dialogTimeRefreshKey.value
-  return formatTimeWithRelative(timeStr)
-}
-
-// 监听对话框关闭，停止时间刷新
-watch(recordingDetailVisible, (isVisible) => {
-  if (!isVisible) {
-    stopDialogTimeRefresh()
-  }
-})
 
 onMounted(async () => {
   await loadTracks()
@@ -1175,7 +919,6 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
   flex-shrink: 0;
   gap: 16px;
 }
@@ -1186,6 +929,16 @@ onUnmounted(() => {
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* 下拉菜单分割线 */
+.dropdown-divider {
+  margin: 4px 0;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+  background-color: var(--el-border-color-lighter);
 }
 
 .header-left {
@@ -1357,10 +1110,6 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.desktop-only {
-  display: inline-block;
-}
-
 /* PC 端显示表格，隐藏移动端卡片 */
 @media (min-width: 1367px) {
   .mobile-card-list {
@@ -1391,7 +1140,6 @@ onUnmounted(() => {
     right: 0;
     z-index: 1000;
     flex-wrap: wrap;
-    padding: 10px;
     background: white;
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }

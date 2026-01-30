@@ -1,11 +1,31 @@
 <template>
   <el-container class="upload-container">
     <el-header>
-      <div class="header-content">
-        <el-button @click="$router.back()" :icon="ArrowLeft" />
-        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
+      <div class="header-left">
+        <el-button @click="$router.back()" :icon="ArrowLeft" class="nav-btn" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
         <h1>上传轨迹</h1>
-        <div></div>
+      </div>
+      <div class="header-right">
+        <el-dropdown @command="handleCommand">
+          <span class="user-info">
+            <el-icon><User /></el-icon>
+            <span class="username">{{ authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
+                <el-icon><Setting /></el-icon>
+                后台管理
+              </el-dropdown-item>
+              <el-dropdown-item command="logout">
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </el-header>
 
@@ -117,11 +137,29 @@
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules, type UploadInstance, type UploadFile } from 'element-plus'
-import { ArrowLeft, HomeFilled, UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadInstance, type UploadFile } from 'element-plus'
+import { ArrowLeft, HomeFilled, UploadFilled, User, ArrowDown, Setting, SwitchButton } from '@element-plus/icons-vue'
 import { trackApi } from '@/api/track'
+import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
+const authStore = useAuthStore()
+
+// 处理下拉菜单命令
+function handleCommand(command: string) {
+  if (command === 'logout') {
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }).then(() => {
+      authStore.logout()
+      router.push('/login')
+    })
+  } else if (command === 'admin') {
+    router.push('/admin')
+  }
+}
 const formRef = ref<FormInstance>()
 const uploadRef = ref<UploadInstance>()
 
@@ -214,20 +252,57 @@ async function handleSubmit() {
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
   align-items: center;
-  padding: 0 20px;
+  justify-content: space-between;
 }
 
-.header-content {
+.header-left {
   display: flex;
   align-items: center;
-  width: 100%;
-  gap: 20px;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
-.header-content h1 {
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
+}
+
+.header-left h1 {
   font-size: 20px;
   margin: 0;
-  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-info:hover {
+  background-color: #f5f7fa;
+}
+
+.username {
+  font-size: 14px;
+  color: #606266;
 }
 
 .main {

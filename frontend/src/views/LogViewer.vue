@@ -166,9 +166,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
   flex-shrink: 0;
-  height: 60px;
 }
 
 .header-left {

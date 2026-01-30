@@ -16,10 +16,6 @@
             </span>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="home">
-                  <el-icon><HomeFilled /></el-icon>
-                  主页
-                </el-dropdown-item>
                 <el-dropdown-item command="tracks">
                   <el-icon><List /></el-icon>
                   轨迹列表
@@ -898,6 +894,7 @@ import draggable from 'vuedraggable'
 import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
+import { formatDateTime } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
 import { hashPassword } from '@/utils/crypto'
 
@@ -1482,23 +1479,9 @@ function handleCommand(command: string) {
       ElMessage.success('已退出登录')
       router.push('/login')
     })
-  } else if (command === 'home') {
-    router.push('/home')
   } else if (command === 'tracks') {
     router.push('/tracks')
   }
-}
-
-// 格式化日期时间
-function formatDateTime(dateStr: string): string {
-  const date = new Date(dateStr)
-  const year = date.getFullYear()
-  const month = (date.getMonth() + 1).toString().padStart(2, '0')
-  const day = date.getDate().toString().padStart(2, '0')
-  const hours = date.getHours().toString().padStart(2, '0')
-  const minutes = date.getMinutes().toString().padStart(2, '0')
-  const seconds = date.getSeconds().toString().padStart(2, '0')
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
 }
 
 // 格式化文件大小
@@ -1668,9 +1651,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 20px;
   flex-shrink: 0;
-  height: 60px;
   z-index: 100;
   width: 100%;
 }
@@ -2082,8 +2063,6 @@ onUnmounted(() => {
     left: 0;
     right: 0;
     z-index: 100;
-    height: auto;
-    padding: 10px;
     width: 100%;
     overflow: hidden;
   }

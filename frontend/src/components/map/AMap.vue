@@ -9,6 +9,7 @@ import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { formatDistance, formatDuration } from '@/utils/format'
 
 // 类型定义
 interface Point {
@@ -824,22 +825,6 @@ async function initMap() {
             return `${startTime} ~ ${endTime}`
           }
 
-          const formatDistance = (meters: number | undefined) => {
-            if (meters === undefined) return '-'
-            if (meters < 1000) return `${meters.toFixed(1)} m`
-            return `${(meters / 1000).toFixed(2)} km`
-          }
-
-          const formatDuration = (seconds: number | undefined) => {
-            if (seconds === undefined) return '-'
-            const hours = Math.floor(seconds / 3600)
-            const minutes = Math.floor((seconds % 3600) / 60)
-            if (hours > 0) {
-              return `${hours}小时${minutes}分钟`
-            }
-            return `${minutes}分钟`
-          }
-
           const content = `
             <div class="track-tooltip" data-track-id="${track.id}" style="width: 200px; padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
               <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
@@ -1000,22 +985,6 @@ async function initMap() {
               ? formatTime(track.end_time, true)
               : formatTime(track.end_time, false)
             return `${startTime} ~ ${endTime}`
-          }
-
-          const formatDistance = (meters: number | undefined) => {
-            if (meters === undefined) return '-'
-            if (meters < 1000) return `${meters.toFixed(1)} m`
-            return `${(meters / 1000).toFixed(2)} km`
-          }
-
-          const formatDuration = (seconds: number | undefined) => {
-            if (seconds === undefined) return '-'
-            const hours = Math.floor(seconds / 3600)
-            const minutes = Math.floor((seconds % 3600) / 60)
-            if (hours > 0) {
-              return `${hours}小时${minutes}分钟`
-            }
-            return `${minutes}分钟`
           }
 
           const content = `

@@ -10,6 +10,7 @@ import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { formatDistance, formatDuration } from '@/utils/format'
 
 // 类型定义
 interface Point {
@@ -809,22 +810,6 @@ async function initMap() {
             ? formatTime(track.end_time, true)
             : formatTime(track.end_time, false)
           return `${startTime} ~ ${endTime}`
-        }
-
-        const formatDistance = (meters: number | undefined) => {
-          if (meters === undefined) return '-'
-          if (meters < 1000) return `${meters.toFixed(1)} m`
-          return `${(meters / 1000).toFixed(2)} km`
-        }
-
-        const formatDuration = (seconds: number | undefined) => {
-          if (seconds === undefined) return '-'
-          const hours = Math.floor(seconds / 3600)
-          const minutes = Math.floor((seconds % 3600) / 60)
-          if (hours > 0) {
-            return `${hours}小时${minutes}分钟`
-          }
-          return `${minutes}分钟`
         }
 
         const htmlContent = `
