@@ -449,6 +449,77 @@ if (documentMouseMoveHandler) {
 
 5. **content 固定宽度**：所有 tooltip 内容 div 都设置 `width: 200px`，防止 tooltip 变窄变高
 
+### 图表与地图 Tooltip 同步修复（重要）
+
+**问题背景**：在轨迹详情页，当鼠标在海拔/速度图表上划过时，地图上没有显示出对应的提示框。但如果直接在地图上移动鼠标，tooltip 显示正常。
+
+**问题历史**：
+- **提交 c99f0025**：图表悬停可以触发地图 tooltip，但鼠标在地图上移动时轨迹会"跑"，影响交互体验
+- **提交 94a2f3c**：修复了轨迹跑动问题（通过 document 级别事件监听），但同时破坏了图表到地图的 tooltip 同步
+
+**根本原因**：
+
+document 级别的 `mousemove` 事件监听器会捕获**所有**鼠标移动事件，包括图表上的鼠标移动。当用户在图表上滑动时：
+
+1. 图表触发 `showTip` 事件，调用 `mapRef.value.highlightPoint(index)` 显示 tooltip
+2. 几乎同时，document 的 `mousemove` 事件被触发
+3. document 事件处理函数检测到鼠标位置（此时在图表上），尝试在地图上对应位置显示 tooltip
+4. 由于鼠标不在轨迹上附近，tooltip 被隐藏或位置错误
+
+**解决方案**：在 document 级别事件监听器中，检查鼠标事件的目标元素是否来自图表容器。如果是，则跳过地图的 mousemove 处理。
+
+**实现代码**（[`AMap.vue`](frontend/src/components/map/AMap.vue)）：
+
+```typescript
+// 在 document 级别监听鼠标移动，避免被 AMap 内部元素阻挡
+documentMouseMoveHandler = (e: MouseEvent) => {
+  if (!AMapInstance || !mapContainer.value) return
+
+  // 检查鼠标事件是否来自图表容器，如果是则跳过处理
+  const chartContainer = document.querySelector('.chart')
+  if (chartContainer && chartContainer.contains(e.target as Node)) {
+    return  // 鼠标在图表上，让图表的 tooltip 优先显示
+  }
+
+  // 检查鼠标是否在地图容器内
+  const rect = mapContainer.value.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const y = e.clientY - rect.top
+
+  // 如果鼠标在容器外，隐藏标记
+  if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+    hideMarker()
+    return
+  }
+
+  // 将容器坐标转换为地图坐标
+  const lngLat = AMapInstance.containerToLngLat(new AMap.Pixel(x, y))
+  if (!lngLat) return
+  const mouseLngLat: [number, number] = [lngLat.lng, lngLat.lat]
+  handleMouseMove(mouseLngLat)
+}
+
+document.addEventListener('mousemove', documentMouseMoveHandler, true)
+```
+
+**关键技术点**：
+
+1. **`chartContainer.contains(e.target)`**：这是 DOM API 方法，检查 `e.target`（事件源元素）是否是图表容器的后代节点
+2. **事件冒泡**：当鼠标在图表上移动时，`e.target` 是图表内的某个元素（如 SVG 元素），`contains()` 返回 `true`
+3. **提前返回**：一旦检测到鼠标在图表上，立即 `return`，不执行后续的地图坐标转换和 tooltip 更新
+4. **选择器** `.chart`：图表容器的 class 名称，在 TrackDetail.vue 中定义为 `<div ref="chartRef" class="chart">`
+
+**为什么不用时间戳冷却方案**：
+
+早期尝试使用时间戳冷却（如 200ms 内忽略 document 事件）无法解决问题，因为：
+- 冷却时间难以精确控制：太短仍然会冲突，太长会影响地图交互的响应速度
+- 无法区分鼠标是在图表还是地图上移动
+- 直接检测事件源更可靠、更精确
+
+**涉及文件**：
+- [`AMap.vue`](frontend/src/components/map/AMap.vue) - `documentMouseMoveHandler` 修改
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 图表事件监听（无需修改）
+
 ### 实时轨迹记录功能
 
 系统支持通过 GPS Logger 等应用实时记录轨迹点，无需登录即可上传。

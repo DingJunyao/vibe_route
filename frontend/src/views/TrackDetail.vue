@@ -44,13 +44,27 @@
             <el-icon><Edit /></el-icon>
             编辑
           </el-button>
+          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
+            <el-icon><Download /></el-icon>
+            导出数据
+          </el-button>
           <el-button type="primary" @click="importDialogVisible = true" class="desktop-only">
             <el-icon><Upload /></el-icon>
             导入数据
           </el-button>
-          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
-            <el-icon><Download /></el-icon>
-            导出数据
+          <el-button type="primary" @click="downloadDialogVisible = true" class="desktop-only">
+            <el-icon><Document /></el-icon>
+            下载 GPX
+          </el-button>
+          <el-button
+            type="primary"
+            @click="handleFillGeocoding"
+            class="desktop-only"
+            :loading="fillingGeocoding"
+            :disabled="fillProgress.status === 'filling'"
+          >
+            <el-icon><LocationFilled /></el-icon>
+            填充地理信息
           </el-button>
         </div>
         <el-dropdown @command="handleCommand">
@@ -72,15 +86,26 @@
                 <el-icon><Edit /></el-icon>
                 编辑
               </el-dropdown-item>
-              <el-dropdown-item command="import" v-if="isMobile">
-                <el-icon><Upload /></el-icon>
-                导入数据
-              </el-dropdown-item>
               <el-dropdown-item command="exportPoints" v-if="isMobile">
                 <el-icon><Download /></el-icon>
                 导出数据
               </el-dropdown-item>
-              <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
+              <el-dropdown-item command="import" v-if="isMobile">
+                <el-icon><Upload /></el-icon>
+                导入数据
+              </el-dropdown-item>
+              <el-dropdown-item command="download" v-if="isMobile">
+                <el-icon><Document /></el-icon>
+                下载 GPX
+              </el-dropdown-item>
+              <el-dropdown-item
+                command="fill"
+                v-if="isMobile"
+                :disabled="fillProgress.status === 'filling'"
+              >
+                <el-icon><LocationFilled /></el-icon>
+                {{ fillProgress.status === 'filling' ? '填充中...' : '填充地理信息' }}
+              </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -192,7 +217,6 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
-                    :live-status-text="liveStatusText"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -343,14 +367,7 @@
                         <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
                       </div>
                       <div class="fill-progress-text">
-                        <span v-if="fillProgress.total > 0">
-                          <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
-                            {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                          </template>
-                          <template v-else>
-                            {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                          </template>
-                        </span>
+                        <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
                         <span v-else>正在准备...</span>
                       </div>
                     </div>
@@ -367,16 +384,16 @@
                         :expand-on-click-node="false"
                         node-key="id"
                         :key="treeForceUpdateKey"
-                        :indent="9"
                         @node-click="handleRegionNodeClick"
                       >
                         <template #default="{ data }">
                           <div class="region-tree-node">
                             <div class="node-label">
-                              <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
+                              <el-icon class="node-icon" :class="`icon-${data.type}`">
                                 <LocationFilled v-if="data.type === 'province'" />
                                 <LocationFilled v-else-if="data.type === 'city'" />
                                 <LocationFilled v-else-if="data.type === 'district'" />
+                                <Odometer v-else-if="data.type === 'road'" />
                               </el-icon>
                               <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                               <component v-else :is="() => renderNodeLabel(data)" />
@@ -412,7 +429,6 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
-                    :live-status-text="liveStatusText"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -561,14 +577,7 @@
                     <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
                   </div>
                   <div class="fill-progress-text">
-                    <span v-if="fillProgress.total > 0">
-                      <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
-                        {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                      </template>
-                      <template v-else>
-                        {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                      </template>
-                    </span>
+                    <span v-if="fillProgress.total > 0">{{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）</span>
                     <span v-else>正在准备...</span>
                   </div>
                 </div>
@@ -584,17 +593,17 @@
                     default-expand-all
                     :expand-on-click-node="false"
                     node-key="id"
-                    :indent="9"
                     :key="treeForceUpdateKey"
                     @node-click="handleRegionNodeClick"
                   >
                     <template #default="{ data }">
                       <div class="region-tree-node">
                         <div class="node-label">
-                          <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
+                          <el-icon class="node-icon" :class="`icon-${data.type}`">
                             <LocationFilled v-if="data.type === 'province'" />
                             <LocationFilled v-else-if="data.type === 'city'" />
                             <LocationFilled v-else-if="data.type === 'district'" />
+                            <Odometer v-else-if="data.type === 'road'" />
                           </el-icon>
                           <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                           <component v-else :is="() => renderNodeLabel(data)" />
@@ -626,7 +635,7 @@
                   >
                     <div class="point-header">
                       <span class="point-index">#{{ point.point_index }}</span>
-                      <span class="point-time">{{ formatTimeOnly(point.time) }}</span>
+                      <span class="point-time">{{ formatTime(point.time) }}</span>
                     </div>
                     <div class="point-coords">
                       {{ point.latitude?.toFixed(6) }}, {{ point.longitude?.toFixed(6) }}
@@ -650,7 +659,7 @@
 
     <!-- 编辑对话框 -->
     <el-dialog v-model="editDialogVisible" title="编辑轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <el-form :model="editForm" label-width="100px" class="dialog-form">
+      <el-form :model="editForm" label-width="80px" class="dialog-form">
         <el-form-item label="名称">
           <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
         </el-form-item>
@@ -658,75 +667,46 @@
           <el-input
             v-model="editForm.description"
             type="textarea"
-            :rows="3"
+            :rows="4"
             placeholder="请输入备注信息"
           />
         </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveEdit">保存</el-button>
+      </template>
+    </el-dialog>
 
-        <el-divider content-position="left">更改坐标系</el-divider>
-
-        <el-form-item label="原坐标系">
-          <el-radio-group v-model="editForm.original_crs">
+    <!-- 下载对话框 -->
+    <el-dialog v-model="downloadDialogVisible" title="下载 GPX" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <el-form label-width="100px" class="dialog-form">
+        <el-form-item label="坐标系">
+          <el-radio-group v-model="downloadCRS">
+            <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
             <el-radio value="wgs84">WGS84</el-radio>
-            <el-radio value="gcj02">GCJ02</el-radio>
-            <el-radio value="bd09">BD09</el-radio>
+            <el-radio value="gcj02">GCJ02 (火星)</el-radio>
+            <el-radio value="bd09">BD09 (百度)</el-radio>
           </el-radio-group>
-          <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
         </el-form-item>
       </el-form>
       <template #footer>
-        <div class="dialog-footer-content">
-          <el-button
-            type="primary"
-            :loading="fillingGeocoding"
-            @click="handleFillGeocoding"
-            class="fill-geo-btn"
-          >
-            <el-icon><LocationFilled /></el-icon>
-            {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充' : '填充地理信息' }}
-          </el-button>
-          <div class="dialog-footer-right">
-            <el-button @click="editDialogVisible = false">取消</el-button>
-            <el-button type="primary" :loading="saving || changingCrs" @click="saveEdit">
-              {{ changingCrs ? '更改中...' : '保存' }}
-            </el-button>
-          </div>
-        </div>
+        <el-button @click="downloadDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="downloadTrack">下载</el-button>
       </template>
     </el-dialog>
 
     <!-- 导出数据对话框 -->
-    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+    <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
       <el-form label-width="100px" class="dialog-form">
         <el-form-item label="文件格式">
           <el-radio-group v-model="exportFormat">
-            <el-radio value="gpx">GPX</el-radio>
-            <el-radio value="kml">KML</el-radio>
-            <el-radio value="csv">CSV</el-radio>
-            <el-radio value="xlsx">XLSX</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="坐标系" v-if="exportFormat === 'gpx' || exportFormat === 'kml'">
-          <el-radio-group v-model="exportCRS">
-            <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
-            <el-radio value="wgs84">WGS84</el-radio>
-            <el-radio value="gcj02">GCJ02</el-radio>
-            <el-radio value="bd09">BD09</el-radio>
+            <el-radio value="csv">CSV (Excel)</el-radio>
+            <el-radio value="xlsx">XLSX (Excel)</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-alert type="info" :closable="false" style="margin-top: 10px">
-          <template v-if="exportFormat === 'gpx'">
-            导出为 GPX 格式，可导入到各种 GPS 设备和软件。包含时间、坐标、海拔等信息。
-          </template>
-          <template v-else-if="exportFormat === 'kml'">
-            导出为 KML 格式，可导入到 Google Earth 等应用。包含时间、坐标、海拔等信息。
-          </template>
-          <template v-else-if="exportFormat === 'csv'">
-            导出为 UTF-8 带 BOM 的 CSV 格式，可使用 Excel 等电子表格软件打开。可以编辑地理信息，然后重新导入。
-          </template>
-          <template v-else>
-            导出后可以编辑地理信息，然后重新导入。
-          </template>
+          导出后可以编辑地理信息，然后重新导入
         </el-alert>
       </el-form>
       <template #footer>
@@ -807,18 +787,66 @@
     </el-dialog>
 
     <!-- 实时记录配置对话框 -->
-    <LiveRecordingDialog
-      v-model:visible="recordingDetailVisible"
-      :recording-id="recordingDetailId || 0"
-      :token="recordingDetailToken || ''"
-      :name="recordingDetailName || ''"
-      :status="recordingDetailStatus || 'ended'"
-      :fill-geocoding="recordingDetailFillGeocoding || false"
-      :last-upload-at="recordingDetailLastUploadAt"
-      :last-point-time="recordingDetailLastPointTime"
-      @ended="handleRecordingEnded"
-      @fill-geocoding-changed="handleFillGeocodingChanged"
-    />
+    <el-dialog v-model="recordingDetailVisible" title="实时记录配置" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+      <div v-if="recordingDetail" class="recording-detail-content">
+        <!-- 记录状态 -->
+        <div class="recording-status">
+          <div class="status-item">
+            <span class="status-label">记录名称：</span>
+            <span class="status-value">{{ recordingDetail.name }}</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">状态：</span>
+            <el-tag v-if="recordingDetail.live_recording_status === 'active'" type="success" size="small">
+              正在记录
+            </el-tag>
+            <el-tag v-else type="info" size="small">已结束</el-tag>
+          </div>
+        </div>
+
+        <!-- 填充地理信息开关 -->
+        <div class="setting-section">
+          <div class="setting-item">
+            <span class="setting-label">上传时自动填充地理信息</span>
+            <el-switch
+              v-model="recordingDetail.fill_geocoding"
+              @change="updateRecordingFillGeocoding"
+              :disabled="recordingDetail.live_recording_status !== 'active'"
+            />
+          </div>
+          <div class="setting-tip">
+            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
+          </div>
+        </div>
+
+        <!-- GPS Logger URL -->
+        <div class="url-section">
+          <div class="url-label">GPS Logger URL：</div>
+          <el-input :model-value="recordingDetail.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
+          <el-button @click="copyRecordingUrl" :icon="DocumentCopy" type="primary" class="copy-button">
+            {{ recordingDetailCopyButtonText }}
+          </el-button>
+        </div>
+
+        <!-- 二维码 -->
+        <div class="qrcode-container" v-if="recordingDetail.qrCode">
+          <div class="qrcode" v-html="recordingDetail.qrCode"></div>
+          <p class="qrcode-tip">扫描二维码查看配置说明</p>
+        </div>
+      </div>
+
+      <template #footer>
+        <el-button @click="recordingDetailVisible = false">关闭</el-button>
+        <el-button
+          v-if="recordingDetail?.live_recording_status === 'active'"
+          type="danger"
+          @click="confirmEndRecording"
+        >
+          <el-icon><VideoPause /></el-icon>
+          结束记录
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -847,21 +875,21 @@ import {
   LocationFilled,
   Close,
   Link,
+  DocumentCopy,
+  VideoPause,
   Loading,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
 import UniversalMap from '@/components/map/UniversalMap.vue'
-import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
+import QRCode from 'qrcode'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
-import { formatDistance, formatDuration, formatElevation, formatDateTime, formatDate, formatTimeOnly } from '@/utils/format'
-import { formatTimeWithRelative, formatTimeShort } from '@/utils/relativeTime'
 
 const route = useRoute()
 const router = useRouter()
@@ -898,15 +926,15 @@ const mapWrapperRef = ref<HTMLElement>()
 const chartRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
+const downloadDialogVisible = ref(false)
+const downloadCRS = ref('original')
 
 // 编辑相关
 const editDialogVisible = ref(false)
 const saving = ref(false)
-const changingCrs = ref(false)
 const editForm = ref({
   name: '',
-  description: '',
-  original_crs: 'wgs84'
+  description: ''
 })
 
 // 填充地理信息相关
@@ -914,9 +942,8 @@ const fillingGeocoding = ref(false)
 const fillProgress = ref<{
   current: number
   total: number
-  failed: number
   status: 'idle' | 'filling' | 'completed' | 'error' | 'stopped'
-}>({ current: 0, total: 0, failed: 0, status: 'idle' })
+}>({ current: 0, total: 0, status: 'idle' })
 let fillProgressTimer: number | null = null
 
 // 区域树相关
@@ -936,23 +963,25 @@ const loadingSigns = ref<Set<string>>(new Set())
 // 强制更新树组件的 key（当 SVG 加载完成后）
 const treeForceUpdateKey = ref(0)
 
-// 实时记录详情相关（使用 LiveRecordingDialog 组件）
+// 实时记录详情相关
 const recordingDetailVisible = ref(false)
-const recordingDetailId = ref<number | null>(null)
-const recordingDetailToken = ref<string | null>(null)
-const recordingDetailName = ref<string | null>(null)
-const recordingDetailStatus = ref<'active' | 'ended' | null>(null)
-const recordingDetailFillGeocoding = ref<boolean>(false)
-const recordingDetailLastUploadAt = ref<string | null>(null)
-const recordingDetailLastPointTime = ref<string | null>(null)
+const recordingDetail = ref<{
+  name: string
+  live_recording_status: 'active' | 'ended'
+  live_recording_id: number
+  live_recording_token: string
+  gpsLoggerUrl: string
+  qrCode: string
+  fill_geocoding: boolean
+} | null>(null)
+const recordingDetailCopyButtonText = ref('复制')
 
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
 
 // 导出相关
 const exportPointsDialogVisible = ref(false)
-const exportFormat = ref<'gpx' | 'kml' | 'csv' | 'xlsx'>('gpx')
-const exportCRS = ref('original')
+const exportFormat = ref<'csv' | 'xlsx'>('csv')
 const exporting = ref(false)
 
 // 导入相关
@@ -971,23 +1000,6 @@ const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnect
 // 区域更新节流：最多每 10 秒更新一次
 let regionUpdateTimer: number | null = null
 const REGION_UPDATE_INTERVAL = 10000 // 10 秒
-// 最近更新时间（用于实时状态显示）
-const lastUpdateTime = ref<string | null>(null)
-// 实时状态文字刷新定时器
-let liveStatusRefreshTimer: number | null = null
-const LIVE_STATUS_REFRESH_INTERVAL = 1000 // 每秒刷新一次相对时间
-// 用于触发计算属性重新计算的 key
-const liveStatusRefreshKey = ref(0)
-
-// 实时状态文字（用于地图上的绿色按钮）
-const liveStatusText = computed(() => {
-  // 依赖 refreshKey，确保定时触发重新计算
-  void liveStatusRefreshKey.value
-  if (track.value?.is_live_recording && track.value.live_recording_status === 'active' && lastUpdateTime.value) {
-    return formatTimeShort(lastUpdateTime.value)
-  }
-  return ''
-})
 
 // 判断是否是"待记录"状态（实时记录且没有点）
 const isWaitingForPoints = computed(() => {
@@ -1049,6 +1061,8 @@ function handleCommand(command: string) {
     showRecordingDetail()
   } else if (command === 'edit') {
     showEditDialog()
+  } else if (command === 'download') {
+    downloadDialogVisible.value = true
   } else if (command === 'exportPoints') {
     exportPointsDialogVisible.value = true
   } else if (command === 'import') {
@@ -1263,7 +1277,17 @@ function renderNodeLabel(node: RegionNode) {
   return h('span', node.name)
 }
 
-// 格式化时间范围（树形图专用）
+// 格式化距离
+function formatDistance(meters: number): string {
+  if (meters >= 1000) {
+    const km = (meters / 1000).toFixed(2)
+    // 去掉末尾的 .00
+    return km.endsWith('.00') ? `${km.slice(0, -3)} km` : `${km} km`
+  }
+  return `${Math.round(meters)} m`
+}
+
+// 格式化时间范围
 function formatTimeRange(start: string | null, end: string | null): string {
   if (!start) return '-'
   const startDate = new Date(start)
@@ -1277,17 +1301,15 @@ function formatTimeRange(start: string | null, end: string | null): string {
   }
 
   if (endDate) {
-    const diff = (endDate.getTime() - startDate.getTime()) / 1000 // 秒
-    if (diff < 60) {
-      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff / 60)}min)`
+    const diff = (endDate.getTime() - startDate.getTime()) / 1000 / 60 // 分钟
+    if (diff < 1) {
+      return `${formatTime(startDate)}`
+    } else if (diff < 60) {
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff)}分钟)`
     } else {
-      const hours = Math.floor(diff / 3600)
-      const mins = Math.round((diff % 3600) / 60)
-      if (hours > 0) {
-        return `${formatTime(startDate)} - ${formatTime(endDate)} (${hours}h ${mins}min)`
-      } else {
-        return `${formatTime(startDate)} - ${formatTime(endDate)} (${mins}min)`
-      }
+      const hours = Math.floor(diff / 60)
+      const mins = Math.round(diff % 60)
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${hours}小时${mins}分钟)`
     }
   }
   return formatTime(startDate)
@@ -1316,11 +1338,6 @@ function clearSegmentHighlight() {
 // 渲染海拔和速度合并图表
 function renderChart() {
   if (!chartRef.value || !points.value.length) return
-
-  // 如果已有图表实例，先销毁
-  if (chartInstance) {
-    chartInstance.dispose()
-  }
 
   const chart = echarts.init(chartRef.value)
   chartInstance = chart  // 保存图表实例
@@ -1374,7 +1391,7 @@ function renderChart() {
         const point = sampledPoints[dataIndex]
         const speedRaw = point.speed
         const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : '-'
-        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTimeOnly(point.time) : '-'}<br/>`
+        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTime(point.time) : '-'}<br/>`
         for (const param of params) {
           if (param.seriesName === '海拔') {
             const elevationValue = param.value !== null ? param.value.toFixed(1) : '-'
@@ -1591,10 +1608,10 @@ async function handleFillGeocoding() {
   if (track.value?.has_area_info || track.value?.has_road_info) {
     try {
       await ElMessageBox.confirm(
-        '你已填充地理信息，再次填充将会覆盖此前的记录。确认继续？',
+        '已填充地理信息，再次填充会覆盖已有的信息，是否继续？',
         '确认重新填充',
         {
-          confirmButtonText: '确认',
+          confirmButtonText: '继续',
           cancelButtonText: '取消',
           type: 'warning',
         }
@@ -1642,20 +1659,7 @@ function startPollingProgress() {
       if (response.progress.status === 'completed') {
         stopPollingProgress()
         fillingGeocoding.value = false
-        const { current, failed } = response.progress
-        const total = current + failed
-        // 根据失败数量显示不同的提示
-        if (current > 0 && failed === 0) {
-          // 全部成功
-          ElMessage.success('地理信息填充完成')
-        } else if (current > 0 && failed > 0) {
-          // 部分失败
-          const failedPercent = Math.round((failed / total) * 100)
-          ElMessage.warning(`地理信息填充完成，但包含 ${failed} 条失败数据（占 ${failedPercent}%），请自行填充失败部分`)
-        } else if (current === 0 && failed > 0) {
-          // 全部失败
-          ElMessage.error('地理信息填充失败，请自行填充')
-        }
+        ElMessage.success('地理信息填充完成')
         // 重新加载轨迹数据
         await fetchTrackDetail()
         await fetchTrackPoints()
@@ -1726,12 +1730,17 @@ function highlightPoint(index: number) {
   // TODO: 在地图上高亮该点
 }
 
+// 显示下载对话框
+function showDownloadDialog() {
+  downloadDialogVisible.value = true
+}
+
 // 显示实时记录详情对话框
 async function showRecordingDetail() {
   if (!track.value?.live_recording_id) return
 
   try {
-    // 从后端获取最新的实时记录数据
+    // 从后端获取最新的实时记录数据（包含 fill_geocoding）
     const recording = await liveRecordingApi.getList('active')
     const currentRecording = recording.find(r => r.id === track.value?.live_recording_id)
 
@@ -1740,30 +1749,126 @@ async function showRecordingDetail() {
       return
     }
 
-    recordingDetailId.value = currentRecording.id
-    recordingDetailToken.value = currentRecording.token
-    recordingDetailName.value = track.value.name
-    recordingDetailStatus.value = currentRecording.status
-    recordingDetailFillGeocoding.value = currentRecording.fill_geocoding || false
-    recordingDetailLastUploadAt.value = currentRecording.last_upload_at
-    recordingDetailLastPointTime.value = currentRecording.last_point_time
+    const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(currentRecording.token)
+
+    // 生成二维码
+    const qrCode = await QRCode.toString(gpsLoggerUrl, {
+      width: 200,
+      margin: 2,
+      type: 'svg',
+    })
+
+    recordingDetail.value = {
+      name: track.value.name,
+      live_recording_status: currentRecording.status,
+      live_recording_id: currentRecording.id,
+      live_recording_token: currentRecording.token,
+      gpsLoggerUrl,
+      qrCode,
+      fill_geocoding: currentRecording.fill_geocoding || false,
+    }
     recordingDetailVisible.value = true
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')
   }
 }
 
-// 处理填充地理信息变更
-function handleFillGeocodingChanged(value: boolean) {
-  if (track.value) {
-    track.value.fill_geocoding = value
+// 复制实时记录 URL
+function copyRecordingUrl() {
+  if (!recordingDetail.value) return
+  const url = recordingDetail.value.gpsLoggerUrl
+
+  // 检查剪贴板 API 是否可用
+  if (!navigator.clipboard) {
+    const textarea = document.createElement('textarea')
+    textarea.value = url
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+
+    try {
+      const successful = document.execCommand('copy')
+      document.body.removeChild(textarea)
+      if (successful) {
+        recordingDetailCopyButtonText.value = '已复制'
+        ElMessage.success('URL 已复制到剪贴板')
+        setTimeout(() => {
+          recordingDetailCopyButtonText.value = '复制'
+        }, 2000)
+      } else {
+        ElMessage.error('复制失败，请手动选择复制')
+      }
+    } catch (err) {
+      document.body.removeChild(textarea)
+      ElMessage.error('复制失败，请手动选择复制')
+      console.error('复制失败:', err)
+    }
+    return
+  }
+
+  navigator.clipboard.writeText(url).then(() => {
+    recordingDetailCopyButtonText.value = '已复制'
+    ElMessage.success('URL 已复制到剪贴板')
+    setTimeout(() => {
+      recordingDetailCopyButtonText.value = '复制'
+    }, 2000)
+  }).catch((err) => {
+    const isSecureContext = window.isSecureContext
+    if (!isSecureContext) {
+      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
+    } else {
+      ElMessage.error('复制失败，请手动复制')
+    }
+    console.error('复制失败:', err)
+  })
+}
+
+// 更新填充地理信息设置
+async function updateRecordingFillGeocoding(value: boolean) {
+  if (!recordingDetail.value?.live_recording_id) return
+
+  const originalValue = recordingDetail.value.fill_geocoding
+
+  try {
+    await liveRecordingApi.updateFillGeocoding(recordingDetail.value.live_recording_id, value)
+    // 成功后更新本地状态
+    recordingDetail.value.fill_geocoding = value
+    // 同时更新 track 的 fill_geocoding 值（如果存在）
+    if (track.value) {
+      track.value.fill_geocoding = value
+    }
+    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
+  } catch (error) {
+    // 失败时恢复到原来的值
+    recordingDetail.value.fill_geocoding = originalValue
+    console.error('更新填充地理信息设置失败:', error)
   }
 }
 
-// 处理记录结束
-async function handleRecordingEnded() {
-  // 重新加载轨迹数据
-  await fetchTrackDetail()
+// 结束实时记录（带二次确认）
+async function confirmEndRecording() {
+  if (!recordingDetail.value) return
+
+  try {
+    await ElMessageBox.confirm(
+      `确定要结束实时记录"${recordingDetail.value.name}"吗？结束后将无法继续上传轨迹点。`,
+      '确认结束记录',
+      {
+        confirmButtonText: '确定结束',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+
+    await liveRecordingApi.end(recordingDetail.value.live_recording_id)
+    ElMessage.success('记录已结束')
+    recordingDetailVisible.value = false
+    // 重新加载轨迹数据
+    await fetchTrackDetail()
+  } catch (error) {
+    // 用户取消或错误已在拦截器中处理
+  }
 }
 
 // 显示编辑对话框
@@ -1771,7 +1876,6 @@ function showEditDialog() {
   if (track.value) {
     editForm.value.name = track.value.name
     editForm.value.description = track.value.description || ''
-    editForm.value.original_crs = track.value.original_crs || 'wgs84'
   }
   editDialogVisible.value = true
 }
@@ -1787,81 +1891,67 @@ async function saveEdit() {
 
   saving.value = true
   try {
-    // 检查是否需要更改坐标系
-    const needsCrsChange = editForm.value.original_crs !== track.value.original_crs
-
-    if (needsCrsChange) {
-      // 需要更改坐标系
-      try {
-        await ElMessageBox.confirm(
-          `更改坐标系会重新计算所有坐标并保存，此操作不可撤销。如果此前填充了轨迹，可能需要重新填充。是否继续？`,
-          '确认更改坐标系',
-          {
-            confirmButtonText: '继续',
-            cancelButtonText: '取消',
-            type: 'warning',
-          }
-        )
-      } catch {
-        // 用户取消
-        saving.value = false
-        return
-      }
-
-      changingCrs.value = true
-      const updated = await trackApi.changeCrs(track.value.id, editForm.value.original_crs)
-      track.value = updated
-      // 重新加载轨迹点数据
-      await fetchTrackPoints()
-      // 强制刷新地图
-      await nextTick()
-      if (mapRef.value?.resize) {
-        mapRef.value.resize()
-      }
-      if (mapRef.value?.fitBounds) {
-        mapRef.value.fitBounds()
-      }
-      ElMessage.success('坐标系更改成功')
-    } else {
-      // 只更新名称和描述
-      const updated = await trackApi.update(track.value.id, {
-        name: editForm.value.name.trim(),
-        description: editForm.value.description.trim() || undefined
-      })
-      track.value = updated
-      ElMessage.success('保存成功')
-    }
-
+    const updated = await trackApi.update(track.value.id, {
+      name: editForm.value.name.trim(),
+      description: editForm.value.description.trim() || undefined
+    })
+    track.value = updated
     editDialogVisible.value = false
+    ElMessage.success('保存成功')
   } catch (error) {
     // 错误已在拦截器中处理
   } finally {
     saving.value = false
-    changingCrs.value = false
   }
 }
 
-// 导出轨迹
+// 下载轨迹
+async function downloadTrack() {
+  try {
+    const url = trackApi.download(trackId.value, downloadCRS.value)
+    // 使用 fetch 下载，自动携带认证信息
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    })
+
+    if (!response.ok) {
+      throw new Error('下载失败')
+    }
+
+    // 获取文件名
+    const contentDisposition = response.headers.get('Content-Disposition')
+    let filename = `track_${trackId.value}.gpx`
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename="(.+)"/)
+      if (match) filename = match[1]
+    }
+
+    // 创建 blob 并下载
+    const blob = await response.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(blobUrl)
+
+    downloadDialogVisible.value = false
+    ElMessage.success('下载成功')
+  } catch (error) {
+    console.error('Download error:', error)
+    ElMessage.error('下载失败')
+  }
+}
+
+// 导出轨迹点
 async function exportPoints() {
   try {
     exporting.value = true
-    let url: string
-    let defaultFilename: string
-
-    if (exportFormat.value === 'gpx') {
-      // GPX 使用 download API
-      url = trackApi.download(trackId.value, exportCRS.value)
-      defaultFilename = `track_${trackId.value}.gpx`
-    } else if (exportFormat.value === 'kml') {
-      // KML 需要 crs 参数
-      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value)
-      defaultFilename = `track_${trackId.value}.kml`
-    } else {
-      // CSV 和 XLSX
-      url = trackApi.exportPoints(trackId.value, exportFormat.value)
-      defaultFilename = `track_${trackId.value}_points.${exportFormat.value}`
-    }
-
+    const url = trackApi.exportPoints(trackId.value, exportFormat.value)
     const response = await fetch(url, {
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -1872,20 +1962,12 @@ async function exportPoints() {
       throw new Error('导出失败')
     }
 
-    // 获取文件名（优先使用 filename* RFC 5987）
+    // 获取文件名
     const contentDisposition = response.headers.get('Content-Disposition')
-    let filename = defaultFilename
+    let filename = `track_${trackId.value}_points.${exportFormat.value}`
     if (contentDisposition) {
-      // 优先匹配 filename*=UTF-8''encoded-filename
-      const starMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
-      if (starMatch) {
-        // 解码 URL 编码的文件名
-        filename = decodeURIComponent(starMatch[1])
-      } else {
-        // 回退到 filename 参数（URL 编码）
-        const match = contentDisposition.match(/filename="([^"]+)"/)
-        if (match) filename = decodeURIComponent(match[1])
-      }
+      const match = contentDisposition.match(/filename="(.+)"/)
+      if (match) filename = match[1]
     }
 
     // 创建 blob 并下载
@@ -1930,7 +2012,7 @@ async function importPoints() {
 
   try {
     importing.value = true
-    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value, false)
+    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value)
 
     const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
     ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
@@ -1945,64 +2027,63 @@ async function importPoints() {
     await fetchTrackDetail()
     await fetchTrackPoints()
     await fetchRegions()
-  } catch (error: any) {
+  } catch (error) {
     console.error('Import error:', error)
-    console.error('Error response:', error.response)
-    console.error('Error data:', error.response?.data)
-
-    // 检查是否是 409 Conflict（正在填充地理信息）
-    if (error.response?.status === 409) {
-      // JSONResponse 直接返回 content，不需要 .detail
-      const detail = error.response?.data
-      console.log('Parsed detail:', detail)
-      if (detail?.code === 'FILLING_IN_PROGRESS') {
-        // 弹窗确认
-        try {
-          await ElMessageBox.confirm(
-            detail.message || '当前正在填充地理信息，如果继续导入，会立即停止，改用导入的结果。是否继续导入？',
-            '确认导入',
-            {
-              confirmButtonText: '继续导入',
-              cancelButtonText: '取消',
-              type: 'warning',
-            }
-          )
-
-          // 用户确认，重新调用 API 并带上 confirm=true
-          importing.value = true
-          const result = await trackApi.importPoints(
-            trackId.value,
-            importFile.value,
-            importMatchMode.value,
-            importTimezone.value,
-            importTimeTolerance.value,
-            true  // confirm=true
-          )
-
-          const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
-          ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
-
-          importDialogVisible.value = false
-          importFile.value = null
-          if (uploadRef.value) {
-            uploadRef.value.clearFiles()
-          }
-
-          // 重新加载轨迹数据
-          await fetchTrackDetail()
-          await fetchTrackPoints()
-          await fetchRegions()
-        } catch {
-          // 用户取消确认，不做任何操作
-        }
-        return
-      }
-    }
-
     ElMessage.error('导入失败，请检查文件格式是否正确')
   } finally {
     importing.value = false
   }
+}
+
+// 格式化函数
+function formatDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}min`
+  return `${minutes}min`
+}
+
+function formatElevation(meters: number): string {
+  return `${meters.toFixed(0)} m`
+}
+
+function formatDateTime(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
+}
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const year = date.getFullYear()
+  const month = (date.getMonth() + 1).toString().padStart(2, '0')
+  const day = date.getDate().toString().padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function formatTimeOnly(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+}
+
+function formatTime(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const seconds = date.getSeconds().toString().padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
 }
 
 // 判断两个日期是否为同一天（本地时区）
@@ -2030,11 +2111,6 @@ function startLiveUpdate() {
     return
   }
 
-  // 初始化最近更新时间（从 track 的 end_time 获取，因为这是最新点的时间）
-  if (track.value.end_time) {
-    lastUpdateTime.value = track.value.end_time
-  }
-
   const token = track.value.live_recording_token
   const recordingId = track.value.live_recording_id
 
@@ -2057,15 +2133,6 @@ function startLiveUpdate() {
   try {
     liveTrackWs = new LiveTrackWebSocket(token, recordingId)
     isLiveUpdating.value = true
-
-    // 启动定时刷新相对时间
-    if (liveStatusRefreshTimer) {
-      clearInterval(liveStatusRefreshTimer)
-    }
-    liveStatusRefreshTimer = window.setInterval(() => {
-      // 更新 refreshKey 触发计算属性重新计算
-      liveStatusRefreshKey.value++
-    }, LIVE_STATUS_REFRESH_INTERVAL)
 
     // 设置重连判断回调：只有记录状态为 active 时才重连
     liveTrackWs.setShouldReconnectCallback(() => {
@@ -2127,9 +2194,6 @@ function startLiveUpdate() {
  * 停止实时更新
  */
 function stopLiveUpdate() {
-  if (!isLiveUpdating.value && !liveTrackWs) {
-    return  // 没有启动过实时更新，直接返回
-  }
   console.log('[LiveUpdate] 停止实时更新')
   if (liveTrackWs) {
     liveTrackWs.disconnect()
@@ -2142,12 +2206,6 @@ function stopLiveUpdate() {
   if (regionUpdateTimer) {
     clearTimeout(regionUpdateTimer)
     regionUpdateTimer = null
-  }
-
-  // 清除实时状态刷新定时器
-  if (liveStatusRefreshTimer) {
-    clearInterval(liveStatusRefreshTimer)
-    liveStatusRefreshTimer = null
   }
 
   // 停止时立即获取一次完整的区域数据
@@ -2177,9 +2235,6 @@ function scheduleRegionUpdate() {
 async function handleNewPointAdded(data: PointAddedData) {
   const { point, stats } = data
 
-  // 更新最近上传时间
-  lastUpdateTime.value = point.time || null
-
   // 添加新点到 points 数组
   points.value.push({
     id: point.id,
@@ -2206,13 +2261,6 @@ async function handleNewPointAdded(data: PointAddedData) {
     district_en: null,
     road_name_en: null,
     memo: null,
-  })
-
-  // 按时间戳排序，防止乱序到达导致轨迹跳线
-  points.value.sort((a, b) => {
-    const timeA = a.time ? new Date(a.time).getTime() : 0
-    const timeB = b.time ? new Date(b.time).getTime() : 0
-    return timeA - timeB
   })
 
   // 更新轨迹统计（包括结束时间）
@@ -2327,22 +2375,13 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 0 20px;
   gap: 16px;
   flex-shrink: 0;
 }
 
 .track-detail-container > .el-main {
   overflow: visible;
-}
-
-/* 下拉菜单分割线 */
-.dropdown-divider {
-  margin: 4px 0;
-  height: 1px;
-  padding: 0;
-  overflow: hidden;
-  line-height: 0;
-  background-color: var(--el-border-color-lighter);
 }
 
 /* 限制地图相关元素的 z-index */
@@ -2551,7 +2590,6 @@ onUnmounted(() => {
   padding: 40px 20px;
   gap: 12px;
   text-align: center;
-  overflow: hidden;
 }
 
 .waiting-icon {
@@ -2571,11 +2609,6 @@ onUnmounted(() => {
   font-size: 14px;
   color: #999;
   margin: 0;
-}
-
-/* 地图卡片不显示滚动条 */
-.map-card :deep(.el-card__body) {
-  overflow: hidden !important;
 }
 
 @keyframes pulse {
@@ -2688,26 +2721,13 @@ onUnmounted(() => {
 /* 区域树样式 */
 .region-tree-container {
   padding: 10px 0;
-  overflow-x: auto;
-}
-
-/* 让 el-tree 的宽度由内容决定，而不是填充父容器 */
-.region-tree-container :deep(.el-tree) {
-  display: inline-block;
-  min-width: 100%;
-}
-
-.region-tree-container :deep(.el-tree-node__content) {
-  min-width: max-content;
 }
 
 .region-tree-node {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 24px;
   width: 100%;
-  min-width: max-content;
   padding-right: 10px;
 }
 
@@ -2731,6 +2751,10 @@ onUnmounted(() => {
 
 .node-icon.icon-district {
   color: #67c23a;
+}
+
+.node-icon.icon-road {
+  color: #e6a23c;
 }
 
 .node-name {
@@ -2840,11 +2864,6 @@ onUnmounted(() => {
   color: #606266;
 }
 
-.fill-failed-count {
-  color: #f56c6c;
-  font-weight: 500;
-}
-
 .info-missing {
   color: #f56c6c;
   font-size: 12px;
@@ -2946,6 +2965,7 @@ onUnmounted(() => {
 @media (max-width: 1366px) {
   .el-header {
     flex-wrap: wrap;
+    padding: 10px;
   }
 
   .header-left {
@@ -3236,37 +3256,6 @@ onUnmounted(() => {
   }
 }
 
-/* 表单提示文本 */
-.form-hint {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-  line-height: 1.5;
-}
-
-/* 编辑对话框底部 */
-.dialog-footer-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  gap: 12px;
-}
-
-.dialog-footer-right {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.fill-geo-btn {
-  flex-shrink: 0;
-}
-
-:deep(.el-dialog__footer) {
-  padding: 12px 20px;
-}
-
 /* 实时记录详情对话框 */
 .recording-detail-content {
   display: flex;
@@ -3317,34 +3306,6 @@ onUnmounted(() => {
 
 .copy-button {
   align-self: flex-start;
-}
-
-/* 最近上传信息区域 */
-.upload-info-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: var(--el-fill-color-light);
-  border-radius: 8px;
-  margin: 12px 0;
-}
-
-.upload-info-section .info-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.upload-info-section .info-label {
-  font-size: 14px;
-  color: var(--el-text-color-regular);
-}
-
-.upload-info-section .info-value {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-primary);
 }
 
 /* 设置区域 */
