@@ -69,6 +69,7 @@ export interface PointAddedData {
     elevation: number | null
     speed: number | null
     time: string | null
+    created_at: string | null  // 服务器创建时间
   }
   stats: {
     distance: number

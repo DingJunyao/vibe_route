@@ -941,3 +941,72 @@ points.value.sort((a, b) => {
   overflow: hidden !important;
 }
 ```
+
+### 实时记录时间字段统一
+
+**问题**：系统中存在多套时间获取方式，导致在网络中断场景下显示不一致。
+
+**时间字段定义**：
+
+| 字段 | 含义 | 数据来源 | 用途 |
+|------|------|---------|------|
+| `last_upload_at` | LiveRecording 记录的上传时间 | `LiveRecording.last_upload_at` | 备用 |
+| `last_point_time` | 最近轨迹点的 GPS 时间 | `TrackPoint.time` | 对话框"轨迹点时间" |
+| `last_point_created_at` | 最近轨迹点的服务器接收时间 | `TrackPoint.created_at` | 列表卡片、对话框"最近更新"、地图"最后更新" |
+
+**核心原则**：统一使用 `created_at`（服务器接收时间）作为"最近更新"的显示依据。
+
+**后端修改**：
+
+1. [`live_recording_service.py`](backend/app/services/live_recording_service.py)：
+   - `get_last_point_time()`: 按 `created_at.desc()` 获取最新点，返回 `point.time`
+   - `get_last_point_created_at()`: 按 `created_at.desc()` 获取最新点，返回 `point.created_at`
+
+2. [`schemas/track.py`](backend/app/schemas/track.py)：
+   - `TrackResponse` 添加 `last_upload_at`、`last_point_time`、`last_point_created_at` 字段
+   - `UnifiedTrackResponse` 同样添加这三个字段
+
+3. [`schemas/live_recording.py`](backend/app/schemas/live_recording.py)：
+   - `LiveRecordingResponse` 添加 `last_point_created_at` 字段
+   - `RecordingStatusResponse` 添加 `last_point_created_at` 字段
+
+4. [`api/tracks.py`](backend/app/api/tracks.py)：
+   - `/tracks/{track_id}` API 返回 `last_point_created_at`
+
+5. [`api/live_recordings.py`](backend/app/api/live_recordings.py)：
+   - 所有返回 `LiveRecordingResponse` 的 API 都返回 `last_point_created_at`
+   - `get_recording_status` 返回 `last_point_created_at`
+
+**前端修改**：
+
+1. [`api/track.ts`](frontend/src/api/track.ts)：
+   - `Track` 接口添加 `last_point_created_at` 字段
+   - `UnifiedTrack` 接口添加 `last_point_created_at` 字段
+
+2. [`api/liveRecording.ts`](frontend/src/api/liveRecording.ts)：
+   - `LiveRecording` 接口添加 `last_point_created_at` 字段
+   - `RecordingStatus` 接口添加 `last_point_created_at` 字段
+
+3. [`views/TrackList.vue`](frontend/src/views/TrackList.vue)：
+   - 列表卡片使用 `last_point_created_at` 显示更新时间
+   - 对话框传递 `last_point_created_at` prop
+
+4. [`views/TrackDetail.vue`](frontend/src/views/TrackDetail.vue)：
+   - 地图使用 `last_point_created_at` 显示"最后更新"
+   - WebSocket 更新时分别更新 `last_point_time`（GPS 时间）和 `last_point_created_at`（服务器时间）
+   - 对话框传递 `last_point_created_at` prop
+
+5. [`components/LiveRecordingDialog.vue`](frontend/src/components/LiveRecordingDialog.vue)：
+   - 添加 `lastPointCreatedAt` prop
+   - 对话框显示"最近更新"（使用 `lastPointCreatedAt`）和"轨迹点时间"（使用 `lastPointTime`）
+   - 停止确认对话框同样使用这两个字段
+
+**显示位置对应关系**：
+
+| 位置 | 显示内容 | 使用字段 |
+|------|---------|---------|
+| 轨迹列表卡片更新时间 | "3 秒前更新" | `last_point_created_at` |
+| 轨迹详情地图右上角 | "3 秒前更新" | `last_point_created_at` |
+| 配置对话框"最近更新" | "2025-01-01 11:12:13（12 分钟前）" | `last_point_created_at` |
+| 配置对话框"轨迹点时间" | GPS 时间 | `last_point_time` |
+| 停止确认对话框 | 同配置对话框 | 同配置对话框 |

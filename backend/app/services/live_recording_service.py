@@ -315,10 +315,10 @@ class LiveRecordingService:
         last_point = last_point_result.scalar_one_or_none()
 
         # 计算点索引
-        # 注意：实时记录中，point_index 仅作为标识符，不代表时间顺序
-        # 使用当前最大 point_index + 1，避免索引冲突
-        max_index_result = await db.execute(
-            select(func.max(TrackPoint.point_index))
+        # 使用行数来分配索引，避免并发问题
+        # 在 SQLite 中，COUNT(*) 查询比 MAX() 更可靠
+        count_result = await db.execute(
+            select(func.count(TrackPoint.id))
             .where(
                 and_(
                     TrackPoint.track_id == track.id,
@@ -326,8 +326,24 @@ class LiveRecordingService:
                 )
             )
         )
-        max_index = max_index_result.scalar() or -1
-        point_index = max_index + 1
+        point_count = count_result.scalar() or 0
+        point_index = point_count
+
+        # 双重检查：确保 point_index 不与现有冲突
+        # 如果并发导致冲突，则使用 max + 1
+        max_index_result = await db.execute(
+            select(func.max(TrackPoint.point_index))
+            .where(
+                and_(
+                    TrackPoint.track_id == track.id,
+                    TrackPoint.is_valid == True,
+                    TrackPoint.point_index >= point_index
+                )
+            )
+        )
+        existing_max = max_index_result.scalar()
+        if existing_max is not None and existing_max >= point_index:
+            point_index = existing_max + 1
 
         # 计算方位角、速度和距离
         calculated_bearing = bearing
@@ -466,9 +482,26 @@ class LiveRecordingService:
                 "point_index": point.point_index,
                 "latitude": point.latitude_wgs84,
                 "longitude": point.longitude_wgs84,
+                "latitude_wgs84": point.latitude_wgs84,
+                "longitude_wgs84": point.longitude_wgs84,
+                "latitude_gcj02": point.latitude_gcj02,
+                "longitude_gcj02": point.longitude_gcj02,
+                "latitude_bd09": point.latitude_bd09,
+                "longitude_bd09": point.longitude_bd09,
                 "elevation": point.elevation,
                 "speed": point.speed,
                 "time": time_str,
+                "created_at": point.created_at.isoformat() + "+00:00",
+                # 地理信息
+                "province": point.province,
+                "city": point.city,
+                "district": point.district,
+                "road_name": point.road_name,
+                "road_number": point.road_number,
+                "province_en": point.province_en,
+                "city_en": point.city_en,
+                "district_en": point.district_en,
+                "road_name_en": point.road_name_en,
             }
             # 准备统计信息
             stats_data = {
@@ -654,19 +687,19 @@ class LiveRecordingService:
 
     async def get_last_point_time(self, db: AsyncSession, recording: LiveRecording) -> Optional[datetime]:
         """
-        获取记录中最近一次上传的轨迹点的时间
+        获取记录中最近一次上传的轨迹点的 GPS 时间
 
         Args:
             db: 数据库会话
             recording: 记录对象
 
         Returns:
-            最近一次轨迹点的时间，如果没有点则返回 None
+            最近一次轨迹点的 GPS 时间（time 字段），如果没有点则返回 None
         """
         if not recording.current_track_id:
             return None
 
-        # 获取当前轨迹的最后一个点（按时间排序）
+        # 直接按 created_at 降序获取最新的点
         last_point_result = await db.execute(
             select(TrackPoint)
             .where(
@@ -675,12 +708,42 @@ class LiveRecordingService:
                     TrackPoint.is_valid == True
                 )
             )
-            .order_by(TrackPoint.time.desc(), TrackPoint.created_at.desc())
+            .order_by(TrackPoint.created_at.desc())
             .limit(1)
         )
         last_point = last_point_result.scalar_one_or_none()
 
         return last_point.time if last_point else None
+
+    async def get_last_point_created_at(self, db: AsyncSession, recording: LiveRecording) -> Optional[datetime]:
+        """
+        获取记录中最近一次上传的轨迹点的服务器接收时间
+
+        Args:
+            db: 数据库会话
+            recording: 记录对象
+
+        Returns:
+            最近一次轨迹点的服务器接收时间（created_at 字段），如果没有点则返回 None
+        """
+        if not recording.current_track_id:
+            return None
+
+        # 直接按 created_at 降序获取最新的点
+        last_point_result = await db.execute(
+            select(TrackPoint)
+            .where(
+                and_(
+                    TrackPoint.track_id == recording.current_track_id,
+                    TrackPoint.is_valid == True
+                )
+            )
+            .order_by(TrackPoint.created_at.desc())
+            .limit(1)
+        )
+        last_point = last_point_result.scalar_one_or_none()
+
+        return last_point.created_at if last_point else None
 
 
 live_recording_service = LiveRecordingService()

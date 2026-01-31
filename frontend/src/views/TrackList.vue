@@ -116,7 +116,7 @@
                     等待上传点
                   </el-tag>
                   <el-tag v-else-if="row.is_live_recording && row.live_recording_status === 'active'" type="success" size="small">
-                    {{ (row.last_upload_at || row.last_point_time) ? `实时记录中 · ${formatTimeShortWithRefresh(row.last_point_time || row.last_upload_at)}` : '实时轨迹记录中' }}
+                    {{ (row.last_upload_at || row.last_point_created_at) ? `实时记录中 · ${formatTimeShortWithRefresh(row.last_point_created_at || row.last_upload_at)}` : '实时轨迹记录中' }}
                   </el-tag>
                 </div>
               </template>
@@ -209,7 +209,7 @@
                   等待上传点
                 </el-tag>
                 <el-tag v-else-if="row.is_live_recording && row.live_recording_status === 'active'" type="success" size="small">
-                  {{ (row.last_upload_at || row.last_point_time) ? `实时记录中 · ${formatTimeShortWithRefresh(row.last_point_time || row.last_upload_at)}` : '实时轨迹记录中' }}
+                  {{ (row.last_upload_at || row.last_point_created_at) ? `实时记录中 · ${formatTimeShortWithRefresh(row.last_point_created_at || row.last_upload_at)}` : '实时轨迹记录中' }}
                 </el-tag>
                 <div class="track-time">{{ formatDateTime(row.start_time || row.created_at) }}</div>
               </div>
@@ -301,6 +301,7 @@
       :fill-geocoding="currentRecordingFillGeocoding || false"
       :last-upload-at="currentRecordingLastUploadAt"
       :last-point-time="currentRecordingLastPointTime"
+      :last-point-created-at="currentRecordingLastPointCreatedAt"
       @ended="loadTracks"
       @fill-geocoding-changed="handleFillGeocodingChanged"
     />
@@ -423,6 +424,7 @@ const currentRecordingStatus = ref<'active' | 'ended' | null>(null)
 const currentRecordingFillGeocoding = ref<boolean>(false)
 const currentRecordingLastUploadAt = ref<string | null>(null)
 const currentRecordingLastPointTime = ref<string | null>(null)
+const currentRecordingLastPointCreatedAt = ref<string | null>(null)
 
 // 创建实时记录对话框
 const createRecordingDialogVisible = ref(false)
@@ -716,6 +718,7 @@ async function showRecordingDetail(track: UnifiedTrack) {
     currentRecordingFillGeocoding.value = currentRecordingData?.fill_geocoding || track.fill_geocoding || false
     currentRecordingLastUploadAt.value = currentRecordingData?.last_upload_at || null
     currentRecordingLastPointTime.value = currentRecordingData?.last_point_time || null
+    currentRecordingLastPointCreatedAt.value = currentRecordingData?.last_point_created_at || null
     recordingDetailVisible.value = true
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')

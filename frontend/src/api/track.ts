@@ -23,6 +23,10 @@ export interface Track {
   live_recording_id: number | null
   live_recording_status: 'active' | 'ended' | null
   live_recording_token: string | null
+  fill_geocoding: boolean
+  last_upload_at: string | null  // 最近一次上传的时间
+  last_point_time: string | null  // 最近一次轨迹点的 GPS 时间
+  last_point_created_at: string | null  // 最近一次轨迹点的服务器接收时间
 }
 
 // 统一轨迹类型（包含实时记录）
@@ -50,13 +54,15 @@ export interface UnifiedTrack {
   live_recording_token: string | null
   fill_geocoding: boolean
   last_upload_at: string | null  // 最近一次上传的时间
-  last_point_time: string | null  // 最近一次上传的轨迹点的时间
+  last_point_time: string | null  // 最近一次轨迹点的 GPS 时间
+  last_point_created_at: string | null  // 最近一次轨迹点的服务器接收时间
 }
 
 export interface TrackPoint {
   id: number
   point_index: number
   time: string | null
+  created_at: string | null  // 服务器创建时间
   latitude: number
   longitude: number
   latitude_wgs84: number

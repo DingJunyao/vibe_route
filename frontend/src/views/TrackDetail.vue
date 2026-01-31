@@ -217,6 +217,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :live-update-time="track.last_point_created_at || track.last_upload_at"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -429,6 +430,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :live-update-time="track.last_point_created_at || track.last_upload_at"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -787,66 +789,19 @@
     </el-dialog>
 
     <!-- 实时记录配置对话框 -->
-    <el-dialog v-model="recordingDetailVisible" title="实时记录配置" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <div v-if="recordingDetail" class="recording-detail-content">
-        <!-- 记录状态 -->
-        <div class="recording-status">
-          <div class="status-item">
-            <span class="status-label">记录名称：</span>
-            <span class="status-value">{{ recordingDetail.name }}</span>
-          </div>
-          <div class="status-item">
-            <span class="status-label">状态：</span>
-            <el-tag v-if="recordingDetail.live_recording_status === 'active'" type="success" size="small">
-              正在记录
-            </el-tag>
-            <el-tag v-else type="info" size="small">已结束</el-tag>
-          </div>
-        </div>
-
-        <!-- 填充地理信息开关 -->
-        <div class="setting-section">
-          <div class="setting-item">
-            <span class="setting-label">上传时自动填充地理信息</span>
-            <el-switch
-              v-model="recordingDetail.fill_geocoding"
-              @change="updateRecordingFillGeocoding"
-              :disabled="recordingDetail.live_recording_status !== 'active'"
-            />
-          </div>
-          <div class="setting-tip">
-            开启后，上传轨迹点时会自动获取省市区、道路名称等地理信息
-          </div>
-        </div>
-
-        <!-- GPS Logger URL -->
-        <div class="url-section">
-          <div class="url-label">GPS Logger URL：</div>
-          <el-input :model-value="recordingDetail.gpsLoggerUrl" readonly type="textarea" :rows="4" class="url-textarea" />
-          <el-button @click="copyRecordingUrl" :icon="DocumentCopy" type="primary" class="copy-button">
-            {{ recordingDetailCopyButtonText }}
-          </el-button>
-        </div>
-
-        <!-- 二维码 -->
-        <div class="qrcode-container" v-if="recordingDetail.qrCode">
-          <div class="qrcode" v-html="recordingDetail.qrCode"></div>
-          <p class="qrcode-tip">扫描二维码查看配置说明</p>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="recordingDetailVisible = false">关闭</el-button>
-        <el-button
-          v-if="recordingDetail?.live_recording_status === 'active'"
-          type="danger"
-          @click="confirmEndRecording"
-        >
-          <el-icon><VideoPause /></el-icon>
-          结束记录
-        </el-button>
-      </template>
-    </el-dialog>
+    <LiveRecordingDialog
+      v-model:visible="recordingDetailVisible"
+      :recording-id="currentRecordingId || 0"
+      :token="currentRecordingToken || ''"
+      :name="currentRecordingName || ''"
+      :status="currentRecordingStatus || 'ended'"
+      :fill-geocoding="currentRecordingFillGeocoding || false"
+      :last-upload-at="currentRecordingLastUploadAt"
+      :last-point-time="currentRecordingLastPointTime"
+      :last-point-created-at="currentRecordingLastPointCreatedAt"
+      @ended="handleRecordingEnded"
+      @fill-geocoding-changed="handleFillGeocodingChanged"
+    />
   </div>
 </template>
 
@@ -874,22 +829,20 @@ import {
   SwitchButton,
   LocationFilled,
   Close,
-  Link,
-  DocumentCopy,
-  VideoPause,
   Loading,
+  Link,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
 import UniversalMap from '@/components/map/UniversalMap.vue'
-import QRCode from 'qrcode'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
+import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -963,18 +916,16 @@ const loadingSigns = ref<Set<string>>(new Set())
 // 强制更新树组件的 key（当 SVG 加载完成后）
 const treeForceUpdateKey = ref(0)
 
-// 实时记录详情相关
+// 实时记录详情相关（使用 LiveRecordingDialog 组件）
 const recordingDetailVisible = ref(false)
-const recordingDetail = ref<{
-  name: string
-  live_recording_status: 'active' | 'ended'
-  live_recording_id: number
-  live_recording_token: string
-  gpsLoggerUrl: string
-  qrCode: string
-  fill_geocoding: boolean
-} | null>(null)
-const recordingDetailCopyButtonText = ref('复制')
+const currentRecordingId = ref<number | null>(null)
+const currentRecordingToken = ref<string | null>(null)
+const currentRecordingName = ref<string | null>(null)
+const currentRecordingStatus = ref<'active' | 'ended' | null>(null)
+const currentRecordingFillGeocoding = ref<boolean>(false)
+const currentRecordingLastUploadAt = ref<string | null>(null)
+const currentRecordingLastPointTime = ref<string | null>(null)
+const currentRecordingLastPointCreatedAt = ref<string | null>(null)
 
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
@@ -1737,10 +1688,10 @@ function showDownloadDialog() {
 
 // 显示实时记录详情对话框
 async function showRecordingDetail() {
-  if (!track.value?.live_recording_id) return
+  if (!track.value?.live_recording_id || !track.value?.live_recording_token) return
 
   try {
-    // 从后端获取最新的实时记录数据（包含 fill_geocoding）
+    // 从后端获取最新的实时记录数据（包含 fill_geocoding 和最新上传时间）
     const recording = await liveRecordingApi.getList('active')
     const currentRecording = recording.find(r => r.id === track.value?.live_recording_id)
 
@@ -1749,91 +1700,30 @@ async function showRecordingDetail() {
       return
     }
 
-    const gpsLoggerUrl = liveRecordingApi.getGpsLoggerUrl(currentRecording.token)
-
-    // 生成二维码
-    const qrCode = await QRCode.toString(gpsLoggerUrl, {
-      width: 200,
-      margin: 2,
-      type: 'svg',
-    })
-
-    recordingDetail.value = {
-      name: track.value.name,
-      live_recording_status: currentRecording.status,
-      live_recording_id: currentRecording.id,
-      live_recording_token: currentRecording.token,
-      gpsLoggerUrl,
-      qrCode,
-      fill_geocoding: currentRecording.fill_geocoding || false,
-    }
+    currentRecordingId.value = track.value.live_recording_id
+    currentRecordingToken.value = track.value.live_recording_token
+    currentRecordingName.value = track.value.name
+    currentRecordingStatus.value = track.value.live_recording_status
+    currentRecordingFillGeocoding.value = currentRecording.fill_geocoding || track.value.fill_geocoding || false
+    currentRecordingLastUploadAt.value = currentRecording.last_upload_at || null
+    currentRecordingLastPointTime.value = currentRecording.last_point_time || null
+    currentRecordingLastPointCreatedAt.value = track.value.last_point_created_at || null
     recordingDetailVisible.value = true
   } catch (error) {
     ElMessage.error('获取实时记录信息失败')
   }
 }
 
-// 复制实时记录 URL
-function copyRecordingUrl() {
-  if (!recordingDetail.value) return
-  const url = recordingDetail.value.gpsLoggerUrl
-
-  // 检查剪贴板 API 是否可用
-  if (!navigator.clipboard) {
-    const textarea = document.createElement('textarea')
-    textarea.value = url
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    document.body.appendChild(textarea)
-    textarea.select()
-
-    try {
-      const successful = document.execCommand('copy')
-      document.body.removeChild(textarea)
-      if (successful) {
-        recordingDetailCopyButtonText.value = '已复制'
-        ElMessage.success('URL 已复制到剪贴板')
-        setTimeout(() => {
-          recordingDetailCopyButtonText.value = '复制'
-        }, 2000)
-      } else {
-        ElMessage.error('复制失败，请手动选择复制')
-      }
-    } catch (err) {
-      document.body.removeChild(textarea)
-      ElMessage.error('复制失败，请手动选择复制')
-      console.error('复制失败:', err)
-    }
-    return
-  }
-
-  navigator.clipboard.writeText(url).then(() => {
-    recordingDetailCopyButtonText.value = '已复制'
-    ElMessage.success('URL 已复制到剪贴板')
-    setTimeout(() => {
-      recordingDetailCopyButtonText.value = '复制'
-    }, 2000)
-  }).catch((err) => {
-    const isSecureContext = window.isSecureContext
-    if (!isSecureContext) {
-      ElMessage.warning('剪贴板 API 需要 HTTPS 环境，请手动选择复制')
-    } else {
-      ElMessage.error('复制失败，请手动复制')
-    }
-    console.error('复制失败:', err)
-  })
-}
-
 // 更新填充地理信息设置
 async function updateRecordingFillGeocoding(value: boolean) {
-  if (!recordingDetail.value?.live_recording_id) return
+  if (!currentRecordingId.value) return
 
-  const originalValue = recordingDetail.value.fill_geocoding
+  const originalValue = currentRecordingFillGeocoding.value
 
   try {
-    await liveRecordingApi.updateFillGeocoding(recordingDetail.value.live_recording_id, value)
+    await liveRecordingApi.updateFillGeocoding(currentRecordingId.value, value)
     // 成功后更新本地状态
-    recordingDetail.value.fill_geocoding = value
+    currentRecordingFillGeocoding.value = value
     // 同时更新 track 的 fill_geocoding 值（如果存在）
     if (track.value) {
       track.value.fill_geocoding = value
@@ -1841,34 +1731,25 @@ async function updateRecordingFillGeocoding(value: boolean) {
     ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
   } catch (error) {
     // 失败时恢复到原来的值
-    recordingDetail.value.fill_geocoding = originalValue
+    currentRecordingFillGeocoding.value = originalValue
     console.error('更新填充地理信息设置失败:', error)
   }
 }
 
-// 结束实时记录（带二次确认）
-async function confirmEndRecording() {
-  if (!recordingDetail.value) return
-
-  try {
-    await ElMessageBox.confirm(
-      `确定要结束实时记录"${recordingDetail.value.name}"吗？结束后将无法继续上传轨迹点。`,
-      '确认结束记录',
-      {
-        confirmButtonText: '确定结束',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    )
-
-    await liveRecordingApi.end(recordingDetail.value.live_recording_id)
-    ElMessage.success('记录已结束')
-    recordingDetailVisible.value = false
-    // 重新加载轨迹数据
-    await fetchTrackDetail()
-  } catch (error) {
-    // 用户取消或错误已在拦截器中处理
+// 处理填充地理信息变更（由 LiveRecordingDialog 触发）
+function handleFillGeocodingChanged(value: boolean) {
+  currentRecordingFillGeocoding.value = value
+  // 同时更新 track 的 fill_geocoding 值
+  if (track.value) {
+    track.value.fill_geocoding = value
   }
+}
+
+// 处理记录结束事件
+function handleRecordingEnded() {
+  recordingDetailVisible.value = false
+  // 重新加载轨迹数据
+  fetchTrackDetail()
 }
 
 // 显示编辑对话框
@@ -2240,27 +2121,35 @@ async function handleNewPointAdded(data: PointAddedData) {
     id: point.id,
     point_index: point.point_index,
     time: point.time,
-    latitude: point.latitude,
-    longitude: point.longitude,
-    latitude_wgs84: point.latitude,
-    longitude_wgs84: point.longitude,
-    latitude_gcj02: null,
-    longitude_gcj02: null,
-    latitude_bd09: null,
-    longitude_bd09: null,
+    created_at: point.created_at || null,
+    latitude: point.latitude_wgs84 || point.latitude,
+    longitude: point.longitude_wgs84 || point.longitude,
+    latitude_wgs84: point.latitude_wgs84 ?? point.latitude ?? null,
+    longitude_wgs84: point.longitude_wgs84 ?? point.longitude ?? null,
+    latitude_gcj02: point.latitude_gcj02 ?? null,
+    longitude_gcj02: point.longitude_gcj02 ?? null,
+    latitude_bd09: point.latitude_bd09 ?? null,
+    longitude_bd09: point.longitude_bd09 ?? null,
     elevation: point.elevation,
     speed: point.speed,
     bearing: null,
-    province: null,
-    city: null,
-    district: null,
-    road_name: null,
-    road_number: null,
-    province_en: null,
-    city_en: null,
-    district_en: null,
-    road_name_en: null,
-    memo: null,
+    province: point.province || null,
+    city: point.city || null,
+    district: point.district || null,
+    road_name: point.road_name || null,
+    road_number: point.road_number || null,
+    province_en: point.province_en || null,
+    city_en: point.city_en || null,
+    district_en: point.district_en || null,
+    road_name_en: point.road_name_en || null,
+    memo: point.memo || null,
+  })
+
+  // 按时间戳排序（防止乱序）
+  points.value.sort((a, b) => {
+    const timeA = a.time ? new Date(a.time).getTime() : 0
+    const timeB = b.time ? new Date(b.time).getTime() : 0
+    return timeA - timeB
   })
 
   // 更新轨迹统计（包括结束时间）
@@ -2271,6 +2160,10 @@ async function handleNewPointAdded(data: PointAddedData) {
     track.value.elevation_loss = stats.elevation_loss
     // 更新结束时间为最新点的时间
     track.value.end_time = point.time
+    // 更新最后轨迹点时间（用于记录配置对话框显示 GPS 时间）
+    track.value.last_point_time = point.time
+    // 更新最后轨迹点服务器接收时间（用于地图显示）
+    track.value.last_point_created_at = point.created_at || point.time
     // 如果开始时间为空（第一个点），设置为当前点的时间
     if (!track.value.start_time && point.time) {
       track.value.start_time = point.time

@@ -45,6 +45,7 @@ async def create_recording(
 
     # 获取最近一次轨迹点的时间
     last_point_time = await live_recording_service.get_last_point_time(db, recording)
+    last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
 
     return LiveRecordingResponse(
         id=recording.id,
@@ -55,6 +56,7 @@ async def create_recording(
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
         last_point_time=last_point_time,
+        last_point_created_at=last_point_created_at,
         upload_url=upload_url,
         created_at=recording.created_at,
         fill_geocoding=recording.fill_geocoding,
@@ -82,6 +84,7 @@ async def get_recordings(
         upload_url = f"/live-upload?token={recording.token}"
         # 获取最近一次轨迹点的时间
         last_point_time = await live_recording_service.get_last_point_time(db, recording)
+        last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
         result.append(LiveRecordingResponse(
             id=recording.id,
             name=recording.name,
@@ -91,6 +94,7 @@ async def get_recordings(
             track_count=recording.track_count,
             last_upload_at=recording.last_upload_at,
             last_point_time=last_point_time,
+            last_point_created_at=last_point_created_at,
             upload_url=upload_url,
             created_at=recording.created_at,
             fill_geocoding=recording.fill_geocoding,
@@ -135,6 +139,7 @@ async def end_recording(
 
     # 获取最近一次轨迹点的时间
     last_point_time = await live_recording_service.get_last_point_time(db, recording)
+    last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
 
     upload_url = f"/live-upload?token={recording.token}"
     return LiveRecordingResponse(
@@ -146,6 +151,7 @@ async def end_recording(
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
         last_point_time=last_point_time,
+        last_point_created_at=last_point_created_at,
         upload_url=upload_url,
         created_at=recording.created_at,
         fill_geocoding=recording.fill_geocoding,
@@ -239,29 +245,31 @@ async def get_recording_status(
             detail="记录不存在",
         )
 
-    # 获取关联的轨迹列表
-    tracks, _ = await track_service.get_list(
-        db,
-        current_user.id,
-        skip=0,
-        limit=100,
-    )
-
-    # 筛选与本次记录相关的轨迹（通过创建时间判断）
-    # 由于记录开始后上传的轨迹都会关联，我们可以简单地返回所有在记录创建之后的轨迹
     related_tracks = []
-    for track in tracks:
-        if track.created_at >= recording.created_at:
+
+    # 如果有关联的当前轨迹，获取其统计数据
+    if recording.current_track_id:
+        from sqlalchemy import select
+        from app.models.track import Track
+        track_result = await db.execute(
+            select(Track).where(
+                Track.id == recording.current_track_id,
+                Track.is_valid == True
+            )
+        )
+        current_track = track_result.scalar_one_or_none()
+        if current_track:
             related_tracks.append({
-                "id": track.id,
-                "name": track.name,
-                "distance": track.distance,
-                "duration": track.duration,
-                "created_at": track.created_at.isoformat() + "+00:00",
+                "id": current_track.id,
+                "name": current_track.name,
+                "distance": current_track.distance or 0,
+                "duration": current_track.duration or 0,
+                "created_at": current_track.created_at.isoformat() + "+00:00",
             })
 
     # 获取最近一次轨迹点的时间
     last_point_time = await live_recording_service.get_last_point_time(db, recording)
+    last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
 
     return RecordingStatusResponse(
         id=recording.id,
@@ -271,6 +279,7 @@ async def get_recording_status(
         track_count=recording.track_count,
         last_upload_at=recording.last_upload_at,
         last_point_time=last_point_time,
+        last_point_created_at=last_point_created_at,
         created_at=recording.created_at,
         tracks=related_tracks,
     )

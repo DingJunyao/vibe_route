@@ -866,11 +866,13 @@ class TrackService:
         for track in all_tracks:
             recording = recording_map.get(track.id)
 
-            # 获取 last_point_time（如果有实时记录）
+            # 获取 last_point_time 和 last_point_created_at（如果有实时记录）
             last_point_time = None
+            last_point_created_at = None
             if recording:
                 from app.services.live_recording_service import live_recording_service
                 last_point_time = await live_recording_service.get_last_point_time(db, recording)
+                last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
 
             item = {
                 'id': track.id,
@@ -897,6 +899,7 @@ class TrackService:
                 'fill_geocoding': recording.fill_geocoding if recording else False,
                 'last_upload_at': recording.last_upload_at if recording else None,
                 'last_point_time': last_point_time,
+                'last_point_created_at': last_point_created_at,
             }
 
             if recording:
@@ -934,6 +937,7 @@ class TrackService:
                     'fill_geocoding': recording.fill_geocoding or False,
                     'last_upload_at': recording.last_upload_at,
                     'last_point_time': None,  # 没有关联轨迹，无法获取轨迹点时间
+                    'last_point_created_at': None,  # 没有关联轨迹，无法获取轨迹点时间
                 })
 
         # 合并：正在记录的轨迹在前，普通轨迹在后

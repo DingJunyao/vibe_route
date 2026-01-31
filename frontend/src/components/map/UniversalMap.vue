@@ -52,14 +52,14 @@
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
-      <!-- 实时更新状态按钮 -->
+      <!-- 实时更新时间标识 -->
       <el-button
-        v-if="liveStatusText"
+        v-if="formattedLiveUpdateTime"
         type="success"
         size="small"
-        class="live-status-btn"
+        class="live-update-time-btn"
       >
-        {{ liveStatusText }}
+        {{ formattedLiveUpdateTime }}
       </el-button>
       <!-- 清除高亮按钮 -->
       <el-button-group v-if="highlightSegment" size="small" class="clear-highlight-btn">
@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { Close, FullScreen } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
@@ -123,6 +123,7 @@ import AMap from './AMap.vue'
 import BMap from './BMap.vue'
 import TencentMap from './TencentMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
+import { formatTimeShort } from '@/utils/relativeTime'
 
 interface Point {
   latitude?: number
@@ -154,7 +155,8 @@ interface Props {
   highlightSegment?: { start: number; end: number } | null
   defaultLayerId?: string
   mode?: 'home' | 'detail'
-  liveStatusText?: string  // 实时更新状态文字
+  liveStatusText?: string  // 实时更新状态文字（已废弃，使用 liveUpdateTime）
+  liveUpdateTime?: string | null  // 实时更新时间
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -164,6 +166,7 @@ const props = withDefaults(defineProps<Props>(), {
   defaultLayerId: undefined,
   mode: 'detail',
   liveStatusText: '',
+  liveUpdateTime: null,
 })
 
 // 定义 emit 事件
@@ -179,6 +182,19 @@ const amapRef = ref()
 const bmapRef = ref()
 const tencentRef = ref()
 const leafletRef = ref()
+
+// 实时更新时间刷新
+const timeRefreshKey = ref(0)
+const UPDATE_INTERVAL = 1000 // 1 秒刷新一次
+let updateTimer: number | null = null
+
+// 格式化实时更新时间
+const formattedLiveUpdateTime = computed(() => {
+  // 依赖 timeRefreshKey 以触发刷新
+  void timeRefreshKey.value
+  if (!props.liveUpdateTime) return ''
+  return formatTimeShort(props.liveUpdateTime)
+})
 
 // 当前选择的地图层 ID
 const currentLayerId = ref<string>('')
@@ -315,6 +331,21 @@ onMounted(async () => {
   }
   // 初始化当前图层
   currentLayerId.value = props.defaultLayerId || configStore.getMapProvider()
+
+  // 启动时间刷新定时器
+  if (props.liveUpdateTime) {
+    updateTimer = window.setInterval(() => {
+      timeRefreshKey.value++
+    }, UPDATE_INTERVAL)
+  }
+})
+
+onUnmounted(() => {
+  // 清理定时器
+  if (updateTimer) {
+    clearInterval(updateTimer)
+    updateTimer = null
+  }
 })
 
 // 监听 currentLayerId 变化
@@ -326,6 +357,21 @@ watch(currentLayerId, () => {
 watch(() => props.defaultLayerId, (newVal) => {
   if (newVal) {
     currentLayerId.value = newVal
+  }
+})
+
+// 监听 liveUpdateTime 变化，启动或停止定时器
+watch(() => props.liveUpdateTime, (newVal) => {
+  // 清理旧定时器
+  if (updateTimer) {
+    clearInterval(updateTimer)
+    updateTimer = null
+  }
+  // 如果有新的时间，启动定时器
+  if (newVal) {
+    updateTimer = window.setInterval(() => {
+      timeRefreshKey.value++
+    }, UPDATE_INTERVAL)
   }
 })
 
@@ -364,7 +410,7 @@ defineExpose({
   width: 100px;
 }
 
-.live-status-btn {
+.live-update-time-btn {
   background-color: #67c23a;
   color: white;
   border: none;

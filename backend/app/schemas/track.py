@@ -34,17 +34,17 @@ class TrackResponse(BaseModel):
     id: int
     user_id: int
     name: str
-    description: Optional[str]
-    original_filename: str
-    original_crs: str
-    distance: float
-    duration: int
-    elevation_gain: float
-    elevation_loss: float
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
-    has_area_info: bool
-    has_road_info: bool
+    description: Optional[str] = None
+    original_filename: str = ''
+    original_crs: str = 'wgs84'
+    distance: float = 0
+    duration: int = 0
+    elevation_gain: float = 0
+    elevation_loss: float = 0
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    has_area_info: bool = False
+    has_road_info: bool = False
     created_at: datetime
     updated_at: datetime
     # 实时记录相关字段
@@ -53,8 +53,11 @@ class TrackResponse(BaseModel):
     live_recording_status: Optional[str] = None  # active, ended
     live_recording_token: Optional[str] = None
     fill_geocoding: bool = False
+    last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
+    last_point_time: Optional[datetime] = Field(None, description="最近一次轨迹点的 GPS 时间")
+    last_point_created_at: Optional[datetime] = Field(None, description="最近一次轨迹点的服务器接收时间")
 
-    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at')
+    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time', 'last_point_created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
         """序列化 datetime 为带时区的 ISO 格式字符串"""
         if dt is None:
@@ -99,9 +102,10 @@ class UnifiedTrackResponse(BaseModel):
     live_recording_token: Optional[str] = None
     fill_geocoding: bool = False
     last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
-    last_point_time: Optional[datetime] = Field(None, description="最近一次上传的轨迹点的时间")
+    last_point_time: Optional[datetime] = Field(None, description="最近一次轨迹点的 GPS 时间")
+    last_point_created_at: Optional[datetime] = Field(None, description="最近一次轨迹点的服务器接收时间")
 
-    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time')
+    @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time', 'last_point_created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
         """序列化 datetime 为带时区的 ISO 格式字符串"""
         if dt is None:

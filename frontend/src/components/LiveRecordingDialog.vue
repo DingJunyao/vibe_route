@@ -16,6 +16,7 @@ interface Props {
   fillGeocoding: boolean
   lastUploadAt: string | null
   lastPointTime: string | null
+  lastPointCreatedAt: string | null
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -23,6 +24,7 @@ const props = withDefaults(defineProps<Props>(), {
   fillGeocoding: false,
   lastUploadAt: null,
   lastPointTime: null,
+  lastPointCreatedAt: null,
 })
 
 // Emits
@@ -192,10 +194,10 @@ async function confirmEndRecording() {
   try {
     // 构建确认消息，包含最近上传信息
     let confirmMessage = `确定要结束实时记录"${props.name}"吗？`
-    if (props.lastUploadAt || props.lastPointTime) {
+    if (props.lastPointCreatedAt || props.lastUploadAt || props.lastPointTime) {
       confirmMessage += '<p style="margin-top: 12px;">最近上传信息：</p>'
-      if (props.lastUploadAt) {
-        confirmMessage += `<p style="margin: 4px 0;">最近上传：${formatTimeWithRelative(props.lastUploadAt)}</p>`
+      if (props.lastPointCreatedAt || props.lastUploadAt) {
+        confirmMessage += `<p style="margin: 4px 0;">最近更新：${formatTimeWithRelative(props.lastPointCreatedAt || props.lastUploadAt)}</p>`
       }
       if (props.lastPointTime) {
         confirmMessage += `<p style="margin: 4px 0;">轨迹点时间：${formatTimeWithRelative(props.lastPointTime)}</p>`
@@ -242,8 +244,8 @@ onUnmounted(() => {
       <!-- 最近上传信息 -->
       <div class="upload-info-section">
         <div class="info-item">
-          <span class="info-label">最近上传：</span>
-          <span class="info-value">{{ formatTimeWithRelativeDialog(lastUploadAt) }}</span>
+          <span class="info-label">最近更新：</span>
+          <span class="info-value">{{ formatTimeWithRelativeDialog(lastPointCreatedAt || lastUploadAt) }}</span>
         </div>
         <div class="info-item">
           <span class="info-label">轨迹点时间：</span>

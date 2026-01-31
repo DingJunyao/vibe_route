@@ -328,6 +328,14 @@ async def get_track(
                 recording = rec
                 break
 
+    # 获取实时记录的时间信息
+    last_point_time = None
+    last_point_created_at = None
+    if recording:
+        from app.services.live_recording_service import live_recording_service
+        last_point_time = await live_recording_service.get_last_point_time(db, recording)
+        last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
+
     # 构建响应
     response_data = {
         "id": track.id,
@@ -352,6 +360,9 @@ async def get_track(
         "live_recording_status": recording.status if recording else None,
         "live_recording_token": recording.token if recording else None,
         "fill_geocoding": recording.fill_geocoding if recording else False,
+        "last_upload_at": recording.last_upload_at if recording else None,
+        "last_point_time": last_point_time,
+        "last_point_created_at": last_point_created_at,
     }
 
     return TrackResponse.model_validate(response_data)
