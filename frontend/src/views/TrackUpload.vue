@@ -86,9 +86,9 @@
           <!-- 原始坐标系 -->
           <el-form-item label="原始坐标系" prop="original_crs">
             <el-radio-group v-model="form.original_crs">
-              <el-radio value="wgs84">WGS84 (GPS 原始坐标)</el-radio>
-              <el-radio value="gcj02">GCJ02 (国测局坐标)</el-radio>
-              <el-radio value="bd09">BD09 (百度坐标)</el-radio>
+              <el-radio value="wgs84">WGS84</el-radio>
+              <el-radio value="gcj02">GCJ02</el-radio>
+              <el-radio value="bd09">BD09</el-radio>
             </el-radio-group>
             <div class="form-tip">
               如果不确定，请选择 WGS84（大多数 GPS 设备的默认坐标系）

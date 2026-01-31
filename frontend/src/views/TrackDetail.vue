@@ -667,9 +667,9 @@
 
         <el-form-item label="原坐标系">
           <el-radio-group v-model="editForm.original_crs">
-            <el-radio value="wgs84">WGS84 (GPS 原始)</el-radio>
-            <el-radio value="gcj02">GCJ02 (国测局)</el-radio>
-            <el-radio value="bd09">BD09 (百度)</el-radio>
+            <el-radio value="wgs84">WGS84</el-radio>
+            <el-radio value="gcj02">GCJ02</el-radio>
+            <el-radio value="bd09">BD09</el-radio>
           </el-radio-group>
           <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
         </el-form-item>
@@ -701,17 +701,17 @@
         <el-form-item label="文件格式">
           <el-radio-group v-model="exportFormat">
             <el-radio value="gpx">GPX</el-radio>
-            <el-radio value="kml">KML (两步路)</el-radio>
-            <el-radio value="csv">CSV (Excel)</el-radio>
-            <el-radio value="xlsx">XLSX (Excel)</el-radio>
+            <el-radio value="kml">KML</el-radio>
+            <el-radio value="csv">CSV</el-radio>
+            <el-radio value="xlsx">XLSX</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="坐标系" v-if="exportFormat === 'gpx' || exportFormat === 'kml'">
           <el-radio-group v-model="exportCRS">
             <el-radio value="original">原始 ({{ track?.original_crs?.toUpperCase() }})</el-radio>
             <el-radio value="wgs84">WGS84</el-radio>
-            <el-radio value="gcj02">GCJ02 (火星)</el-radio>
-            <el-radio value="bd09">BD09 (百度)</el-radio>
+            <el-radio value="gcj02">GCJ02</el-radio>
+            <el-radio value="bd09">BD09</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-alert type="info" :closable="false" style="margin-top: 10px">
@@ -719,10 +719,13 @@
             导出为 GPX 格式，可导入到各种 GPS 设备和软件。包含时间、坐标、海拔等信息。
           </template>
           <template v-else-if="exportFormat === 'kml'">
-            导出为 KML 格式，可导入到两步路等应用。包含时间、坐标、海拔等信息。
+            导出为 KML 格式，可导入到 Google Earth 等应用。包含时间、坐标、海拔等信息。
+          </template>
+          <template v-else-if="exportFormat === 'csv'">
+            导出为 UTF-8 带 BOM 的 CSV 格式，可使用 Excel 等电子表格软件打开。可以编辑地理信息，然后重新导入。
           </template>
           <template v-else>
-            导出后可以编辑地理信息，然后重新导入
+            导出后可以编辑地理信息，然后重新导入。
           </template>
         </el-alert>
       </el-form>
