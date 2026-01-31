@@ -342,9 +342,11 @@ async function handleSubmit() {
 }
 
 .form-tip {
+  width: 100%;
   font-size: 12px;
   color: #909399;
-  margin-top: 5px;
+  margin-top: 8px;
+  line-height: 1.5;
 }
 
 .switch-label {

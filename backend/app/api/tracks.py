@@ -559,25 +559,30 @@ async def get_all_fill_progress(
     获取当前用户所有正在填充的轨迹的进度
 
     只返回有进度信息的轨迹（状态为 filling, completed, failed）
+    包括实时记录轨迹的填充进度
     """
-    # 获取用户的所有轨迹ID
-    tracks, _ = await track_service.get_list(db, current_user.id, 0, 1000)
-
     result = {}
-    for track in tracks:
-        progress = track_service.get_fill_progress(track.id)
-        if progress and progress.get("status") in ("filling", "completed", "failed"):
-            current = progress.get("current", 0)
-            total_points = progress.get("total", 0)
-            failed = progress.get("failed", 0)
-            percent = int((current / total_points * 100)) if total_points > 0 else 0
-            result[track.id] = {
-                "status": progress.get("status", "idle"),
-                "current": current,
-                "total": total_points,
-                "failed": failed,
-                "percent": percent,
-            }
+
+    # 直接从内存中的进度字典获取所有有进度信息的轨迹
+    # 这样可以包括实时记录轨迹的进度
+    all_progress = track_service.get_all_fill_progress()
+
+    for track_id, progress in all_progress.items():
+        if progress.get("status") in ("filling", "completed", "failed"):
+            # 验证轨迹属于当前用户
+            track = await track_service.get_by_id(db, track_id, current_user.id)
+            if track:
+                current = progress.get("current", 0)
+                total_points = progress.get("total", 0)
+                failed = progress.get("failed", 0)
+                percent = int((current / total_points * 100)) if total_points > 0 else 0
+                result[track_id] = {
+                    "status": progress.get("status", "idle"),
+                    "current": current,
+                    "total": total_points,
+                    "failed": failed,
+                    "percent": percent,
+                }
 
     return result
 

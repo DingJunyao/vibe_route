@@ -472,11 +472,13 @@ async function loadAllProgress() {
     // 确保 data 是对象类型
     if (data && typeof data === 'object' && !Array.isArray(data)) {
       fillProgress.value = data
+      console.log('[FillProgress] 填充进度数据:', data)
     } else {
       fillProgress.value = {}
     }
   } catch (error) {
     // 静默处理错误
+    console.error('[FillProgress] 获取填充进度失败:', error)
   }
   // 更新时间刷新 key，触发相对时间重新计算
   timeRefreshKey.value++
@@ -572,20 +574,36 @@ function getTrackProgress(trackId: number): FillProgressItem | null {
 // 获取填充标签的类型和文本
 function getFillLabel(trackId: number): { type: string; text: string } | null {
   const progress = getTrackProgress(trackId)
-  if (!progress || progress.status !== 'filling') return null
-
-  const { current = 0, failed = 0, percent = 0 } = progress
-
-  // 全部失败（没有成功）
-  if (current === 0 && failed > 0) {
-    return { type: 'danger', text: '填充有失败' }
+  if (!progress) {
+    console.log(`[FillProgress] 轨迹 ${trackId} 没有进度数据`)
+    return null
   }
-  // 部分失败
-  if (current > 0 && failed > 0) {
-    return { type: 'warning', text: `填充中 ${percent}%（有失败）` }
+
+  console.log(`[FillProgress] 轨迹 ${trackId} 进度:`, progress)
+
+  // 填充失败
+  if (progress.status === 'failed') {
+    return { type: 'danger', text: '填充失败' }
   }
-  // 没有失败
-  return { type: 'primary', text: `填充中 ${percent}%` }
+
+  // 填充中
+  if (progress.status === 'filling') {
+    const { current = 0, failed = 0, percent = 0 } = progress
+
+    // 全部失败（没有成功）
+    if (current === 0 && failed > 0) {
+      return { type: 'danger', text: '填充有失败' }
+    }
+    // 部分失败
+    if (current > 0 && failed > 0) {
+      return { type: 'warning', text: `填充中 ${percent}%（有失败）` }
+    }
+    // 没有失败
+    return { type: 'primary', text: `填充中 ${percent}%` }
+  }
+
+  console.log(`[FillProgress] 轨迹 ${trackId} 状态: ${progress.status}, 不显示标签`)
+  return null
 }
 
 // 处理每页条数变化

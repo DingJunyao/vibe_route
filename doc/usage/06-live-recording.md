@@ -39,12 +39,17 @@ https://route.a4ding.com/api/live-recordings/log/{TOKEN}?lat=%LAT&lon=%LON&time=
 
 ### GPS Logger 配置步骤
 
-1. 打开 GPS Logger 应用
-2. 进入设置 → 日志记录
-3. 找到"自定义 URL"或"HTTP 请求"
-4. 启用自定义 URL
-5. 填入系统生成的上传 URL
-6. 启动日志记录
+1. 打开 GPS Logger （GPS 记录器）应用
+2. 侧栏里找到“自定义 URL”
+   ![GPS Logger 侧栏](../img/gps_logger_sidebar.jpg)
+3. 打开“记录到自定义 URL”
+   ![“自定义 URL”设置](../img/gps_logger_url_setting.jpg)
+4. ，在 URL 里填入系统生成的上传 URL
+   ![填写 URL](../img/gps_logger_url_setting_url.jpg)
+5. 然后就可以开始记录了
+   ![开始记录](../img/gps_logger.jpg)
+
+当需要停止记录时，不要在停止记录后立即结束应用，更不要立即结束轨迹（见下），因为后台可能还在传输轨迹点信息。
 
 ---
 

@@ -487,6 +487,10 @@ class TrackService:
         """获取地理信息填充进度"""
         return self._filling_progress.get(track_id, {"current": 0, "total": 0, "failed": 0, "status": "idle"})
 
+    def get_all_fill_progress(self) -> dict:
+        """获取所有地理信息填充进度"""
+        return self._filling_progress.copy()
+
     def stop_fill_geocoding(self, track_id: int) -> bool:
         """停止地理信息填充"""
         if track_id in self._filling_progress:

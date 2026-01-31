@@ -54,6 +54,12 @@
 - 支持选择导出坐标系
 - 兼容大多数 GPS 设备和软件
 
+### KML 格式
+
+- Google Earth 格式
+- 使用 Google gx:Track 扩展
+- 支持导入 Google Earth 等应用
+
 ### CSV 格式
 
 - UTF-8 编码带 BOM
@@ -65,12 +71,6 @@
 - Excel 表格格式
 - 本系统特有格式
 - 包含所有轨迹点信息
-
-### KML 格式
-
-- Google Earth 格式
-- 使用 Google gx:Track 扩展
-- 支持导入 Google Earth 等应用
 
 ## 异步任务
 
