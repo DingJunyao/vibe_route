@@ -328,15 +328,30 @@ async def get_track(
                 recording = rec
                 break
 
-    # 获取实时记录的时间信息
+    # 获取实时记录的时间信息和统计数据
     last_point_time = None
     last_point_created_at = None
+    calculated_stats = None
     if recording:
         from app.services.live_recording_service import live_recording_service
         last_point_time = await live_recording_service.get_last_point_time(db, recording)
         last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
+        # 实时计算统计数据（从点重新计算，确保准确性）
+        calculated_stats = await live_recording_service.calculate_track_stats_from_points(db, track.id)
 
     # 构建响应
+    # 对于实时记录，使用实时计算的统计值；否则使用数据库中的值
+    if recording and calculated_stats:
+        distance = calculated_stats["distance"]
+        duration = calculated_stats["duration"]
+        elevation_gain = calculated_stats["elevation_gain"]
+        elevation_loss = calculated_stats["elevation_loss"]
+    else:
+        distance = track.distance or 0
+        duration = track.duration or 0
+        elevation_gain = track.elevation_gain or 0
+        elevation_loss = track.elevation_loss or 0
+
     response_data = {
         "id": track.id,
         "user_id": track.user_id,
@@ -344,10 +359,10 @@ async def get_track(
         "description": track.description,
         "original_filename": track.original_filename,
         "original_crs": track.original_crs,
-        "distance": track.distance or 0,
-        "duration": track.duration or 0,
-        "elevation_gain": track.elevation_gain or 0,
-        "elevation_loss": track.elevation_loss or 0,
+        "distance": distance,
+        "duration": duration,
+        "elevation_gain": elevation_gain,
+        "elevation_loss": elevation_loss,
         "start_time": track.start_time,
         "end_time": track.end_time,
         "has_area_info": track.has_area_info or False,

@@ -32,6 +32,7 @@ const emit = defineEmits<{
   'update:visible': [value: boolean]
   'ended': []
   'fillGeocodingChanged': [value: boolean]
+  'refresh': []
 }>()
 
 // 对话框数据
@@ -88,15 +89,10 @@ watch(dialogVisible, (newVal) => {
   }
 })
 
-// 刷新对话框内的时间数据
+// 刷新对话框内的时间数据（触发父组件更新）
 async function refreshDialogTimes() {
-  try {
-    const status = await liveRecordingApi.getStatus(props.recordingId)
-    // 更新时间通过 event 传递给父组件，或者在这里直接更新
-    // 由于我们不存储完整的状态，这里只更新刷新 key
-  } catch (error) {
-    // 静默处理错误
-  }
+  // 通过 emit 通知父组件更新
+  emit('refresh')
   // 更新刷新 key，触发模板重新计算
   dialogTimeRefreshKey.value++
 }

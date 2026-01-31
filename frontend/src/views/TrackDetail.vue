@@ -636,7 +636,7 @@
                     :class="{ highlighted: highlightedPointIndex === index }"
                   >
                     <div class="point-header">
-                      <span class="point-index">#{{ point.point_index }}</span>
+                      <span class="point-index">#{{ index + 1 }}</span>
                       <span class="point-time">{{ formatTime(point.time) }}</span>
                     </div>
                     <div class="point-coords">
@@ -801,6 +801,7 @@
       :last-point-created-at="currentRecordingLastPointCreatedAt"
       @ended="handleRecordingEnded"
       @fill-geocoding-changed="handleFillGeocodingChanged"
+      @refresh="refreshRecordingStatus"
     />
   </div>
 </template>
@@ -1742,6 +1743,28 @@ function handleFillGeocodingChanged(value: boolean) {
   // 同时更新 track 的 fill_geocoding 值
   if (track.value) {
     track.value.fill_geocoding = value
+  }
+}
+
+// 刷新实时记录状态
+async function refreshRecordingStatus() {
+  if (!currentRecordingId.value) return
+
+  try {
+    const status = await liveRecordingApi.getStatus(currentRecordingId.value)
+    // 更新状态
+    currentRecordingLastUploadAt.value = status.last_upload_at
+    currentRecordingLastPointTime.value = status.last_point_time
+    currentRecordingLastPointCreatedAt.value = status.last_point_created_at
+
+    // 同时更新 track 的数据
+    if (track.value) {
+      track.value.last_upload_at = status.last_upload_at
+      track.value.last_point_time = status.last_point_time
+      track.value.last_point_created_at = status.last_point_created_at
+    }
+  } catch (error) {
+    // 静默处理错误
   }
 }
 

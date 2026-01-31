@@ -60,7 +60,7 @@ export interface UnifiedTrack {
 
 export interface TrackPoint {
   id: number
-  point_index: number
+  point_index: number  // 注意：实时记录场景下可能不按时间顺序排列，应使用数组索引显示
   time: string | null
   created_at: string | null  // 服务器创建时间
   latitude: number

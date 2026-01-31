@@ -866,13 +866,28 @@ class TrackService:
         for track in all_tracks:
             recording = recording_map.get(track.id)
 
-            # 获取 last_point_time 和 last_point_created_at（如果有实时记录）
+            # 获取 last_point_time、last_point_created_at 和计算统计数据（如果有实时记录）
             last_point_time = None
             last_point_created_at = None
+            calculated_stats = None
             if recording:
                 from app.services.live_recording_service import live_recording_service
                 last_point_time = await live_recording_service.get_last_point_time(db, recording)
                 last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
+                # 实时计算统计数据（从点重新计算，确保准确性）
+                calculated_stats = await live_recording_service.calculate_track_stats_from_points(db, track.id)
+
+            # 对于实时记录，使用实时计算的统计值；否则使用数据库中的值
+            if recording and calculated_stats:
+                distance = calculated_stats["distance"]
+                duration = calculated_stats["duration"]
+                elevation_gain = calculated_stats["elevation_gain"]
+                elevation_loss = calculated_stats["elevation_loss"]
+            else:
+                distance = track.distance
+                duration = track.duration
+                elevation_gain = track.elevation_gain
+                elevation_loss = track.elevation_loss
 
             item = {
                 'id': track.id,
@@ -881,10 +896,10 @@ class TrackService:
                 'description': track.description,
                 'original_filename': track.original_filename,
                 'original_crs': track.original_crs,
-                'distance': track.distance,
-                'duration': track.duration,
-                'elevation_gain': track.elevation_gain,
-                'elevation_loss': track.elevation_loss,
+                'distance': distance,
+                'duration': duration,
+                'elevation_gain': elevation_gain,
+                'elevation_loss': elevation_loss,
                 'start_time': track.start_time,
                 'end_time': track.end_time,
                 'has_area_info': track.has_area_info,
@@ -1536,7 +1551,7 @@ class TrackService:
         total_distance = 0.0
         prev_point = None
 
-        for point in points:
+        for idx, point in enumerate(points):
             # 计算到前一个点的距离
             if prev_point:
                 distance = await self.spatial_service.distance(
@@ -1565,7 +1580,7 @@ class TrackService:
 
             # 构建行数据
             row = [
-                str(point.point_index),
+                str(idx),  # 使用时间顺序的位置索引（而非 point_index）
                 time_date,
                 time_time,
                 time_microsecond,
@@ -1702,7 +1717,7 @@ class TrackService:
 
             # 写入行数据
             row_data = [
-                point.point_index,
+                row_idx - 2,  # 使用时间顺序的位置索引（0-based）
                 time_date,
                 time_time,
                 time_microsecond,
@@ -3231,7 +3246,7 @@ class TrackService:
         result = await db.execute(
             select(TrackPoint)
             .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
         )
         points = list(result.scalars().all())
 
@@ -3255,7 +3270,7 @@ class TrackService:
                 raise ValueError(f"不支持的坐标系: {old_original_crs}")
 
             if actual_lon is None or actual_lat is None:
-                logger.warning(f"点 {point.point_index} 缺少坐标数据，跳过")
+                logger.warning(f"点 ID {point.id} 缺少坐标数据，跳过")
                 continue
 
             # 使用新坐标系重新计算所有坐标系

@@ -1010,3 +1010,42 @@ points.value.sort((a, b) => {
 | 配置对话框"最近更新" | "2025-01-01 11:12:13（12 分钟前）" | `last_point_created_at` |
 | 配置对话框"轨迹点时间" | GPS 时间 | `last_point_time` |
 | 停止确认对话框 | 同配置对话框 | 同配置对话框 |
+
+### 实时记录 point_index 处理策略
+
+**问题背景**：
+
+实时记录场景下，轨迹点通过网络上传，由于网络延迟等原因，点可能乱序到达服务器。而 `point_index` 字段原本设计用于表示点在轨迹中的顺序位置，这导致了根本性的架构冲突：
+
+- **乱序到达**：点按 GPS 时间顺序生成，但按网络延迟顺序到达
+- **索引冲突**：并发请求可能获取相同的 `MAX(point_index)` 值
+- **距离错误**：错误的索引导致距离计算出现巨大偏差
+
+**解决方案**：
+
+统一使用**按时间排序**作为点的顺序依据，`point_index` 字段仅作为数据库存储字段保留：
+
+1. **查询排序**：所有查询都使用 `.order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())`
+2. **显示导出**：前端显示和 CSV/XLSX 导出使用枚举索引 `enumerate(points)` 而非 `point_index`
+3. **修复脚本**：轨迹结束时运行 `fix_point_index.py` 重排索引
+
+**涉及文件**：
+
+- [`overlay.py`](backend/app/gpxutil_wrapper/overlay.py) - 生成信息覆盖层时按时间排序
+- [`track_service.py`](backend/app/services/track_service.py) - 导出、高程同步等使用时间排序
+- [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue) - 显示使用数组索引
+- [`track.ts`](frontend/src/api/track.ts) - 接口添加注释说明
+
+**自动修复**：
+
+实时记录停止时，系统会自动调用 [`LiveRecordingService.fix_point_index()`](backend/app/services/live_recording_service.py) 修复 `point_index`：
+
+1. 按 GPS 时间顺序重新分配索引（0, 1, 2, ...）
+2. 重新计算轨迹距离、时长、爬升/下降统计
+3. 记录修复日志
+
+**注意事项**：
+
+- `point_index` 字段仍保留在数据库中，用于 GPX 导入等场景
+- 实时记录期间的 `point_index` 可能不准确，但停止时会自动修复
+- 所有新代码查询轨迹点时，必须按时间排序而非 `point_index`

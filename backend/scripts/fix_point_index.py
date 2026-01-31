@@ -3,13 +3,24 @@
 
 问题：由于并发竞态条件，实时记录的所有点的 point_index 都是 0
 解决方案：按 created_at 顺序重新分配 point_index
+
+使用方法:
+    python scripts/fix_point_index.py                    # 修复所有实时记录轨迹
+    python scripts/fix_point_index.py --track-id 73      # 修复指定轨迹
+    python scripts/fix_point_index.py --track-id 73 --force  # 强制重新计算距离
 """
 import sys
 import os
+import argparse
 from pathlib import Path
 
-# 添加项目根目录到 Python 路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 脚本在 backend/scripts/ 目录下，需要切换到 backend/ 目录
+script_dir = Path(__file__).parent.resolve()
+backend_dir = script_dir.parent
+os.chdir(backend_dir)
+
+# 添加 backend 目录到 Python 路径
+sys.path.insert(0, str(backend_dir))
 
 import asyncio
 from datetime import datetime
@@ -22,13 +33,14 @@ from app.models.track import Track, TrackPoint
 from app.core.config import settings
 
 
-async def fix_track_point_index(db: AsyncSession, track_id: int) -> dict:
+async def fix_track_point_index(db: AsyncSession, track_id: int, force_recalculate: bool = False) -> dict:
     """
     修复指定轨迹的 point_index
 
     Args:
         db: 数据库会话
         track_id: 轨迹 ID
+        force_recalculate: 即使 point_index 已正确，也强制重新计算距离和统计
 
     Returns:
         修复结果字典
@@ -61,7 +73,7 @@ async def fix_track_point_index(db: AsyncSession, track_id: int) -> dict:
             needs_fix = True
             break
 
-    if not needs_fix:
+    if not needs_fix and not force_recalculate:
         logger.info(f"Track {track_id}: point_index 已正确，无需修复")
         return {
             "track_id": track_id,
@@ -70,7 +82,7 @@ async def fix_track_point_index(db: AsyncSession, track_id: int) -> dict:
             "point_count": len(points)
         }
 
-    # 重新分配 point_index
+    # 重新分配 point_index（仅在需要时）
     logger.info(f"Track {track_id}: 开始修复 {len(points)} 个点的 point_index")
     updated_count = 0
     for i, point in enumerate(points):
@@ -150,6 +162,11 @@ async def fix_track_point_index(db: AsyncSession, track_id: int) -> dict:
 
 async def main():
     """主函数"""
+    parser = argparse.ArgumentParser(description="修复实时记录轨迹的 point_index")
+    parser.add_argument("--track-id", type=int, help="指定要修复的轨迹 ID（不指定则修复所有）")
+    parser.add_argument("--force", action="store_true", help="即使 point_index 已正确，也强制重新计算距离")
+    args = parser.parse_args()
+
     logger.info("开始修复实时记录轨迹的 point_index")
 
     # 创建数据库连接
@@ -158,23 +175,28 @@ async def main():
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as db:
-        # 获取所有实时记录轨迹
-        tracks_result = await db.execute(
-            select(Track).where(
-                and_(
-                    Track.is_live_recording == True,
-                    Track.is_valid == True
+        if args.track_id:
+            # 修复指定轨迹
+            logger.info(f"修复轨迹 {args.track_id}")
+            results = [await fix_track_point_index(db, args.track_id, force_recalculate=args.force)]
+        else:
+            # 获取所有实时记录轨迹
+            tracks_result = await db.execute(
+                select(Track).where(
+                    and_(
+                        Track.is_live_recording == True,
+                        Track.is_valid == True
+                    )
                 )
             )
-        )
-        live_tracks = tracks_result.scalars().all()
+            live_tracks = tracks_result.scalars().all()
 
-        logger.info(f"找到 {len(live_tracks)} 条实时记录轨迹")
+            logger.info(f"找到 {len(live_tracks)} 条实时记录轨迹")
 
-        results = []
-        for track in live_tracks:
-            result = await fix_track_point_index(db, track.id)
-            results.append(result)
+            results = []
+            for track in live_tracks:
+                result = await fix_track_point_index(db, track.id, force_recalculate=args.force)
+                results.append(result)
 
         # 打印汇总
         logger.info("\n=== 修复结果汇总 ===")

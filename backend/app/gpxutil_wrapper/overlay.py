@@ -6,9 +6,10 @@ import os
 import zipfile
 from typing import Optional
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.track import Track, TrackPoint
@@ -150,7 +151,7 @@ class OverlayGenerator:
         result = await db.execute(
             TrackPoint.__table__.select()
             .where(TrackPoint.track_id == track_id)
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
         )
         points = result.scalars().all()
 
@@ -177,7 +178,3 @@ class OverlayGenerator:
                 zipf.writestr(img_filename, img_bytes.getvalue())
 
         return str(zip_path), len(points)
-
-
-# 导入 BytesIO
-from io import BytesIO

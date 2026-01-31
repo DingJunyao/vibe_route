@@ -55,6 +55,10 @@ export function formatTimeWithRelative(timeStr: string | null | undefined): stri
   if (!timeStr) return '无'
 
   const date = new Date(timeStr)
+
+  // 检查日期是否有效
+  if (isNaN(date.getTime())) return '无'
+
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')

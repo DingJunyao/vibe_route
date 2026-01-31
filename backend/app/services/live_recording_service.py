@@ -204,6 +204,9 @@ class LiveRecordingService:
         """
         结束记录会话
 
+        结束时会自动修复 point_index（按时间顺序重新分配），
+        确保距离计算和后续操作正确。
+
         Args:
             db: 数据库会话
             recording: 记录对象
@@ -215,6 +218,17 @@ class LiveRecordingService:
         recording.ended_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await db.commit()
         await db.refresh(recording)
+
+        # 自动修复 point_index
+        try:
+            fix_result = await self.fix_point_index(db, recording.track_id)
+            logger.info(
+                f"Recording {recording.id}: 自动修复 point_index 完成 - "
+                f"{fix_result.get('status')}: {fix_result.get('message', '')}"
+            )
+        except Exception as e:
+            logger.error(f"Recording {recording.id}: 修复 point_index 失败: {e}")
+
         return recording
 
     async def increment_track_count(self, db: AsyncSession, recording: LiveRecording) -> LiveRecording:
@@ -315,10 +329,11 @@ class LiveRecordingService:
         last_point = last_point_result.scalar_one_or_none()
 
         # 计算点索引
-        # 使用行数来分配索引，避免并发问题
-        # 在 SQLite 中，COUNT(*) 查询比 MAX() 更可靠
-        count_result = await db.execute(
-            select(func.count(TrackPoint.id))
+        # 策略：使用 MAX(point_index) + 1
+        # 注意：这在高并发场景下仍有极小概率冲突，但SQLite的行级锁会自动处理
+        # 如果发生冲突，数据库会抛出异常，客户端可以重试
+        max_index_result = await db.execute(
+            select(func.max(TrackPoint.point_index))
             .where(
                 and_(
                     TrackPoint.track_id == track.id,
@@ -326,24 +341,8 @@ class LiveRecordingService:
                 )
             )
         )
-        point_count = count_result.scalar() or 0
-        point_index = point_count
-
-        # 双重检查：确保 point_index 不与现有冲突
-        # 如果并发导致冲突，则使用 max + 1
-        max_index_result = await db.execute(
-            select(func.max(TrackPoint.point_index))
-            .where(
-                and_(
-                    TrackPoint.track_id == track.id,
-                    TrackPoint.is_valid == True,
-                    TrackPoint.point_index >= point_index
-                )
-            )
-        )
-        existing_max = max_index_result.scalar()
-        if existing_max is not None and existing_max >= point_index:
-            point_index = existing_max + 1
+        max_index = max_index_result.scalar()
+        point_index = 0 if max_index is None else max_index + 1
 
         # 计算方位角、速度和距离
         calculated_bearing = bearing
@@ -384,10 +383,10 @@ class LiveRecordingService:
                     if calculated_speed > 55.56:  # 200 km/h
                         calculated_speed = None
 
-            # 更新轨迹总距离
-            track.distance = round(track.distance + distance_from_prev, 2)
+            # 注意：不在添加点时累加距离，因为乱序到达会导致累积误差
+            # 距离会在查询时通过 get_track_with_calculated_stats() 实时计算
 
-            # 计算爬升/下降
+            # 计算爬升/下降（同样会有误差，但影响较小，结束后会统一修复）
             if elevation is not None and last_point.elevation is not None:
                 elevation_diff = elevation - last_point.elevation
                 if elevation_diff > 0:
@@ -602,7 +601,7 @@ class LiveRecordingService:
         if not track:
             raise ValueError(f"轨迹 {track_id} 不存在")
 
-        # 获取所有有效点，按索引排序
+        # 获取所有有效点，按时间排序（实时记录场景下 point_index 可能不准确）
         points_result = await db.execute(
             select(TrackPoint)
             .where(
@@ -612,7 +611,7 @@ class LiveRecordingService:
                     TrackPoint.elevation.is_not(None)
                 )
             )
-            .order_by(TrackPoint.point_index)
+            .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
         )
         points = points_result.scalars().all()
 
@@ -649,6 +648,134 @@ class LiveRecordingService:
             "track_id": track_id,
             "elevation_gain": track.elevation_gain,
             "elevation_loss": track.elevation_loss,
+        }
+
+    async def fix_point_index(
+        self,
+        db: AsyncSession,
+        track_id: int,
+    ) -> dict:
+        """
+        修复轨迹的 point_index（按时间顺序重新分配）
+
+        实时记录场景下，点可能乱序到达，导致 point_index 不连续或不正确。
+        此方法按 GPS 时间重新排序并分配连续的索引，同时重新计算距离和爬升统计。
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+
+        Returns:
+            修复结果字典
+        """
+        # 获取所有点，按 time 排序（GPS 时间是轨迹的真正顺序）
+        points_result = await db.execute(
+            select(TrackPoint)
+            .where(
+                and_(
+                    TrackPoint.track_id == track_id,
+                    TrackPoint.is_valid == True
+                )
+            )
+            .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
+        )
+        points = points_result.scalars().all()
+
+        if not points:
+            return {
+                "track_id": track_id,
+                "status": "skipped",
+                "message": "没有找到轨迹点"
+            }
+
+        # 检查是否需要修复
+        needs_fix = False
+        for i, point in enumerate(points):
+            if point.point_index != i:
+                needs_fix = True
+                break
+
+        if not needs_fix:
+            logger.info(f"Track {track_id}: point_index 已正确，无需修复")
+            return {
+                "track_id": track_id,
+                "status": "ok",
+                "message": "point_index 已正确",
+                "point_count": len(points)
+            }
+
+        # 重新分配 point_index
+        logger.info(f"Track {track_id}: 开始修复 {len(points)} 个点的 point_index")
+        updated_count = 0
+        for i, point in enumerate(points):
+            if point.point_index != i:
+                point.point_index = i
+                point.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                updated_count += 1
+
+        # 重新计算距离和爬升
+        total_distance = 0.0
+        total_duration = 0
+        elevation_gain = 0.0
+        elevation_loss = 0.0
+
+        if len(points) >= 2:
+            for i in range(1, len(points)):
+                prev_point = points[i - 1]
+                curr_point = points[i]
+
+                # 计算距离
+                if curr_point.latitude_wgs84 and curr_point.longitude_wgs84:
+                    distance = await self.spatial_service.distance(
+                        prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                        curr_point.latitude_wgs84, curr_point.longitude_wgs84
+                    )
+                    total_distance += distance
+
+                # 计算爬升/下降
+                if curr_point.elevation is not None and prev_point.elevation is not None:
+                    diff = curr_point.elevation - prev_point.elevation
+                    if diff > 0:
+                        elevation_gain += diff
+                    else:
+                        elevation_loss += abs(diff)
+
+            # 计算时长
+            first_point = points[0]
+            last_point = points[-1]
+            if first_point.time and last_point.time:
+                total_duration = int((last_point.time - first_point.time).total_seconds())
+
+        # 更新轨迹统计
+        track_result = await db.execute(
+            select(Track).where(
+                and_(
+                    Track.id == track_id,
+                    Track.is_valid == True
+                )
+            )
+        )
+        track = track_result.scalar_one_or_none()
+        if track:
+            old_distance = track.distance
+            track.distance = round(total_distance, 2)
+            track.duration = total_duration
+            track.elevation_gain = round(elevation_gain, 2)
+            track.elevation_loss = round(elevation_loss, 2)
+
+            logger.info(f"Track {track_id}: 距离从 {old_distance:.2f}m 更新为 {track.distance:.2f}m")
+
+        await db.commit()
+
+        logger.info(f"Track {track_id}: 已修复 {updated_count} 个点")
+
+        return {
+            "track_id": track_id,
+            "status": "fixed",
+            "point_count": len(points),
+            "updated_count": updated_count,
+            "old_distance": old_distance if track else None,
+            "new_distance": track.distance if track else None,
         }
 
     async def delete(self, db: AsyncSession, recording: LiveRecording) -> None:
@@ -744,6 +871,84 @@ class LiveRecordingService:
         last_point = last_point_result.scalar_one_or_none()
 
         return last_point.created_at if last_point else None
+
+    async def calculate_track_stats_from_points(
+        self,
+        db: AsyncSession,
+        track_id: int,
+    ) -> dict:
+        """
+        从轨迹点实时计算统计信息（按时间排序）
+
+        用于实时记录场景，确保统计数据的准确性，
+        不依赖可能错误的累加值。
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+
+        Returns:
+            包含 distance, duration, elevation_gain, elevation_loss 的字典
+        """
+        # 获取所有点，按时间排序
+        points_result = await db.execute(
+            select(TrackPoint)
+            .where(
+                and_(
+                    TrackPoint.track_id == track_id,
+                    TrackPoint.is_valid == True
+                )
+            )
+            .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
+        )
+        points = points_result.scalars().all()
+
+        if len(points) < 2:
+            return {
+                "distance": 0.0,
+                "duration": 0,
+                "elevation_gain": 0.0,
+                "elevation_loss": 0.0,
+            }
+
+        # 计算距离和爬升
+        total_distance = 0.0
+        elevation_gain = 0.0
+        elevation_loss = 0.0
+
+        for i in range(1, len(points)):
+            prev_point = points[i - 1]
+            curr_point = points[i]
+
+            # 计算距离
+            if curr_point.latitude_wgs84 and curr_point.longitude_wgs84:
+                distance = await self.spatial_service.distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    curr_point.latitude_wgs84, curr_point.longitude_wgs84
+                )
+                total_distance += distance
+
+            # 计算爬升/下降
+            if curr_point.elevation is not None and prev_point.elevation is not None:
+                diff = curr_point.elevation - prev_point.elevation
+                if diff > 0:
+                    elevation_gain += diff
+                else:
+                    elevation_loss += abs(diff)
+
+        # 计算时长
+        duration = 0
+        first_point = points[0]
+        last_point = points[-1]
+        if first_point.time and last_point.time:
+            duration = int((last_point.time - first_point.time).total_seconds())
+
+        return {
+            "distance": round(total_distance, 2),
+            "duration": duration,
+            "elevation_gain": round(elevation_gain, 2),
+            "elevation_loss": round(elevation_loss, 2),
+        }
 
 
 live_recording_service = LiveRecordingService()

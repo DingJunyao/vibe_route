@@ -304,6 +304,7 @@
       :last-point-created-at="currentRecordingLastPointCreatedAt"
       @ended="loadTracks"
       @fill-geocoding-changed="handleFillGeocodingChanged"
+      @refresh="refreshRecordingStatus"
     />
 
     <!-- 创建实时记录对话框 -->
@@ -731,6 +732,29 @@ function handleFillGeocodingChanged(value: boolean) {
   const track = unifiedTracks.value.find(t => t.live_recording_id === currentRecordingId.value)
   if (track) {
     track.fill_geocoding = value
+  }
+}
+
+// 刷新实时记录状态
+async function refreshRecordingStatus() {
+  if (!currentRecordingId.value) return
+
+  try {
+    const status = await liveRecordingApi.getStatus(currentRecordingId.value)
+    // 更新状态
+    currentRecordingLastUploadAt.value = status.last_upload_at
+    currentRecordingLastPointTime.value = status.last_point_time
+    currentRecordingLastPointCreatedAt.value = status.last_point_created_at
+
+    // 同时更新列表中的 track 数据
+    const track = unifiedTracks.value.find(t => t.live_recording_id === currentRecordingId.value)
+    if (track) {
+      track.last_upload_at = status.last_upload_at
+      track.last_point_time = status.last_point_time
+      track.last_point_created_at = status.last_point_created_at
+    }
+  } catch (error) {
+    // 静默处理错误
   }
 }
 
