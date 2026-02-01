@@ -141,7 +141,7 @@
                           <el-input
                             v-if="layer.id === 'tianditu'"
                             v-model="layer.tk"
-                            placeholder="请输入天地图 Token (tk)"
+                            placeholder="启用了瓦片服务的浏览器端应用 tk"
                             clearable
                             show-password
                             class="config-input"
@@ -150,14 +150,14 @@
                           <template v-if="layer.id === 'amap'">
                             <el-input
                               v-model="layer.api_key"
-                              placeholder="API Key（矢量图必填）"
+                              placeholder="绑定服务为“Web 端”的 Key（矢量图必填）"
                               clearable
                               show-password
                               class="config-input"
                             />
                             <el-input
                               v-model="layer.security_js_code"
-                              placeholder="安全密钥（矢量图可选）"
+                              placeholder="对应安全密钥（矢量图可选，如有必填）"
                               clearable
                               show-password
                               class="config-input"
@@ -167,7 +167,7 @@
                           <el-input
                             v-if="layer.id === 'tencent'"
                             v-model="layer.api_key"
-                            placeholder="API Key（矢量图必填）"
+                            placeholder="Key（矢量图必填）"
                             clearable
                             show-password
                             class="config-input"
@@ -176,7 +176,7 @@
                           <el-input
                             v-if="layer.id === 'baidu'"
                             v-model="layer.api_key"
-                            placeholder="API Key（矢量图必填）"
+                            placeholder="浏览器端应用 AK（矢量图必填）"
                             clearable
                             show-password
                             class="config-input"
@@ -217,7 +217,7 @@
                   <!-- 高德地图配置 -->
                   <template v-if="config.geocoding_provider === 'amap'">
                     <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.amap.api_key" placeholder="请输入高德地图 API Key" show-password />
+                      <el-input v-model="config.geocoding_config.amap.api_key" placeholder="绑定服务为“Web 服务”的 Key" show-password />
                     </el-form-item>
                     <el-form-item label="并发频率">
                       <el-input-number v-model="config.geocoding_config.amap.freq" :min="1" :max="50" controls-position="right" />
@@ -228,7 +228,7 @@
                   <!-- 百度地图配置 -->
                   <template v-if="config.geocoding_provider === 'baidu'">
                     <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="请输入百度地图 API Key" show-password />
+                      <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="服务端应用 AK" show-password />
                     </el-form-item>
                     <el-form-item label="并发频率">
                       <el-input-number v-model="config.geocoding_config.baidu.freq" :min="1" :max="50" controls-position="right" />

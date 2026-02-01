@@ -220,8 +220,6 @@ class BaiduGeocoding(GeocodingService):
             return result
 
         try:
-            # 百度使用 BD09 坐标系，需要转换
-            bd_lon, bd_lat = convert_point(lon, lat, 'wgs84', 'bd09')
 
             # 限流
             if self.freq > 0:
@@ -230,12 +228,13 @@ class BaiduGeocoding(GeocodingService):
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # 中文请求
                 params = {
-                    'coordtype': 'bd09ll',
+                    'coordtype': 'wgs84ll',
                     'output': 'json',
                     'ak': self.api_key,
-                    'location': f'{bd_lat},{bd_lon}',
+                    'location': f'{lat},{lon}',
                     'extensions_poi': 0,
-                    'language_code': 'zh-CN',
+                    'poi_types': '道路',
+                    'language': 'zh-CN',
                 }
 
                 response = await client.get(
@@ -251,14 +250,23 @@ class BaiduGeocoding(GeocodingService):
                     result['area'] = address.get('district', '')
                     result['town'] = address.get('town', '')
                     result['road_name'] = address.get('street', '')
-
-                    # 获取道路编号
-                    if address.get('street_number'):
-                        result['road_num'] = address['street_number']
+                    
+                    if address.get('street', '') == '':
+                        roads = resp.get('result', {}).get('business_info', [])
+                        if roads:
+                            min_distance = min(roads, key=lambda x: x['distance'])['distance']
+                            nearest_roads = [road for road in roads if road['distance'] == min_distance]
+                            if nearest_roads:
+                                result['road_name'] = ', '.join([road['name'] for road in nearest_roads if road['name']])
 
                     # 如果启用了英文结果，再请求一次英文版本
                     if self.get_en_result:
-                        params['language_code'] = 'en'
+                        params['language'] = 'en'
+
+                        # 限流
+                        if self.freq > 0:
+                            await asyncio.sleep(1 / self.freq)
+
                         response_en = await client.get(
                             'https://api.map.baidu.com/reverse_geocoding/v3/',
                             params=params
@@ -272,6 +280,23 @@ class BaiduGeocoding(GeocodingService):
                             result['area_en'] = address_en.get('district', '')
                             result['town_en'] = address_en.get('town', '')
                             result['road_name_en'] = address_en.get('street', '')
+                            if result['road_name_en'] == '':
+                                roads = resp_en.get('result', {}).get('business_info', [])
+                                if roads:
+                                    min_distance = min(roads, key=lambda x: x['distance'])['distance']
+                                    nearest_roads = [road for road in roads if road['distance'] == min_distance]
+                                    if nearest_roads:
+                                        result['road_name_en'] = ', '.join([road['name'] for road in nearest_roads if road['name']])
+                            if result['province_en'] ==  result['province']:
+                                result['province_en'] = ''
+                            if result['city_en'] == result['city']:
+                                result['city_en'] = ''
+                            if result['area_en'] == result['area']:
+                                result['area_en'] = ''
+                            if result['town_en'] == result['town']:
+                                result['town_en'] = ''
+                            if  result['road_name_en'] == result['road_name']:
+                                result['road_name_en'] = ''
                 else:
                     result['memo'] = resp.get('message', 'Unknown error')
 
