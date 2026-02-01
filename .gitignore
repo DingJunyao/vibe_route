@@ -105,3 +105,8 @@ ref_gpxutil/
 ref/
 
 backend/data/area_data/
+
+.spec-workflow/
+
+# Git worktrees
+.worktrees/
