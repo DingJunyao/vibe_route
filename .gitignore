@@ -66,6 +66,7 @@ backend/data/exports/
 .env.sqlite
 .env.mysql
 .env.postgresql
+.env.postgresql.postgis
 
 # Logs
 *.log
@@ -102,3 +103,5 @@ tmpclaude*
 
 ref_gpxutil/
 ref/
+
+backend/data/area_data/

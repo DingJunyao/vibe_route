@@ -9,6 +9,8 @@ from app.models.config import Config, InviteCode
 from app.models.task import Task
 from app.models.road_sign import RoadSignCache
 from app.models.live_recording import LiveRecording
+from app.models.admin_division import AdminDivision
+from app.models.admin_division_spatial import AdminDivisionSpatial
 
 __all__ = [
     "Base",
@@ -21,4 +23,6 @@ __all__ = [
     "Task",
     "RoadSignCache",
     "LiveRecording",
+    "AdminDivision",
+    "AdminDivisionSpatial",
 ]

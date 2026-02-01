@@ -1,12 +1,14 @@
 """
 管理员相关 API 路由
 """
-from typing import List
+from typing import List, Dict
 from pathlib import Path
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, or_, case
+from loguru import logger
 
 from app.core.database import get_db
 from app.core.deps import get_current_admin_user
@@ -386,6 +388,85 @@ async def get_database_info(
     return result
 
 
+@router.get("/admin-division-stats")
+async def get_admin_division_stats(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取行政区划数据统计
+
+    返回各层级的数量，以及是否有边界框/PostGIS 几何数据。
+    """
+    from sqlalchemy import text
+    from app.models.admin_division import AdminDivision
+
+    stats = {
+        "total": 0,
+        "by_level": {},
+        "has_bounds": 0,
+        "has_postgis": 0,
+        "sample_missing_codes": []
+    }
+
+    try:
+        # 按层级统计
+        for level in ["province", "city", "area"]:
+            result = await db.execute(
+                select(func.count(AdminDivision.id)).where(AdminDivision.level == level)
+            )
+            count = result.scalar() or 0
+            stats["by_level"][level] = count
+            stats["total"] += count
+
+        # 有边界框的记录数
+        result = await db.execute(
+            select(func.count(AdminDivision.id)).where(
+                and_(
+                    AdminDivision.min_lat.isnot(None),
+                    AdminDivision.max_lat.isnot(None),
+                    AdminDivision.min_lon.isnot(None),
+                    AdminDivision.max_lon.isnot(None)
+                )
+            )
+        )
+        stats["has_bounds"] = result.scalar() or 0
+
+        # 检查 PostGIS 表
+        try:
+            result = await db.execute(
+                text("SELECT COUNT(*) FROM admin_divisions_spatial")
+            )
+            stats["has_postgis"] = result.scalar() or 0
+        except Exception:
+            stats["has_postgis"] = 0
+
+        # 检查缺少 city_code 或 province_code 的区县记录
+        result = await db.execute(
+            select(AdminDivision.code, AdminDivision.name, AdminDivision.city_code, AdminDivision.province_code).where(
+                and_(
+                    AdminDivision.level == "area",
+                    or_(
+                        AdminDivision.city_code.is_(None),
+                        AdminDivision.province_code.is_(None)
+                    )
+                )
+            ).limit(5)
+        )
+        for row in result.fetchall():
+            stats["sample_missing_codes"].append({
+                "code": row[0],
+                "name": row[1],
+                "city_code": row[2],
+                "province_code": row[3]
+            })
+
+    except Exception as e:
+        stats["error"] = str(e)
+
+    return stats
+
+
 # ========== 邀请码管理 ==========
 
 @router.post("/invite-codes", response_model=InviteCodeResponse)
@@ -658,3 +739,675 @@ async def delete_font(
             await db.close()
 
     return {"message": "字体已删除"}
+
+
+# ========== 行政区划数据管理 ==========
+
+@router.get("/admin-division-stats")
+async def get_admin_division_stats(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取行政区划数据统计（管理员）
+    """
+    from app.models.admin_division import AdminDivision
+    from sqlalchemy import text
+
+    stats = {}
+
+    # 各层级统计
+    for level in ["province", "city", "area"]:
+        result = await db.execute(
+            select(func.count(AdminDivision.id)).where(
+                and_(
+                    AdminDivision.level == level,
+                    AdminDivision.is_valid == True
+                )
+            )
+        )
+        stats[level] = result.scalar() or 0
+
+    # 检查 PostGIS 可用性
+    try:
+        result = await db.execute(
+            text("SELECT COUNT(*) FROM admin_divisions_spatial")
+        )
+        stats["postgis_count"] = result.scalar() or 0
+        stats["postgis_enabled"] = True
+    except Exception:
+        stats["postgis_enabled"] = False
+        stats["postgis_count"] = 0
+
+    # 检查边界框数据
+    result = await db.execute(
+        select(func.count(AdminDivision.id)).where(
+            and_(
+                AdminDivision.min_lat.isnot(None),
+                AdminDivision.is_valid == True
+            )
+        )
+    )
+    stats["bounds_count"] = result.scalar() or 0
+
+    return stats
+
+
+@router.post("/import-admin-divisions")
+async def import_admin_divisions(
+    force: bool = Query(False, description="是否强制重新导入"),
+    skip_geojson: bool = Query(False, description="是否跳过 GeoJSON 导入"),
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    导入行政区划数据（管理员）
+
+    从 area_code.sqlite 和 area_geojson/ 导入数据。
+    """
+    import asyncio
+    from app.services.admin_division_import_service import AdminDivisionImportService
+
+    # 检查现有数据
+    from app.models.admin_division import AdminDivision
+    result = await db.execute(
+        select(func.count(AdminDivision.id))
+    )
+    existing_count = result.scalar() or 0
+
+    if existing_count > 0 and not force:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"数据库中已有 {existing_count} 条行政区划数据，使用 force=true 强制重新导入"
+        )
+
+    # 执行导入
+    service = AdminDivisionImportService()
+
+    # 进度跟踪
+    progress = {"current": 0, "total": 0, "level": ""}
+
+    def progress_callback(level, current, total):
+        progress["level"] = level
+        progress["current"] = current
+        progress["total"] = total
+
+    # 1. 从 SQLite 导入
+    stats = await service.import_from_sqlite(
+        db,
+        progress_callback=progress_callback,
+        force=force
+    )
+
+    # 2. 从 GeoJSON 导入边界框
+    if not skip_geojson:
+        bounds_count = await service.import_geojson_bounds(
+            db,
+            progress_callback=progress_callback
+        )
+        stats["bounds"] = bounds_count
+
+    # 3. PostGIS 几何导入
+    database_type = getattr(settings, 'DATABASE_TYPE', 'sqlite')
+    if database_type == "postgresql":
+        postgis_count = await service.import_postgis_geometries(
+            db,
+            progress_callback=progress_callback
+        )
+        stats["postgis"] = postgis_count
+
+    return {
+        "message": "行政区划数据导入完成",
+        "stats": stats
+    }
+
+
+@router.delete("/admin-divisions")
+async def delete_admin_divisions(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    删除所有行政区划数据（管理员）
+    """
+    from app.models.admin_division import AdminDivision
+    from sqlalchemy import delete
+
+    # 删除数据
+    await db.execute(
+        delete(AdminDivision)
+    )
+    await db.commit()
+
+    return {"message": "行政区划数据已清空"}
+
+
+# ========== 特殊地名映射管理 ==========
+
+# 特殊地名映射路径
+SPECIAL_PLACE_MAPPING_FILE = Path(settings.DATA_DIR) / "area_data" / "special_place_mapping.yaml"
+
+
+class SpecialPlaceMappingItem(BaseModel):
+    """特殊地名映射项"""
+    name_zh: str  # 中文名称
+    name_en: str  # 英文转写（不含后缀）
+
+
+class SpecialPlaceMappingResponse(BaseModel):
+    """特殊地名映射响应"""
+    raw_yaml: str  # 原始 YAML 文件内容（保留注释和格式）
+    mappings: Dict[str, str]  # 中文名称 -> 英文转写（解析后的映射，用于前端显示）
+    total: int
+
+
+class UpdateSpecialPlaceMappingRequest(BaseModel):
+    """更新特殊地名映射请求"""
+    yaml_content: str  # 原始 YAML 内容（保留注释和格式）
+
+
+@router.get("/special-place-mapping", response_model=SpecialPlaceMappingResponse)
+async def get_special_place_mapping(
+    current_admin: User = Depends(get_current_admin_user),
+):
+    """
+    获取特殊地名映射表（管理员）
+
+    返回原始 YAML 内容和解析后的映射数据。
+    前端可以使用 raw_yaml 进行编辑以保留注释和格式。
+    """
+    if not SPECIAL_PLACE_MAPPING_FILE.exists():
+        return SpecialPlaceMappingResponse(
+            raw_yaml="# 特殊地名英文映射表\n",
+            mappings={},
+            total=0
+        )
+
+    with open(SPECIAL_PLACE_MAPPING_FILE, "r", encoding="utf-8") as f:
+        raw_yaml = f.read()
+
+    # 解析映射用于前端显示
+    mappings = yaml.safe_load(raw_yaml) or {}
+
+    return SpecialPlaceMappingResponse(
+        raw_yaml=raw_yaml,
+        mappings=mappings,
+        total=len(mappings)
+    )
+
+
+@router.put("/special-place-mapping")
+async def update_special_place_mapping(
+    request: UpdateSpecialPlaceMappingRequest,
+    current_admin: User = Depends(get_current_admin_user),
+):
+    """
+    更新特殊地名映射表（管理员）
+
+    接受原始 YAML 内容，直接写入文件以保留注释和格式。
+    """
+    # 验证 YAML 格式
+    try:
+        mappings = yaml.safe_load(request.yaml_content) or {}
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"YAML 格式错误: {str(e)}")
+
+    # 确保目录存在
+    SPECIAL_PLACE_MAPPING_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    # 直接写入原始 YAML 内容
+    with open(SPECIAL_PLACE_MAPPING_FILE, "w", encoding="utf-8") as f:
+        f.write(request.yaml_content)
+
+    return {"message": f"已更新 {len(mappings)} 条特殊地名映射"}
+
+
+@router.post("/special-place-mapping/regenerate")
+async def regenerate_name_en(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    重新生成所有行政区划的英文名称（管理员）
+
+    使用最新的特殊地名映射表重新生成英文名称。
+    """
+    from app.models.admin_division import AdminDivision
+    from app.utils.pinyin_generator import name_to_pinyin
+
+    # 查询所有行政区划
+    result = await db.execute(select(AdminDivision))
+    divisions = list(result.scalars().all())
+
+    # 加载特殊地名映射
+    if SPECIAL_PLACE_MAPPING_FILE.exists():
+        with open(SPECIAL_PLACE_MAPPING_FILE, "r", encoding="utf-8") as f:
+            special_mapping = yaml.safe_load(f) or {}
+    else:
+        special_mapping = {}
+
+    updated = 0
+    for div in divisions:
+        # 生成新的英文名称
+        new_name_en = name_to_pinyin(div.name, div.level, special_mapping)
+        if div.name_en != new_name_en:
+            div.name_en = new_name_en
+            updated += 1
+
+    await db.commit()
+
+    return {
+        "message": "英文名称重新生成完成",
+        "stats": {
+            "total": len(divisions),
+            "updated": updated
+        }
+    }
+
+
+# ========== 边界数据管理 ==========
+
+class BoundsImportResponse(BaseModel):
+    """边界数据导入响应"""
+    message: str
+    stats: Dict[str, int]
+
+
+@router.post("/test-upload")
+async def test_upload(
+    file: UploadFile = File(..., description="测试文件上传"),
+    current_admin: User = Depends(get_current_admin_user),
+):
+    """测试文件上传接口（管理员）"""
+    import uuid
+    import shutil
+
+    # 读取文件信息
+    content = await file.read()
+    file_size = len(content)
+
+    logger.info(f"测试上传: filename={file.filename}, content_type={file.content_type}, size={file_size}")
+
+    # 保存到临时目录
+    temp_dir = Path(settings.TEMP_DIR) / f"test_upload_{uuid.uuid4()}"
+    try:
+        temp_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.error(f"创建临时目录失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"无法创建临时目录: {e}"
+        )
+
+    test_path = temp_dir / "test.bin"
+    try:
+        with open(test_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        logger.error(f"保存文件失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"无法保存文件: {e}"
+        )
+
+    # 清理
+    try:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"清理临时目录失败: {e}")
+
+    return {
+        "message": "文件上传测试成功",
+        "file_info": {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file_size
+        }
+    }
+
+
+@router.post("/import-bounds-data")
+async def import_bounds_data(
+    file: UploadFile = File(..., description="ZIP 或 RAR 压缩文件，包含 GeoJSON 数据"),
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    上传边界数据文件并创建后台导入任务（管理员）
+
+    支持 ZIP 和 RAR 格式。
+    压缩文件应包含 GeoJSON 文件，文件名格式为行政区划代码（如 110000.json）。
+
+    返回任务 ID，前端可以通过轮询 /admin/tasks/{task_id} 获取处理进度。
+    """
+    import asyncio
+    import uuid
+    from pathlib import Path
+
+    from app.utils.archive_helper import ArchiveExtractor
+    from app.services.task_service import task_service
+
+    # 检查文件扩展名
+    filename = file.filename or "upload"
+    logger.info(f"[边界导入] 接收到文件上传: {filename}")
+
+    if not ArchiveExtractor.is_supported(filename):
+        logger.warning(f"[边界导入] 不支持的文件格式: {filename}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的文件格式。请上传 ZIP 或 RAR 文件。"
+        )
+
+    # 创建临时目录
+    temp_dir = Path(settings.TEMP_DIR) / f"bounds_import_{uuid.uuid4()}"
+    try:
+        temp_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.error(f"[边界导入] 创建临时目录失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"无法创建临时目录: {e}"
+        )
+
+    # 生成安全的文件名（防止路径遍历）
+    safe_filename = Path(filename).name
+    archive_path = temp_dir / safe_filename
+
+    try:
+        # 流式保存上传的文件
+        logger.info(f"[边界导入] 开始保存文件: {archive_path}")
+        with open(archive_path, "wb") as f:
+            total_size = 0
+            while chunk := await file.read(1024 * 1024):  # 每次读取 1MB
+                f.write(chunk)
+                total_size += len(chunk)
+            logger.info(f"[边界导入] 文件保存完成，大小: {total_size} bytes")
+
+        # 检查文件大小
+        file_size = archive_path.stat().st_size
+        if file_size == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="上传的文件为空。"
+            )
+
+        # 创建后台任务
+        task = await task_service.create_task(db, current_admin.id, "bounds_import")
+        logger.info(f"[边界导入] 创建任务 {task.id}")
+
+        # 在后台异步处理导入（不阻塞响应）
+        asyncio.create_task(
+            _process_bounds_import_task(
+                task_id=task.id,
+                archive_path=str(archive_path),
+                temp_dir=str(temp_dir),
+                filename=filename
+            )
+        )
+
+        return {
+            "message": "文件上传成功，正在后台处理",
+            "task_id": task.id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[边界导入] 上传失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"上传失败: {str(e)}"
+        )
+
+
+async def _process_bounds_import_task(
+    task_id: int,
+    archive_path: str,
+    temp_dir: str,
+    filename: str
+):
+    """
+    后台处理边界数据导入任务
+    """
+    import asyncio
+    import json
+    from pathlib import Path
+
+    from app.core.database import async_session_maker
+    from app.models.admin_division import AdminDivision
+    from app.utils.archive_helper import ArchiveExtractor, clean_temp_directory
+    from app.services.task_service import task_service
+
+    temp_path = Path(temp_dir)
+    archive_file = Path(archive_path)
+
+    logger.info(f"[边界导入] 任务 {task_id} 开始处理")
+
+    async with async_session_maker() as db:
+        try:
+            # 更新状态为运行中
+            await task_service.update_task(db, task_id, status="running", progress=5)
+
+            # 在线程池中提取压缩文件（避免阻塞事件循环）
+            logger.info(f"[边界导入] 任务 {task_id} 开始提取压缩文件")
+            extracted_files = await asyncio.to_thread(ArchiveExtractor.extract, archive_file, temp_path)
+            logger.info(f"[边界导入] 任务 {task_id} 提取完成，共 {len(extracted_files)} 个文件")
+
+            await task_service.update_task(db, task_id, progress=10)
+
+            # 在线程池中查找 GeoJSON 文件
+            geojson_files = await asyncio.to_thread(ArchiveExtractor.list_geojson_files, temp_path)
+            logger.info(f"[边界导入] 任务 {task_id} 找到 {len(geojson_files)} 个 GeoJSON 文件")
+
+            if not geojson_files:
+                raise ValueError(
+                    f"未找到 GeoJSON 文件。提取的文件: {[Path(f).name for f in extracted_files[:10]]}"
+                )
+
+            # 导入边界数据
+            updated = 0
+            errors = []
+            total_features = 0
+
+            for i, geojson_file in enumerate(geojson_files):
+                try:
+                    # 在线程池中读取 JSON 文件
+                    data = await asyncio.to_thread(_read_geojson_file, geojson_file)
+
+                    features = data.get("features", [])
+                    features_count = len(features)
+                    total_features += features_count
+                    logger.info(f"[边界导入] 任务 {task_id} 处理 {geojson_file.name}: {features_count} 个 features")
+
+                    for feature in features:
+                        code = feature.get("properties", {}).get("id")
+                        if code:
+                            result = await db.execute(
+                                select(AdminDivision).where(AdminDivision.code == code)
+                            )
+                            division = result.scalar_one_or_none()
+                            if division:
+                                coords = _extract_coordinates_from_geometry(feature.get("geometry", {}))
+                                if coords:
+                                    division.min_lat = int(min(c[0] for c in coords) * 1e6)
+                                    division.max_lat = int(max(c[0] for c in coords) * 1e6)
+                                    division.min_lon = int(min(c[1] for c in coords) * 1e6)
+                                    division.max_lon = int(max(c[1] for c in coords) * 1e6)
+                                    updated += 1
+
+                    # 每处理一个文件更新一次进度
+                    progress = 10 + int(80 * (i + 1) / len(geojson_files))
+                    await task_service.update_task(db, task_id, progress=progress)
+                    await db.commit()
+
+                    # 让出控制权，允许其他请求处理
+                    await asyncio.sleep(0)
+
+                except Exception as e:
+                    logger.error(f"[边界导入] 任务 {task_id} 处理文件 {geojson_file.name} 失败: {e}")
+                    errors.append(f"{geojson_file.name}: {str(e)}")
+
+            # 任务完成
+            result_summary = f"更新 {updated} 条记录，共 {total_features} 个 features"
+            await task_service.update_task(
+                db, task_id,
+                status="completed",
+                progress=100,
+                result_path=result_summary
+            )
+
+            logger.info(f"[边界导入] 任务 {task_id} 完成: {result_summary}")
+
+        except Exception as e:
+            logger.error(f"[边界导入] 任务 {task_id} 失败: {e}")
+            await task_service.update_task(
+                db, task_id,
+                status="failed",
+                error_message=str(e)
+            )
+
+        finally:
+            # 在线程池中清理临时目录
+            await asyncio.to_thread(clean_temp_directory, temp_path)
+
+
+def _read_geojson_file(file_path: Path) -> dict:
+    """在线程池中读取 GeoJSON 文件"""
+    import json
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+@router.get("/tasks/{task_id}")
+async def get_bounds_import_task(
+    task_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取边界导入任务状态（管理员）
+    """
+    from app.services.task_service import task_service
+    from app.models.task import Task
+
+    task = await task_service.get_task(db, task_id)
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在"
+        )
+
+    # 只有管理员或任务创建者可以查看
+    if task.user_id != current_admin.id and not current_admin.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问此任务"
+        )
+
+    return {
+        "id": task.id,
+        "type": task.type,
+        "status": task.status,
+        "progress": task.progress,
+        "result_path": task.result_path,
+        "error_message": task.error_message,
+        "created_at": task.created_at.isoformat(),
+        "is_finished": task.is_finished,
+    }
+
+
+def _extract_coordinates_from_geometry(geometry: dict) -> list:
+    """从几何对象中提取所有坐标（本地副本）"""
+    geom_type = geometry.get("type")
+    coords = geometry.get("coordinates", [])
+
+    if geom_type == "Polygon":
+        return [(lat, lon) for ring in coords for lon, lat in ring]
+    elif geom_type == "MultiPolygon":
+        result = []
+        for polygon in coords:
+            for ring in polygon:
+                result.extend([(lat, lon) for lon, lat in ring])
+        return result
+    return []
+
+
+@router.get("/bounds-stats")
+async def get_bounds_stats(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取边界数据统计（管理员）
+    """
+    from app.models.admin_division import AdminDivision
+
+    # 各层级统计
+    result = await db.execute(
+        select(
+            AdminDivision.level,
+            func.count(AdminDivision.id),
+            func.sum(case((AdminDivision.min_lat != None, 1), else_=0))
+        ).group_by(AdminDivision.level)
+    )
+    level_stats = {}
+    for row in result:
+        level_stats[row[0]] = {
+            "total": row[1],
+            "with_bounds": row[2] or 0
+        }
+
+    # 缺少边界框的省份统计（包含省份名称和缺少的地区列表）
+    # 子查询：获取省份名称
+    province_subquery = (
+        select(AdminDivision.code, AdminDivision.name)
+        .where(AdminDivision.level == "province")
+        .subquery()
+    )
+
+    # 先获取原始数据：省份代码、省份名称、地区名称
+    result = await db.execute(
+        select(
+            AdminDivision.province_code,
+            province_subquery.c.name.label("province_name"),
+            AdminDivision.name.label("area_name")
+        ).join(
+            province_subquery,
+            AdminDivision.province_code == province_subquery.c.code
+        ).where(
+            and_(
+                AdminDivision.level == "area",
+                AdminDivision.min_lat == None
+            )
+        ).order_by(AdminDivision.province_code, AdminDivision.name)
+    )
+
+    # 在 Python 中分组统计
+    from collections import defaultdict
+    province_areas = defaultdict(list)
+    for row in result:
+        province_areas[row[0]].append({
+            "province_name": row[1],
+            "area_name": row[2]
+        })
+
+    # 转换为目标格式并排序（按缺少数量降序，取前10）
+    missing_list = []
+    for province_code, areas in province_areas.items():
+        missing_list.append({
+            "province_code": province_code,
+            "province_name": areas[0]["province_name"],
+            "missing_count": len(areas),
+            "missing_areas": "；".join(a["area_name"] for a in areas)
+        })
+
+    # 按缺少数量降序排序，取前10
+    missing_list.sort(key=lambda x: x["missing_count"], reverse=True)
+    missing_by_province = missing_list[:10]
+
+    return {
+        "by_level": level_stats,
+        "missing_by_province": missing_by_province
+    }
+

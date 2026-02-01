@@ -1,0 +1,17 @@
+-- PostgreSQL 特定：确保 PostGIS 扩展可用
+-- 使用 GEOMETRY 类型支持多种几何类型（Polygon, MultiPolygon 等）
+
+-- 创建 PostGIS 扩展（如果不存在）
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+-- 删除并重新创建空间表（使用 GEOMETRY 类型）
+DROP TABLE IF EXISTS admin_divisions_spatial CASCADE;
+
+CREATE TABLE admin_divisions_spatial (
+    division_id INTEGER PRIMARY KEY REFERENCES admin_divisions(id) ON DELETE CASCADE,
+    geom GEOMETRY(GEOMETRY, 4326)
+);
+
+-- 创建 GIST 空间索引
+CREATE INDEX idx_admin_divisions_spatial_geom
+    ON admin_divisions_spatial USING GIST(geom);

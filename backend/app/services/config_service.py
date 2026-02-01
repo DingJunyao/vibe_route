@@ -24,7 +24,7 @@ class ConfigService:
         "registration_enabled": True,
         "invite_code_required": False,
         "default_map_provider": "amap",
-        "geocoding_provider": "nominatim",
+        "geocoding_provider": "gdf",  # 默认使用本地地理编码
         "show_road_sign_in_region_tree": True,
         "spatial_backend": "auto",  # 空间计算后端: auto | python | postgis
         "geocoding_config": {
@@ -32,14 +32,15 @@ class ConfigService:
                 "url": "http://localhost:8080",
                 "email": None,
             },
-            "gdf": {
-                "data_path": "data/area_data",
-            },
+            # GDF 使用 spatial_backend 配置，无需独立配置
             "amap": {
                 "api_key": "",
+                "freq": 3,
             },
             "baidu": {
                 "api_key": "",
+                "freq": 3,
+                "get_en_result": False,
             },
         },
         "map_layers": {

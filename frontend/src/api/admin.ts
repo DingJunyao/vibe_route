@@ -32,14 +32,15 @@ export interface SystemConfig {
       url: string
       email?: string
     }
-    gdf?: {
-      data_path: string
-    }
+    gdf?: Record<string, never>  // GDF 使用 spatial_backend 配置
     amap?: {
       api_key: string
+      freq: number
     }
     baidu?: {
       api_key: string
+      freq: number
+      get_en_result: boolean
     }
   }
   map_layers: Record<string, MapLayerConfig>
@@ -78,14 +79,15 @@ export interface ConfigUpdateData {
       url: string
       email?: string
     }
-    gdf?: {
-      data_path: string
-    }
+    gdf?: Record<string, never>  // GDF 使用 spatial_backend 配置
     amap?: {
       api_key: string
+      freq: number
     }
     baidu?: {
       api_key: string
+      freq: number
+      get_en_result: boolean
     }
   }
   map_layers?: Record<string, Partial<MapLayerConfig>>
@@ -214,10 +216,139 @@ export const adminApi = {
   getDatabaseInfo(): Promise<DatabaseInfo> {
     return http.get('/admin/database-info')
   },
+
+  // 获取行政区划数据统计
+  getAdminDivisionStats(): Promise<AdminDivisionStats> {
+    return http.get('/admin/admin-division-stats')
+  },
+
+  // ========== 特殊地名映射管理 ==========
+
+  // 获取特殊地名映射表
+  getSpecialPlaceMapping() {
+    return http.get('/admin/special-place-mapping') as Promise<SpecialPlaceMappingResponse>
+  },
+
+  // 更新特殊地名映射表
+  updateSpecialPlaceMapping(request: UpdateSpecialPlaceMappingRequest) {
+    return http.put('/admin/special-place-mapping', request) as Promise<{ message: string }>
+  },
+
+  // 重新生成英文名称
+  regenerateNameEn() {
+    return http.post('/admin/special-place-mapping/regenerate') as Promise<RegenerateNameEnResponse>
+  },
+
+  // ========== 边界数据管理 ==========
+
+  // 上传边界数据文件并创建后台任务
+  importBoundsData(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return http.post('/admin/import-bounds-data', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }) as Promise<{ message: string; task_id: number }>
+  },
+
+  // 获取边界导入任务状态
+  getBoundsImportTask(taskId: number) {
+    return http.get(`/admin/tasks/${taskId}`) as Promise<BoundsImportTask>
+  },
+
+  // 获取边界数据统计
+  getBoundsStats() {
+    return http.get('/admin/bounds-stats') as Promise<BoundsStatsResponse>
+  },
+
+  // 测试文件上传
+  testUpload(file: File) {
+    const formData = new FormData()
+    formData.append('file', file)
+    return http.post('/admin/test-upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }) as Promise<{ message: string; file_info: { filename: string; content_type: string; size: number } }>
+  },
+}
+
+// 边界导入任务状态
+export interface BoundsImportTask {
+  id: number
+  type: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  progress: number  // 0-100
+  result_path?: string  // 成功时的结果摘要
+  error_message?: string
+  created_at: string
+  is_finished: boolean
+}
+
+// 边界数据导入响应
+export interface BoundsImportResponse {
+  message: string
+  stats: {
+    total_files: number
+    updated: number
+    errors: number
+  }
+  error_details?: string[]
+}
+
+// 边界数据统计响应
+export interface BoundsStatsResponse {
+  by_level: Record<string, {
+    total: number
+    with_bounds: number
+  }>
+  missing_by_province: Array<{
+    province_code: string
+    province_name: string
+    missing_count: number
+    missing_areas: string
+  }>
 }
 
 // 数据库信息响应
 export interface DatabaseInfo {
   database_type: 'sqlite' | 'mysql' | 'postgresql'
   postgis_enabled: boolean
+}
+
+// 行政区划统计响应
+export interface AdminDivisionStats {
+  total: number
+  by_level: {
+    province: number
+    city: number
+    area: number
+  }
+  has_bounds: number
+  has_postgis: number
+  sample_missing_codes: Array<{
+    code: string
+    name: string
+    city_code: string | null
+    province_code: string | null
+  }>
+  error?: string
+}
+
+// 特殊地名映射响应
+export interface SpecialPlaceMappingResponse {
+  raw_yaml: string  // 原始 YAML 文件内容（保留注释和格式）
+  mappings: Record<string, string>  // 中文名称 -> 英文转写（解析后的映射，用于前端显示）
+  total: number
+}
+
+// 更新特殊地名映射请求
+export interface UpdateSpecialPlaceMappingRequest {
+  yaml_content: string  // 原始 YAML 内容（保留注释和格式）
+}
+
+// 重新生成英文名称响应
+export interface RegenerateNameEnResponse {
+  message: string
+  stats: {
+    total: number
+    updated: number
+  }
 }

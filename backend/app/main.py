@@ -2,13 +2,14 @@
 FastAPI 主应用
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-import logging
+import sys
 import traceback
 import uuid
 
@@ -17,13 +18,70 @@ from app.core.database import init_db
 from app.core.rate_limit import limiter
 from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket
 
-# 配置日志
-LOG_LEVEL = logging.DEBUG if settings.DEBUG else logging.WARNING
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# 配置 loguru 日志
+from loguru import logger as loguru_logger
+
+# 移除默认的 logger
+loguru_logger.remove()
+
+# 添加终端处理器（带颜色）
+loguru_logger.add(
+    sys.stderr,
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="DEBUG" if settings.DEBUG else "INFO",
+    colorize=True,
 )
-logger = logging.getLogger(__name__)
+
+# 添加文件处理器（所有日志）
+log_dir = Path(settings.LOG_DIR)
+log_dir.mkdir(parents=True, exist_ok=True)
+loguru_logger.add(
+    log_dir / "app_{time:YYYY-MM-DD}.log",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="DEBUG",
+    rotation="00:00",  # 每天午夜轮转
+    retention="30 days",  # 保留 30 天
+    compression="zip",  # 压缩旧日志
+    encoding="utf-8",
+)
+
+# 添加错误日志文件（仅错误级别）
+loguru_logger.add(
+    log_dir / "app_error_{time:YYYY-MM-DD}.log",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="ERROR",
+    rotation="00:00",
+    retention="90 days",
+    compression="zip",
+    encoding="utf-8",
+)
+
+# 将 loguru 导出为标准 logging 接口兼容
+class LoggerAdapter:
+    """适配器类，使 loguru 兼容标准 logging 接口"""
+
+    def __init__(self, logger_instance):
+        self._logger = logger_instance
+
+    def debug(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).debug(msg, *args, **kwargs)
+
+    def info(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).info(msg, *args, **kwargs)
+
+    def warning(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).warning(msg, *args, **kwargs)
+
+    def error(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).error(msg, *args, **kwargs)
+
+    def critical(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).critical(msg, *args, **kwargs)
+
+    def exception(self, msg, *args, **kwargs):
+        self._logger.opt(depth=1).exception(msg, *args, **kwargs)
+
+logger = LoggerAdapter(loguru_logger)
 
 
 @asynccontextmanager

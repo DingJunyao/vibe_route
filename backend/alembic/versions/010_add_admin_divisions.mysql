@@ -1,0 +1,10 @@
+-- MySQL 特定：添加空间索引提示
+-- MySQL 支持空间数据类型，但与 PostGIS 不完全兼容
+
+-- 为边界框字段创建复合索引
+CREATE INDEX idx_admin_divisions_bounds
+    ON admin_divisions(min_lat, max_lat, min_lon, max_lon);
+
+-- 可选：使用 MySQL 的空间函数
+-- ALTER TABLE admin_divisions ADD COLUMN geom GEOMETRY;
+-- CREATE SPATIAL INDEX idx_admin_divisions_geom ON admin_divisions(geom);

@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Vibe Route** 是一个基于 [gpxutil](https://github.com/DingJunyao/gpxutil) 构建的全栈 Web 轨迹管理系统。用户可以上传 GPX 文件，系统会解析轨迹数据，进行坐标转换（WGS84/GCJ02/BD09）、地理编码填充，并在地图上可视化展示。
 
+## Development
+
+对于 Python，我用的是 Anaconda，环境是 vibe_route。所有与 Python 相关的操作都要保证切换到这个环境。
+
+用的是什么数据库，看后端的 .env。
+
 ## Development Commands
 
 ### Backend

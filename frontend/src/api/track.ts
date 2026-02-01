@@ -137,6 +137,10 @@ export interface RegionNode {
   id: string
   name: string
   type: 'province' | 'city' | 'district' | 'road'
+  original_type?: 'province' | 'city' | 'district' | 'road'  // 原始类型（压缩前的类型）
+  original_name?: string  // 原始名称（压缩前的名称）
+  promoted_type?: 'province' | 'city' | 'district' | 'road'  // 提升显示的类型（子节点的类型）
+  promoted_name?: string  // 提升显示的名称（子节点的名称）
   road_number: string | null
   has_info: boolean  // 是否有详细信息
   distance: number  // 路径长度（米）

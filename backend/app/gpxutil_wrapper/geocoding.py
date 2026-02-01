@@ -9,7 +9,7 @@ import httpx
 
 from app.gpxutil_wrapper.coord_transform import convert_point, CoordinateType
 
-GeocodingProvider = Literal['nominatim', 'amap', 'baidu']
+GeocodingProvider = Literal['nominatim', 'gdf', 'amap', 'baidu']
 
 
 class GeocodingService:
@@ -308,8 +308,11 @@ class BaiduGeocoding(GeocodingService):
 
 def create_geocoding_service(provider: str, config: dict) -> GeocodingService:
     """创建地理编码服务实例"""
+    from app.gpxutil_wrapper.local_geocoding import LocalGeocodingService
+
     services: dict[str, type[GeocodingService]] = {
         'nominatim': NominatimGeocoding,
+        'gdf': LocalGeocodingService,
         'amap': AmapGeocoding,
         'baidu': BaiduGeocoding,
     }

@@ -371,10 +371,10 @@
                         <template #default="{ data }">
                           <div class="region-tree-node">
                             <div class="node-label">
-                              <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
-                                <LocationFilled v-if="data.type === 'province'" />
-                                <LocationFilled v-else-if="data.type === 'city'" />
-                                <LocationFilled v-else-if="data.type === 'district'" />
+                              <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
+                                <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
+                                <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
+                                <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
                               </el-icon>
                               <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                               <component v-else :is="() => renderNodeLabel(data)" />
@@ -588,10 +588,10 @@
                     <template #default="{ data }">
                       <div class="region-tree-node">
                         <div class="node-label">
-                          <el-icon v-if="data.type !== 'road'" class="node-icon" :class="`icon-${data.type}`">
-                            <LocationFilled v-if="data.type === 'province'" />
-                            <LocationFilled v-else-if="data.type === 'city'" />
-                            <LocationFilled v-else-if="data.type === 'district'" />
+                          <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
+                            <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
+                            <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
+                            <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
                           </el-icon>
                           <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
                           <component v-else :is="() => renderNodeLabel(data)" />
@@ -1119,6 +1119,19 @@ async function fetchRegions() {
 
 // 格式化节点显示名称
 function formatNodeLabel(node: RegionNode): string {
+  // 如果有提升显示的名称（子节点的名称），优先使用
+  if (node.promoted_name) {
+    // 对于提升显示的道路节点，使用道路编号格式
+    if (node.promoted_type === 'road' && node.road_number) {
+      const roadNumbers = node.road_number.split(',').map(s => s.trim()).join(' / ')
+      if (node.promoted_name && node.promoted_name !== '（无名）') {
+        return `${roadNumbers} ${node.promoted_name}`
+      }
+      return roadNumbers
+    }
+    return node.promoted_name
+  }
+
   // 道路节点的特殊格式：道路编号在前，道路名称在后
   if (node.type === 'road' && node.road_number) {
     const roadNumbers = node.road_number.split(',').map(s => s.trim()).join(' / ')

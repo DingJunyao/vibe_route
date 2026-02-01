@@ -434,8 +434,9 @@ class LiveRecordingService:
             try:
                 geo_service = await self._get_geocoding_service(db)
                 if geo_service:
-                    # get_point_info 参数顺序是 (lat, lon)，all_coords['gcj02'] 格式是 [lon, lat]
-                    geo_info = await geo_service.get_point_info(all_coords['gcj02'][1], all_coords['gcj02'][0])
+                    # 使用 WGS84 坐标查询本地地理编码服务（数据基于 WGS84）
+                    # get_point_info 参数顺序是 (lat, lon)，all_coords['wgs84'] 格式是 [lon, lat]
+                    geo_info = await geo_service.get_point_info(all_coords['wgs84'][1], all_coords['wgs84'][0])
                     if geo_info:
                         # 字段映射要与 track_service.py 一致：district <- area, road_number <- road_num
                         point.province = geo_info.get('province', '')

@@ -10,18 +10,26 @@
         <div class="header-right">
           <el-dropdown @command="handleCommand">
             <span class="user-info">
-              <el-icon><UserIcon /></el-icon>
+              <el-icon>
+                <UserIcon />
+              </el-icon>
               <span class="username">{{ authStore.user?.username }}</span>
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              <el-icon class="el-icon--right">
+                <ArrowDown />
+              </el-icon>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="tracks">
-                  <el-icon><List /></el-icon>
+                  <el-icon>
+                    <List />
+                  </el-icon>
                   轨迹列表
                 </el-dropdown-item>
                 <el-dropdown-item command="logout">
-                  <el-icon><SwitchButton /></el-icon>
+                  <el-icon>
+                    <SwitchButton />
+                  </el-icon>
                   退出登录
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -42,258 +50,229 @@
               <!-- 加载完成后显示内容 -->
               <el-card v-else shadow="never">
                 <el-form :model="config" label-width="150px" class="config-form">
-                <!-- 注册设置 -->
-                <div class="form-section">
-                  <div class="section-title">注册设置</div>
-                  <el-form-item label="允许注册">
-                    <el-switch v-model="config.registration_enabled" />
-                    <span class="form-tip">是否开放用户注册</span>
-                  </el-form-item>
-                  <el-form-item label="需要邀请码">
-                    <el-switch v-model="config.invite_code_required" />
-                    <span class="form-tip">注册时是否需要邀请码</span>
-                  </el-form-item>
-                </div>
-
-                <!-- 显示设置 -->
-                <div class="form-section">
-                  <div class="section-title">显示设置</div>
-                  <el-form-item label="道路编号显示标牌">
-                    <el-switch v-model="config.show_road_sign_in_region_tree" />
-                    <span class="form-tip">开启后，经过区域中的道路编号将显示为对应的道路标志 SVG</span>
-                  </el-form-item>
-                </div>
-
-                <!-- 地图设置 -->
-                <div class="form-section">
-                  <div class="section-title">地图设置</div>
-                  <div class="section-description">
-                    <p>选择单选按钮设为默认地图，使用开关启用/禁用地图，<span class="desktop-only">拖拽</span><span class="mobile-only">点击左边的向上 / 向下按钮</span>调整显示顺序。</p>
-                    <p>对于高德地图、百度地图、腾讯地图，如果不填 Key，仍然可以使用其点阵图层，但清晰度、更新速度不如矢量图层。</p>
+                  <!-- 注册设置 -->
+                  <div class="form-section">
+                    <div class="section-title">注册设置</div>
+                    <el-form-item label="允许注册">
+                      <el-switch v-model="config.registration_enabled" />
+                      <span class="form-tip">是否开放用户注册</span>
+                    </el-form-item>
+                    <el-form-item label="需要邀请码">
+                      <el-switch v-model="config.invite_code_required" />
+                      <span class="form-tip">注册时是否需要邀请码</span>
+                    </el-form-item>
                   </div>
-                  <draggable
-                    v-model="allMapLayers"
-                    item-key="id"
-                    handle=".drag-handle"
-                    @end="onDragEnd"
-                    class="map-layers-list"
-                  >
-                    <template #item="{ element: layer }">
-                      <div
-                        class="map-layer-item"
-                        :class="{ 'is-default': layer.id === config.default_map_provider }"
-                      >
-                        <!-- 第一行：拖拽手柄、名称、开关、状态 -->
-                        <div class="map-layer-main">
-                          <el-icon class="drag-handle desktop-only">
-                            <Rank />
-                          </el-icon>
-                          <!-- 移动端排序按钮 -->
-                          <div class="mobile-sort-buttons">
-                            <el-button
-                              type="primary"
-                              :icon="ArrowUp"
-                              size="small"
-                              text
-                              :disabled="isFirstLayer(layer)"
-                              @click="moveLayerUp(layer)"
-                            />
-                            <el-button
-                              type="primary"
-                              :icon="ArrowDown"
-                              size="small"
-                              text
-                              :disabled="isLastLayer(layer)"
-                              @click="moveLayerDown(layer)"
-                            />
-                          </div>
-                          <div class="layer-info">
-                            <el-radio
-                              :model-value="config.default_map_provider"
-                              :value="layer.id"
-                              @change="config.default_map_provider = layer.id"
-                              :disabled="!layer.enabled"
-                            >
-                              <span class="layer-name">{{ layer.name }}</span>
-                              <span class="layer-id">({{ layer.id }})</span>
-                            </el-radio>
-                          </div>
-                          <el-switch
-                            v-model="layer.enabled"
-                            @change="onMapLayerToggle(layer)"
-                            :disabled="layer.id === config.default_map_provider && layer.enabled"
-                          />
-                          <span class="layer-status">
-                            <template v-if="layer.id === config.default_map_provider">
-                              <el-tag size="small" type="success">默认</el-tag>
-                            </template>
-                            <template v-else-if="layer.enabled">
-                              <el-tag size="small" type="info">已启用</el-tag>
-                            </template>
-                            <template v-else>
-                              <el-tag size="small" type="warning">已禁用</el-tag>
-                            </template>
-                          </span>
-                        </div>
-                        <!-- 第二行：API 配置输入框 -->
-                        <div class="map-layer-config">
-                          <!-- 天地图 tk 输入框 -->
-                          <el-input
-                            v-if="layer.id === 'tianditu'"
-                            v-model="layer.tk"
-                            placeholder="启用了瓦片服务的浏览器端应用 tk"
-                            clearable
-                            show-password
-                            class="config-input"
-                          />
-                          <!-- 高德地图 JS API Key 和安全密钥输入框 -->
-                          <template v-if="layer.id === 'amap'">
-                            <el-input
-                              v-model="layer.api_key"
-                              placeholder="绑定服务为“Web 端”的 Key（矢量图必填）"
-                              clearable
-                              show-password
-                              class="config-input"
-                            />
-                            <el-input
-                              v-model="layer.security_js_code"
-                              placeholder="对应安全密钥（矢量图可选，如有必填）"
-                              clearable
-                              show-password
-                              class="config-input"
-                            />
-                          </template>
-                          <!-- 腾讯地图 API Key 输入框 -->
-                          <el-input
-                            v-if="layer.id === 'tencent'"
-                            v-model="layer.api_key"
-                            placeholder="Key（矢量图必填）"
-                            clearable
-                            show-password
-                            class="config-input"
-                          />
-                          <!-- 百度地图 API Key 输入框 -->
-                          <el-input
-                            v-if="layer.id === 'baidu'"
-                            v-model="layer.api_key"
-                            placeholder="浏览器端应用 AK（矢量图必填）"
-                            clearable
-                            show-password
-                            class="config-input"
-                          />
-                        </div>
-                      </div>
-                    </template>
-                  </draggable>
-                </div>
 
-                <!-- 地理编码设置 -->
-                <div class="form-section">
-                  <div class="section-title">地理编码设置</div>
-                  <el-form-item label="编码提供商">
-                    <el-radio-group v-model="config.geocoding_provider" @change="onGeocodingProviderChange">
-                      <el-radio value="nominatim">Nominatim</el-radio>
-                      <el-radio value="gdf">GDF</el-radio>
-                      <el-radio value="amap">高德地图</el-radio>
-                      <el-radio value="baidu">百度地图</el-radio>
-                    </el-radio-group>
-                  </el-form-item>
-
-                  <!-- Nominatim 配置 -->
-                  <template v-if="config.geocoding_provider === 'nominatim'">
-                    <el-form-item label="Nominatim URL">
-                      <el-input v-model="config.geocoding_config.nominatim.url" placeholder="http://localhost:8080" />
-                      <span class="form-hint">自建 Nominatim 服务的地址</span>
+                  <!-- 显示设置 -->
+                  <div class="form-section">
+                    <div class="section-title">显示设置</div>
+                    <el-form-item label="道路编号显示标牌">
+                      <el-switch v-model="config.show_road_sign_in_region_tree" />
+                      <span class="form-tip">开启后，经过区域中的道路编号将显示为对应的道路标志 SVG</span>
                     </el-form-item>
-                  </template>
-
-                  <!-- GDF 配置 -->
-                  <template v-if="config.geocoding_provider === 'gdf'">
-                    <el-form-item label="数据路径">
-                      <el-input v-model="config.geocoding_config.gdf.data_path" placeholder="data/area_data" />
-                    </el-form-item>
-                  </template>
-
-                  <!-- 高德地图配置 -->
-                  <template v-if="config.geocoding_provider === 'amap'">
-                    <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.amap.api_key" placeholder="绑定服务为“Web 服务”的 Key" show-password />
-                    </el-form-item>
-                    <el-form-item label="并发频率">
-                      <el-input-number v-model="config.geocoding_config.amap.freq" :min="1" :max="50" controls-position="right" />
-                      <span class="form-hint">每秒请求数，建议值为 3</span>
-                    </el-form-item>
-                  </template>
-
-                  <!-- 百度地图配置 -->
-                  <template v-if="config.geocoding_provider === 'baidu'">
-                    <el-form-item label="API Key">
-                      <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="服务端应用 AK" show-password />
-                    </el-form-item>
-                    <el-form-item label="并发频率">
-                      <el-input-number v-model="config.geocoding_config.baidu.freq" :min="1" :max="50" controls-position="right" />
-                      <span class="form-hint">每秒请求数，建议值为 3</span>
-                    </el-form-item>
-                    <el-form-item label="获取英文信息">
-                      <el-switch v-model="config.geocoding_config.baidu.get_en_result" />
-                      <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
-                    </el-form-item>
-                  </template>
-                </div>
-
-                <!-- 空间计算设置（仅 PostgreSQL 显示） -->
-                <div v-if="databaseInfo && databaseInfo.database_type === 'postgresql'" class="form-section">
-                  <div class="section-title">空间计算设置</div>
-                  <!-- 未启用 PostGIS -->
-                  <div v-if="!databaseInfo.postgis_enabled" class="postgis-notice">
-                    <el-icon><InfoFilled /></el-icon>
-                    <span>启用 PostGIS 可以更高效地处理地理相关数据。请参考相关文档开启。</span>
                   </div>
-                  <!-- 已启用 PostGIS -->
-                  <template v-else>
-                    <el-form-item label="计算后端">
-                      <el-radio-group v-model="config.spatial_backend">
-                        <el-radio value="auto">自动检测</el-radio>
-                        <el-radio value="python">Python (兼容所有数据库)</el-radio>
-                        <el-radio value="postgis">PostGIS</el-radio>
+
+                  <!-- 地图设置 -->
+                  <div class="form-section">
+                    <div class="section-title">地图设置</div>
+                    <div class="section-description">
+                      <p>选择单选按钮设为默认地图，使用开关启用/禁用地图，<span class="desktop-only">拖拽</span><span class="mobile-only">点击左边的向上
+                          /
+                          向下按钮</span>调整显示顺序。</p>
+                      <p>对于高德地图、百度地图、腾讯地图，如果不填 Key，仍然可以使用其点阵图层，但清晰度、更新速度不如矢量图层。</p>
+                    </div>
+                    <draggable v-model="allMapLayers" item-key="id" handle=".drag-handle" @end="onDragEnd"
+                      class="map-layers-list">
+                      <template #item="{ element: layer }">
+                        <div class="map-layer-item" :class="{ 'is-default': layer.id === config.default_map_provider }">
+                          <!-- 第一行：拖拽手柄、名称、开关、状态 -->
+                          <div class="map-layer-main">
+                            <el-icon class="drag-handle desktop-only">
+                              <Rank />
+                            </el-icon>
+                            <!-- 移动端排序按钮 -->
+                            <div class="mobile-sort-buttons">
+                              <el-button type="primary" :icon="ArrowUp" size="small" text
+                                :disabled="isFirstLayer(layer)" @click="moveLayerUp(layer)" />
+                              <el-button type="primary" :icon="ArrowDown" size="small" text
+                                :disabled="isLastLayer(layer)" @click="moveLayerDown(layer)" />
+                            </div>
+                            <div class="layer-info">
+                              <el-radio :model-value="config.default_map_provider" :value="layer.id"
+                                @change="config.default_map_provider = layer.id" :disabled="!layer.enabled">
+                                <span class="layer-name">{{ layer.name }}</span>
+                                <span class="layer-id">({{ layer.id }})</span>
+                              </el-radio>
+                            </div>
+                            <el-switch v-model="layer.enabled" @change="onMapLayerToggle(layer)"
+                              :disabled="layer.id === config.default_map_provider && layer.enabled" />
+                            <span class="layer-status">
+                              <template v-if="layer.id === config.default_map_provider">
+                                <el-tag size="small" type="success">默认</el-tag>
+                              </template>
+                              <template v-else-if="layer.enabled">
+                                <el-tag size="small" type="info">已启用</el-tag>
+                              </template>
+                              <template v-else>
+                                <el-tag size="small" type="warning">已禁用</el-tag>
+                              </template>
+                            </span>
+                          </div>
+                          <!-- 第二行：API 配置输入框 -->
+                          <div class="map-layer-config">
+                            <!-- 天地图 tk 输入框 -->
+                            <el-input v-if="layer.id === 'tianditu'" v-model="layer.tk" placeholder="启用了瓦片服务的浏览器端应用 tk"
+                              clearable show-password class="config-input" />
+                            <!-- 高德地图 JS API Key 和安全密钥输入框 -->
+                            <template v-if="layer.id === 'amap'">
+                              <el-input v-model="layer.api_key" placeholder="绑定服务为“Web 端”的 Key（矢量图必填）" clearable
+                                show-password class="config-input" />
+                              <el-input v-model="layer.security_js_code" placeholder="对应安全密钥（矢量图可选，如有必填）" clearable
+                                show-password class="config-input" />
+                            </template>
+                            <!-- 腾讯地图 API Key 输入框 -->
+                            <el-input v-if="layer.id === 'tencent'" v-model="layer.api_key" placeholder="Key（矢量图必填）"
+                              clearable show-password class="config-input" />
+                            <!-- 百度地图 API Key 输入框 -->
+                            <el-input v-if="layer.id === 'baidu'" v-model="layer.api_key" placeholder="浏览器端应用 AK（矢量图必填）"
+                              clearable show-password class="config-input" />
+                          </div>
+                        </div>
+                      </template>
+                    </draggable>
+                  </div>
+
+                  <!-- 地理编码设置 -->
+                  <div class="form-section">
+                    <div class="section-title">地理编码设置</div>
+                    <el-form-item label="编码提供商">
+                      <el-radio-group v-model="config.geocoding_provider" @change="onGeocodingProviderChange">
+                        <el-radio value="gdf">GDF</el-radio>
+                        <el-radio value="nominatim">Nominatim</el-radio>
+                        <el-radio value="amap">高德地图</el-radio>
+                        <el-radio value="baidu">百度地图</el-radio>
                       </el-radio-group>
                       <div class="radio-hint">
-                        <template v-if="config.spatial_backend === 'auto'">
-                          自动检测数据库能力，PostgreSQL + PostGIS 环境自动使用高性能实现
+                        <template v-if="config.geocoding_provider === 'gdf'">
+                          只能够读取行政区划，且只能精确到县级。使用“空间计算设置”中的配置。
                         </template>
-                        <template v-else-if="config.spatial_backend === 'python'">
-                          使用 Python 计算，兼容所有数据库但性能较低
+                        <template v-else-if="config.geocoding_provider === 'nominatim'">
+                          需自行部署，部署麻烦，占用空间大（中国大陆的数据下载解压处理后会占用 126 GB，初次部署要花费 20
+                          小时）；但能够读取行政区划的英文（只有县级有行政级别名称）以及道路信息（不稳定，部分道路能读取英文）
                         </template>
-                        <template v-else>
-                          使用 PostGIS 空间函数，高性能
+                        <template v-else-if="config.geocoding_provider === 'amap'">
+                          配额较多（个人开发者每月 150,000 次 API 调用），但个人版不支持英文
+                        </template>
+                        <template v-else-if="config.geocoding_provider === 'baidu'">
+                          配额小（个人开发者每日 300 次 API 调用，每秒一次点位记录只能处理五分钟的）
                         </template>
                       </div>
                     </el-form-item>
-                  </template>
-                </div>
 
-                <!-- 道路标志缓存 -->
-                <div class="form-section">
-                  <div class="section-title">道路标志缓存</div>
-                  <el-form-item label="清除缓存">
-                    <el-button @click="clearRoadSignCache('way')" :loading="clearingWayCache">
-                      清除普通道路缓存
-                    </el-button>
-                    <el-button @click="clearRoadSignCache('expwy')" :loading="clearingExpwyCache">
-                      清除高速公路缓存
-                    </el-button>
-                    <el-button type="danger" @click="clearRoadSignCache()" :loading="clearingAllCache">
-                      清除全部缓存
-                    </el-button>
+                    <!-- Nominatim 配置 -->
+                    <template v-if="config.geocoding_provider === 'nominatim'">
+                      <el-form-item label="Nominatim URL">
+                        <el-input v-model="config.geocoding_config.nominatim.url" placeholder="http://localhost:8080" />
+                        <span class="form-hint">自建 Nominatim 服务的地址</span>
+                      </el-form-item>
+                    </template>
+
+                    <!-- GDF 配置 -->
+                    <template v-if="config.geocoding_provider === 'gdf'">
+                      <el-form-item label="数据统计">
+                        <el-button @click="showAdminDivisionStats" :loading="loadingDivisionStats">
+                          查看行政区划数据
+                        </el-button>
+                        <span class="form-hint">检查数据库中的行政区划数据完整性</span>
+                      </el-form-item>
+                    </template>
+
+                    <!-- 高德地图配置 -->
+                    <template v-if="config.geocoding_provider === 'amap'">
+                      <el-form-item label="API Key">
+                        <el-input v-model="config.geocoding_config.amap.api_key" placeholder="绑定服务为“Web 服务”的 Key"
+                          show-password />
+                      </el-form-item>
+                      <el-form-item label="并发频率">
+                        <el-input-number v-model="config.geocoding_config.amap.freq" :min="1" :max="50"
+                          controls-position="right" />
+                        <span class="form-hint">每秒请求数，建议值为 3</span>
+                      </el-form-item>
+                    </template>
+
+                    <!-- 百度地图配置 -->
+                    <template v-if="config.geocoding_provider === 'baidu'">
+                      <el-form-item label="API Key">
+                        <el-input v-model="config.geocoding_config.baidu.api_key" placeholder="服务端应用 AK"
+                          show-password />
+                      </el-form-item>
+                      <el-form-item label="并发频率">
+                        <el-input-number v-model="config.geocoding_config.baidu.freq" :min="1" :max="50"
+                          controls-position="right" />
+                        <span class="form-hint">每秒请求数，建议值为 3</span>
+                      </el-form-item>
+                      <el-form-item label="获取英文信息">
+                        <el-switch v-model="config.geocoding_config.baidu.get_en_result" />
+                        <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
+                      </el-form-item>
+                    </template>
+                  </div>
+
+                  <!-- 空间计算设置（仅 PostgreSQL 显示） -->
+                  <div v-if="databaseInfo && databaseInfo.database_type === 'postgresql'" class="form-section">
+                    <div class="section-title">空间计算设置</div>
+                    <!-- 未启用 PostGIS -->
+                    <div v-if="!databaseInfo.postgis_enabled" class="postgis-notice">
+                      <el-icon>
+                        <InfoFilled />
+                      </el-icon>
+                      <span>启用 PostGIS 可以更高效地处理地理相关数据。请参考相关文档开启。</span>
+                    </div>
+                    <!-- 已启用 PostGIS -->
+                    <template v-else>
+                      <el-form-item label="计算后端">
+                        <el-radio-group v-model="config.spatial_backend">
+                          <el-radio value="auto">自动检测</el-radio>
+                          <el-radio value="python">Python (兼容所有数据库)</el-radio>
+                          <el-radio value="postgis">PostGIS</el-radio>
+                        </el-radio-group>
+                        <div class="radio-hint">
+                          <template v-if="config.spatial_backend === 'auto'">
+                            自动检测数据库能力，PostgreSQL + PostGIS 环境自动使用高性能实现
+                          </template>
+                          <template v-else-if="config.spatial_backend === 'python'">
+                            使用 Python 计算，兼容所有数据库但性能较低
+                          </template>
+                          <template v-else>
+                            使用 PostGIS 空间函数，高性能
+                          </template>
+                        </div>
+                      </el-form-item>
+                    </template>
+                  </div>
+
+                  <!-- 道路标志缓存 -->
+                  <div class="form-section">
+                    <div class="section-title">道路标志缓存</div>
+                    <el-form-item label="清除缓存">
+                      <el-button @click="clearRoadSignCache('way')" :loading="clearingWayCache">
+                        清除普通道路缓存
+                      </el-button>
+                      <el-button @click="clearRoadSignCache('expwy')" :loading="clearingExpwyCache">
+                        清除高速公路缓存
+                      </el-button>
+                      <el-button type="danger" @click="clearRoadSignCache()" :loading="clearingAllCache">
+                        清除全部缓存
+                      </el-button>
+                    </el-form-item>
+                  </div>
+
+                  <el-form-item>
+                    <el-button type="primary" @click="saveConfig" :loading="saving">保存配置</el-button>
+                    <el-button @click="loadConfig">重置</el-button>
                   </el-form-item>
-                </div>
-
-                <el-form-item>
-                  <el-button type="primary" @click="saveConfig" :loading="saving">保存配置</el-button>
-                  <el-button @click="loadConfig">重置</el-button>
-                </el-form-item>
-              </el-form>
-            </el-card>
+                </el-form>
+              </el-card>
             </div>
           </el-tab-pane>
 
@@ -304,23 +283,14 @@
               <el-row :gutter="12">
                 <!-- 搜索 -->
                 <el-col :xs="24" :sm="12" :md="8">
-                  <el-input
-                    v-model="userSearchQuery"
-                    placeholder="搜索用户名或邮箱..."
-                    :prefix-icon="Search"
-                    clearable
-                    @input="handleUserSearch"
-                  />
+                  <el-input v-model="userSearchQuery" placeholder="搜索用户名或邮箱..." :prefix-icon="Search" clearable
+                    @input="handleUserSearch" />
                 </el-col>
                 <!-- 排序 -->
                 <el-col :xs="12" :sm="12" :md="8">
                   <div class="sort-buttons">
-                    <el-button
-                      v-for="item in userSortOptions"
-                      :key="item.value"
-                      :type="userSortBy === item.value ? 'primary' : ''"
-                      @click="handleUserSortClick(item.value)"
-                    >
+                    <el-button v-for="item in userSortOptions" :key="item.value"
+                      :type="userSortBy === item.value ? 'primary' : ''" @click="handleUserSortClick(item.value)">
                       {{ item.label }}
                       <el-icon v-if="userSortBy === item.value" class="sort-icon">
                         <component :is="userSortOrder === 'desc' ? ArrowDown : ArrowUp" />
@@ -335,7 +305,9 @@
                       <template #reference>
                         <el-button :type="hasActiveFilters ? 'primary' : ''">
                           筛选
-                          <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+                          <el-icon class="el-icon--right">
+                            <ArrowDown />
+                          </el-icon>
                         </el-button>
                       </template>
                       <div class="filter-popover-content">
@@ -402,76 +374,33 @@
                 </el-table-column>
                 <el-table-column label="操作" width="280" fixed="right">
                   <template #default="{ row }">
-                    <el-button
-                      v-if="!row.is_admin && !isCurrentUser(row) && !isFirstUser(row)"
-                      type="primary"
-                      size="small"
-                      text
-                      @click="toggleUserAdmin(row)"
-                    >
+                    <el-button v-if="!row.is_admin && !isCurrentUser(row) && !isFirstUser(row)" type="primary"
+                      size="small" text @click="toggleUserAdmin(row)">
                       设为管理员
                     </el-button>
-                    <el-button
-                      v-else
-                      type="info"
-                      size="small"
-                      text
-                      :disabled="isCurrentUser(row) || isFirstUser(row)"
-                    >
+                    <el-button v-else type="info" size="small" text :disabled="isCurrentUser(row) || isFirstUser(row)">
                       {{ row.is_admin ? '已是管理员' : '不可操作' }}
                     </el-button>
-                    <el-button
-                      v-if="row.is_active && !isCurrentUser(row) && !isFirstUser(row)"
-                      type="warning"
-                      size="small"
-                      text
-                      @click="toggleUserActive(row)"
-                    >
+                    <el-button v-if="row.is_active && !isCurrentUser(row) && !isFirstUser(row)" type="warning"
+                      size="small" text @click="toggleUserActive(row)">
                       禁用
                     </el-button>
-                    <el-button
-                      v-else-if="!row.is_active && !isCurrentUser(row) && !isFirstUser(row)"
-                      type="success"
-                      size="small"
-                      text
-                      @click="toggleUserActive(row)"
-                    >
+                    <el-button v-else-if="!row.is_active && !isCurrentUser(row) && !isFirstUser(row)" type="success"
+                      size="small" text @click="toggleUserActive(row)">
                       启用
                     </el-button>
-                    <el-button
-                      v-else
-                      type="info"
-                      size="small"
-                      text
-                      disabled
-                    >
+                    <el-button v-else type="info" size="small" text disabled>
                       {{ row.is_active ? '不可操作' : '不可操作' }}
                     </el-button>
-                    <el-button
-                      v-if="!isCurrentUser(row) && !isFirstUser(row)"
-                      type="info"
-                      size="small"
-                      text
-                      @click="showResetPasswordDialog(row)"
-                    >
+                    <el-button v-if="!isCurrentUser(row) && !isFirstUser(row)" type="info" size="small" text
+                      @click="showResetPasswordDialog(row)">
                       重置密码
                     </el-button>
-                    <el-button
-                      v-if="!isCurrentUser(row) && !isFirstUser(row)"
-                      type="danger"
-                      size="small"
-                      text
-                      @click="deleteUser(row)"
-                    >
+                    <el-button v-if="!isCurrentUser(row) && !isFirstUser(row)" type="danger" size="small" text
+                      @click="deleteUser(row)">
                       删除
                     </el-button>
-                    <el-button
-                      v-else
-                      type="info"
-                      size="small"
-                      text
-                      disabled
-                    >
+                    <el-button v-else type="info" size="small" text disabled>
                       不可操作
                     </el-button>
                   </template>
@@ -507,52 +436,27 @@
                     </div>
                   </div>
                   <div class="mobile-card-actions">
-                    <el-button
-                      v-if="!user.is_admin && !isCurrentUser(user) && !isFirstUser(user)"
-                      type="primary"
-                      size="small"
-                      @click="toggleUserAdmin(user)"
-                    >
+                    <el-button v-if="!user.is_admin && !isCurrentUser(user) && !isFirstUser(user)" type="primary"
+                      size="small" @click="toggleUserAdmin(user)">
                       设为管理员
                     </el-button>
-                    <el-button
-                      v-if="user.is_active && !isCurrentUser(user) && !isFirstUser(user)"
-                      type="warning"
-                      size="small"
-                      @click="toggleUserActive(user)"
-                    >
+                    <el-button v-if="user.is_active && !isCurrentUser(user) && !isFirstUser(user)" type="warning"
+                      size="small" @click="toggleUserActive(user)">
                       禁用
                     </el-button>
-                    <el-button
-                      v-else-if="!user.is_active && !isCurrentUser(user) && !isFirstUser(user)"
-                      type="success"
-                      size="small"
-                      @click="toggleUserActive(user)"
-                    >
+                    <el-button v-else-if="!user.is_active && !isCurrentUser(user) && !isFirstUser(user)" type="success"
+                      size="small" @click="toggleUserActive(user)">
                       启用
                     </el-button>
-                    <el-button
-                      v-if="!isCurrentUser(user) && !isFirstUser(user)"
-                      type="info"
-                      size="small"
-                      @click="showResetPasswordDialog(user)"
-                    >
+                    <el-button v-if="!isCurrentUser(user) && !isFirstUser(user)" type="info" size="small"
+                      @click="showResetPasswordDialog(user)">
                       重置密码
                     </el-button>
-                    <el-button
-                      v-if="!isCurrentUser(user) && !isFirstUser(user)"
-                      type="danger"
-                      size="small"
-                      @click="deleteUser(user)"
-                    >
+                    <el-button v-if="!isCurrentUser(user) && !isFirstUser(user)" type="danger" size="small"
+                      @click="deleteUser(user)">
                       删除
                     </el-button>
-                    <el-button
-                      v-if="isCurrentUser(user) || isFirstUser(user)"
-                      type="info"
-                      size="small"
-                      disabled
-                    >
+                    <el-button v-if="isCurrentUser(user) || isFirstUser(user)" type="info" size="small" disabled>
                       不可操作
                     </el-button>
                   </div>
@@ -562,15 +466,10 @@
 
             <!-- 分页 -->
             <div class="pagination" v-if="users.length > 0">
-              <el-pagination
-                v-model:current-page="usersCurrentPage"
-                v-model:page-size="usersPageSize"
-                :page-sizes="[10, 20, 50, 100]"
-                :total="usersTotal"
+              <el-pagination v-model:current-page="usersCurrentPage" v-model:page-size="usersPageSize"
+                :page-sizes="[10, 20, 50, 100]" :total="usersTotal"
                 :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
-                @current-change="loadUsers"
-                @size-change="loadUsers"
-              />
+                @current-change="loadUsers" @size-change="loadUsers" />
             </div>
           </el-tab-pane>
 
@@ -624,13 +523,7 @@
                 </el-table-column>
                 <el-table-column label="操作" width="100" fixed="right">
                   <template #default="{ row }">
-                    <el-button
-                      v-if="row.is_valid"
-                      type="danger"
-                      size="small"
-                      text
-                      @click="deleteInviteCode(row)"
-                    >
+                    <el-button v-if="row.is_valid" type="danger" size="small" text @click="deleteInviteCode(row)">
                       删除
                     </el-button>
                     <el-button v-else type="info" size="small" text disabled>
@@ -656,7 +549,8 @@
                     </div>
                     <div class="mobile-card-row">
                       <span class="mobile-card-label">过期时间</span>
-                      <span class="mobile-card-value">{{ inviteCode.expires_at ? formatDateTime(inviteCode.expires_at) : '永久有效' }}</span>
+                      <span class="mobile-card-value">{{ inviteCode.expires_at ? formatDateTime(inviteCode.expires_at) :
+                        '永久有效' }}</span>
                     </div>
                     <div class="mobile-card-row">
                       <span class="mobile-card-label">创建时间</span>
@@ -664,12 +558,8 @@
                     </div>
                   </div>
                   <div class="mobile-card-actions">
-                    <el-button
-                      v-if="inviteCode.is_valid"
-                      type="danger"
-                      size="small"
-                      @click="deleteInviteCode(inviteCode)"
-                    >
+                    <el-button v-if="inviteCode.is_valid" type="danger" size="small"
+                      @click="deleteInviteCode(inviteCode)">
                       删除
                     </el-button>
                     <el-button v-else type="info" size="small" disabled>
@@ -682,165 +572,256 @@
 
             <!-- 分页 -->
             <div class="pagination" v-if="inviteCodes.length > 0">
-              <el-pagination
-                v-model:current-page="inviteCodesCurrentPage"
-                v-model:page-size="inviteCodesPageSize"
-                :page-sizes="[10, 20, 50, 100]"
-                :total="inviteCodesTotal"
+              <el-pagination v-model:current-page="inviteCodesCurrentPage" v-model:page-size="inviteCodesPageSize"
+                :page-sizes="[10, 20, 50, 100]" :total="inviteCodesTotal"
                 :layout="isMobile ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper'"
-                @current-change="loadInviteCodes"
-                @size-change="loadInviteCodes"
-              />
+                @current-change="loadInviteCodes" @size-change="loadInviteCodes" />
             </div>
           </el-tab-pane>
 
           <!-- 字体管理 -->
           <el-tab-pane label="字体管理" name="fonts">
             <div class="fonts-tab-content">
-            <!-- 加载中显示骨架屏 -->
-            <div v-if="loadingFonts" class="fonts-skeleton">
-              <el-skeleton :rows="8" animated />
-            </div>
+              <!-- 加载中显示骨架屏 -->
+              <div v-if="loadingFonts" class="fonts-skeleton">
+                <el-skeleton :rows="8" animated />
+              </div>
 
-            <!-- 加载完成后显示内容 -->
-            <template v-else>
-            <!-- 激活字体选择 -->
-            <el-card shadow="never" style="margin-bottom: 16px;">
-              <template #header>
-                <span>激活字体选择</span>
-              </template>
-              <el-row :gutter="16">
-                <el-col :xs="24" :sm="8">
-                  <div class="font-selector-item">
-                    <div class="font-selector-label">A 型字体</div>
-                    <div class="font-selector-desc">用于中文标题（如"国家高速"、"京"）</div>
-                    <el-select
-                      :model-value="activeFonts.font_a"
-                      @change="(val) => setActiveFont('a', val)"
-                      placeholder="选择 A 型字体"
-                      style="width: 100%"
-                    >
-                      <el-option
-                        v-for="font in fonts"
-                        :key="font.filename"
-                        :label="font.filename"
-                        :value="font.filename"
-                      />
-                    </el-select>
-                  </div>
-                </el-col>
-                <el-col :xs="24" :sm="8">
-                  <div class="font-selector-item">
-                    <div class="font-selector-label">B 型字体</div>
-                    <div class="font-selector-desc">用于主数字（如"G5"、"45"）</div>
-                    <el-select
-                      :model-value="activeFonts.font_b"
-                      @change="(val) => setActiveFont('b', val)"
-                      placeholder="选择 B 型字体"
-                      style="width: 100%"
-                    >
-                      <el-option
-                        v-for="font in fonts"
-                        :key="font.filename"
-                        :label="font.filename"
-                        :value="font.filename"
-                      />
-                    </el-select>
-                  </div>
-                </el-col>
-                <el-col :xs="24" :sm="8">
-                  <div class="font-selector-item">
-                    <div class="font-selector-label">C 型字体</div>
-                    <div class="font-selector-desc">用于小数字（如"01"）</div>
-                    <el-select
-                      :model-value="activeFonts.font_c"
-                      @change="(val) => setActiveFont('c', val)"
-                      placeholder="选择 C 型字体"
-                      style="width: 100%"
-                    >
-                      <el-option
-                        v-for="font in fonts"
-                        :key="font.filename"
-                        :label="font.filename"
-                        :value="font.filename"
-                      />
-                    </el-select>
-                  </div>
-                </el-col>
-              </el-row>
-              <el-alert
-                v-if="!activeFonts.font_a || !activeFonts.font_b || !activeFonts.font_c"
-                type="warning"
-                :closable="false"
-                style="margin-top: 12px;"
-              >
-                字体未完整配置，道路标志生成功能将被禁用
-              </el-alert>
-            </el-card>
-            </template>
-
-            <!-- 字体文件列表 -->
-            <el-card shadow="never">
-              <template #header>
-                <div class="card-header">
-                  <span>字体文件列表</span>
-                  <el-upload
-                    :auto-upload="false"
-                    :show-file-list="false"
-                    :on-change="handleFontUpload"
-                    accept=".ttf,.otf,.ttc"
-                  >
-                    <el-button type="primary" :icon="Plus">上传字体</el-button>
-                  </el-upload>
-                </div>
+              <!-- 加载完成后显示内容 -->
+              <template v-else>
+                <!-- 激活字体选择 -->
+                <el-card shadow="never" style="margin-bottom: 16px;">
+                  <template #header>
+                    <span>激活字体选择</span>
+                  </template>
+                  <el-row :gutter="16">
+                    <el-col :xs="24" :sm="8">
+                      <div class="font-selector-item">
+                        <div class="font-selector-label">A 型字体</div>
+                        <div class="font-selector-desc">用于中文标题（如"国家高速"、"京"）</div>
+                        <el-select :model-value="activeFonts.font_a" @change="(val) => setActiveFont('a', val)"
+                          placeholder="选择 A 型字体" style="width: 100%">
+                          <el-option v-for="font in fonts" :key="font.filename" :label="font.filename"
+                            :value="font.filename" />
+                        </el-select>
+                      </div>
+                    </el-col>
+                    <el-col :xs="24" :sm="8">
+                      <div class="font-selector-item">
+                        <div class="font-selector-label">B 型字体</div>
+                        <div class="font-selector-desc">用于主数字（如"G5"、"45"）</div>
+                        <el-select :model-value="activeFonts.font_b" @change="(val) => setActiveFont('b', val)"
+                          placeholder="选择 B 型字体" style="width: 100%">
+                          <el-option v-for="font in fonts" :key="font.filename" :label="font.filename"
+                            :value="font.filename" />
+                        </el-select>
+                      </div>
+                    </el-col>
+                    <el-col :xs="24" :sm="8">
+                      <div class="font-selector-item">
+                        <div class="font-selector-label">C 型字体</div>
+                        <div class="font-selector-desc">用于小数字（如"01"）</div>
+                        <el-select :model-value="activeFonts.font_c" @change="(val) => setActiveFont('c', val)"
+                          placeholder="选择 C 型字体" style="width: 100%">
+                          <el-option v-for="font in fonts" :key="font.filename" :label="font.filename"
+                            :value="font.filename" />
+                        </el-select>
+                      </div>
+                    </el-col>
+                  </el-row>
+                  <el-alert v-if="!activeFonts.font_a || !activeFonts.font_b || !activeFonts.font_c" type="warning"
+                    :closable="false" style="margin-top: 12px;">
+                    字体未完整配置，道路标志生成功能将被禁用
+                  </el-alert>
+                </el-card>
               </template>
 
-              <!-- 桌面端表格 -->
-              <el-table :data="fonts" class="pc-table" style="width: 100%">
-                <el-table-column prop="filename" label="文件名" min-width="200" />
-                <el-table-column label="大小" width="120">
-                  <template #default="{ row }">
-                    {{ formatFileSize(row.size) }}
-                  </template>
-                </el-table-column>
-                <el-table-column label="操作" width="150" fixed="right">
-                  <template #default="{ row }">
-                    <el-button
-                      type="danger"
-                      size="small"
-                      text
-                      @click="deleteFont(row)"
-                    >
-                      删除
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-
-              <!-- 移动端卡片列表 -->
-              <div class="mobile-card-list">
-                <div v-for="font in fonts" :key="font.filename" class="mobile-font-card">
-                  <div class="mobile-card-header">
-                    <span class="mobile-card-title">{{ font.filename }}</span>
+              <!-- 字体文件列表 -->
+              <el-card shadow="never">
+                <template #header>
+                  <div class="card-header">
+                    <span>字体文件列表</span>
+                    <el-upload :auto-upload="false" :show-file-list="false" :on-change="handleFontUpload"
+                      accept=".ttf,.otf,.ttc">
+                      <el-button type="primary" :icon="Plus">上传字体</el-button>
+                    </el-upload>
                   </div>
-                  <div class="mobile-card-body">
-                    <div class="mobile-card-row">
-                      <span class="mobile-card-label">大小</span>
-                      <span class="mobile-card-value">{{ formatFileSize(font.size) }}</span>
+                </template>
+
+                <!-- 桌面端表格 -->
+                <el-table :data="fonts" class="pc-table" style="width: 100%">
+                  <el-table-column prop="filename" label="文件名" min-width="200" />
+                  <el-table-column label="大小" width="120">
+                    <template #default="{ row }">
+                      {{ formatFileSize(row.size) }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" width="150" fixed="right">
+                    <template #default="{ row }">
+                      <el-button type="danger" size="small" text @click="deleteFont(row)">
+                        删除
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <!-- 移动端卡片列表 -->
+                <div class="mobile-card-list">
+                  <div v-for="font in fonts" :key="font.filename" class="mobile-font-card">
+                    <div class="mobile-card-header">
+                      <span class="mobile-card-title">{{ font.filename }}</span>
+                    </div>
+                    <div class="mobile-card-body">
+                      <div class="mobile-card-row">
+                        <span class="mobile-card-label">大小</span>
+                        <span class="mobile-card-value">{{ formatFileSize(font.size) }}</span>
+                      </div>
+                    </div>
+                    <div class="mobile-card-actions">
+                      <el-button type="danger" size="small" @click="deleteFont(font)">
+                        删除
+                      </el-button>
                     </div>
                   </div>
-                  <div class="mobile-card-actions">
-                    <el-button
-                      type="danger"
-                      size="small"
-                      @click="deleteFont(font)"
-                    >
-                      删除
-                    </el-button>
+                </div>
+              </el-card>
+            </div>
+          </el-tab-pane>
+
+          <!-- 特殊地名映射 -->
+          <el-tab-pane label="地名映射" name="place-mapping">
+            <div class="place-mapping-tab-content">
+              <el-card shadow="never" class="mapping-card">
+                <template #header>
+                  <div class="card-header-with-actions">
+                    <span>特殊地名英文映射表</span>
+                    <div class="header-actions">
+                      <el-button size="small" @click="loadMappings">重新加载</el-button>
+                      <el-button size="small" :type="yamlValidationErrors.length > 0 ? 'danger' : 'primary'"
+                        :loading="savingMapping" :disabled="yamlValidationErrors.length > 0" @click="saveMappingsFromYaml">
+                        {{ yamlValidationErrors.length > 0 ? '格式有误' : '保存' }}
+                      </el-button>
+                    </div>
+                  </div>
+                </template>
+
+                <div class="mapping-description">
+                  <p>用于处理多音字和少数民族聚居区地名的英文转写。</p>
+                  <p>格式：YAML 格式，<code>中文名称: 英文名称</code>。支持两种格式：</p>
+                  <p>• 完整名称（含空格）：直接使用，如 <code>延边朝鲜族自治州: Yanbian Korean Autonomous Prefecture</code></p>
+                  <p>• 基础名称（无空格）：自动添加后缀，如 <code>北京市: Beijing</code> → <code>Beijing Municipality</code></p>
+                </div>
+
+                <div class="mapping-editor-wrapper">
+                  <CodeMirrorYamlEditor v-model="mappingYaml" :min-height="'calc(100vh - 320px)'"
+                    @valid="handleYamlValidation" />
+                </div>
+              </el-card>
+            </div>
+          </el-tab-pane>
+
+          <!-- 边界数据管理 -->
+          <el-tab-pane label="边界数据" name="bounds-data">
+            <div class="bounds-data-tab-content">
+              <!-- 边界数据导入 -->
+              <el-card shadow="never">
+                <template #header>
+                  <div class="card-header">
+                    <span>边界数据导入</span>
+                  </div>
+                </template>
+
+                <!-- 上传区域 -->
+                <el-upload class="bounds-upload" drag :auto-upload="false" :show-file-list="false"
+                  :on-change="handleBoundsFileChange" accept=".zip,.rar">
+                  <el-icon class="el-icon--upload">
+                    <UploadFilled />
+                  </el-icon>
+                  <div class="el-upload__text">
+                    拖拽文件到此处或 <em>点击上传</em>
+                  </div>
+                  <template #tip>
+                    <div class="el-upload__tip">
+                      支持 ZIP 或 RAR 格式，文件应包含 GeoJSON 数据
+                    </div>
+                  </template>
+                </el-upload>
+
+                <!-- 文件信息 -->
+                <div v-if="selectedBoundsFile" class="selected-file-info">
+                  <el-descriptions :column="2" border>
+                    <el-descriptions-item label="文件名">{{ selectedBoundsFile.name }}</el-descriptions-item>
+                    <el-descriptions-item label="文件大小">{{ formatFileSize(selectedBoundsFile.size)
+                      }}</el-descriptions-item>
+                  </el-descriptions>
+                  <el-button type="primary" :loading="importingBounds" :disabled="boundsImportPolling"
+                    @click="importBoundsData" style="margin-top: 16px">
+                    {{ boundsImportPolling ? '处理中...' : '导入边界数据' }}
+                  </el-button>
+                  <el-button @click="selectedBoundsFile = null" :disabled="boundsImportPolling"
+                    style="margin-top: 16px">
+                    清除
+                  </el-button>
+                </div>
+
+                <!-- 导入进度 -->
+                <div v-if="boundsImportTask"
+                  :class="['import-progress', `import-progress--${boundsImportTask.status}`]">
+                  <el-alert
+                    :type="boundsImportTask.status === 'failed' ? 'error' : boundsImportTask.status === 'completed' ? 'success' : 'info'"
+                    :closable="false" show-icon>
+                    <template #title>
+                      {{ boundsImportTask.status === 'running' ? '正在后台处理' : boundsImportTask.status === 'completed' ?
+                        '导入完成' : boundsImportTask.status === 'failed' ? '导入失败' : '处理中' }}
+                    </template>
+                  </el-alert>
+                  <div style="margin-top: 16px">
+                    <el-progress :percentage="boundsImportTask.progress"
+                      :status="boundsImportTask.status === 'failed' ? 'exception' : boundsImportTask.status === 'completed' ? 'success' : undefined" />
+                  </div>
+                  <div v-if="boundsImportTask.result_path" class="result-summary">
+                    {{ boundsImportTask.result_path }}
+                  </div>
+                  <div v-if="boundsImportTask.error_message" class="error-message">
+                    {{ boundsImportTask.error_message }}
                   </div>
                 </div>
-              </div>
-            </el-card>
+              </el-card>
+
+              <!-- 边界数据统计 -->
+              <el-card shadow="never">
+                <template #header>
+                  <div class="card-header">
+                    <span>边界数据统计</span>
+                    <el-button @click="loadBoundsStats" :loading="loadingBoundsStats" size="small">
+                      刷新统计
+                    </el-button>
+                  </div>
+                </template>
+
+                <div v-if="boundsStats" class="bounds-stats-section">
+                  <div class="section-description">仅供参考。其中包括功能区，并非传统意义上的行政区划。</div>
+                  <h4>按层级统计</h4>
+                  <el-table :data="formatBoundsStats()" stripe class="bounds-stats">
+                    <el-table-column prop="level" label="层级" />
+                    <el-table-column prop="total" label="总计" />
+                    <el-table-column prop="with_bounds" label="有边界框" />
+                    <el-table-column label="覆盖率">
+                      <template #default="{ row }">
+                        {{ ((row.with_bounds / row.total) * 100).toFixed(1) }}%
+                      </template>
+                    </el-table-column>
+                  </el-table>
+
+                  <h4 style="margin-top: 24px">缺少边界框（前10省）</h4>
+                  <el-table :data="boundsStats.missing_by_province" stripe class="bounds-stats">
+                    <el-table-column prop="province_name" label="省份名称" min-width="20%" />
+                    <el-table-column prop="province_code" label="省份代码" min-width="20%" />
+                    <el-table-column prop="missing_count" label="缺少数量" min-width="20%" />
+                    <el-table-column prop="missing_areas" label="缺少地区" />
+                  </el-table>
+                </div>
+              </el-card>
             </div>
           </el-tab-pane>
         </el-tabs>
@@ -848,7 +829,8 @@
     </el-container>
 
     <!-- 创建邀请码对话框 -->
-    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+    <el-dialog v-model="createInviteCodeDialogVisible" title="创建邀请码" :width="isMobile ? '95%' : '500px'"
+      class="responsive-dialog">
       <el-form :model="inviteCodeForm" label-width="120px" class="dialog-form">
         <el-form-item label="邀请码">
           <el-input v-model="inviteCodeForm.code" placeholder="留空自动生成" />
@@ -871,28 +853,19 @@
     </el-dialog>
 
     <!-- 重置密码对话框 -->
-    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
+    <el-dialog v-model="resetPasswordDialogVisible" title="重置密码" :width="isMobile ? '95%' : '500px'"
+      class="responsive-dialog">
       <el-form :model="resetPasswordForm" label-width="100px" class="dialog-form">
         <el-form-item label="用户名">
           <el-input :value="resetPasswordForm.username" disabled />
         </el-form-item>
         <el-form-item label="新密码">
-          <el-input
-            v-model="resetPasswordForm.new_password"
-            type="password"
-            placeholder="请输入新密码（至少 6 位）"
-            show-password
-            clearable
-          />
+          <el-input v-model="resetPasswordForm.new_password" type="password" placeholder="请输入新密码（至少 6 位）" show-password
+            clearable />
         </el-form-item>
         <el-form-item label="确认密码">
-          <el-input
-            v-model="resetPasswordForm.confirm_password"
-            type="password"
-            placeholder="请再次输入新密码"
-            show-password
-            clearable
-          />
+          <el-input v-model="resetPasswordForm.confirm_password" type="password" placeholder="请再次输入新密码" show-password
+            clearable />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -904,7 +877,8 @@
     </el-dialog>
 
     <!-- 未保存更改确认对话框 -->
-    <el-dialog v-model="unsavedChangesDialogVisible" title="提示" :width="isMobile ? '90%' : '420px'" class="unsaved-changes-dialog">
+    <el-dialog v-model="unsavedChangesDialogVisible" title="提示" :width="isMobile ? '90%' : '420px'"
+      class="unsaved-changes-dialog">
       <p>系统配置有未保存的更改，确定要离开吗？</p>
       <template #footer>
         <div class="dialog-footer">
@@ -914,6 +888,54 @@
         </div>
       </template>
     </el-dialog>
+
+    <!-- 行政区划数据统计对话框 -->
+    <el-dialog v-model="divisionStatsDialogVisible" title="行政区划数据统计" :width="isMobile ? '95%' : '600px'">
+      <div v-if="divisionStats" class="division-stats">
+        <div v-if="divisionStats.error" class="stats-error">
+          <el-icon>
+            <InfoFilled />
+          </el-icon>
+          <span>{{ divisionStats.error }}</span>
+        </div>
+        <template v-else>
+          <div class="stat-row">
+            <span class="stat-label">总记录数:</span>
+            <span class="stat-value">{{ divisionStats.total }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">省级:</span>
+            <span class="stat-value">{{ divisionStats.by_level.province }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">市级:</span>
+            <span class="stat-value">{{ divisionStats.by_level.city }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">区县级:</span>
+            <span class="stat-value">{{ divisionStats.by_level.area }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">有边界框:</span>
+            <span class="stat-value">{{ divisionStats.has_bounds }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">有 PostGIS 几何:</span>
+            <span class="stat-value">{{ divisionStats.has_postgis }}</span>
+          </div>
+          <div v-if="divisionStats.sample_missing_codes.length > 0" class="missing-codes">
+            <div class="missing-title">缺少关联代码的区县记录（前5条）:</div>
+            <div v-for="item in divisionStats.sample_missing_codes" :key="item.code" class="missing-item">
+              {{ item.name }} ({{ item.code }}) - city_code: {{ item.city_code || '无' }}, province_code: {{
+                item.province_code || '无' }}
+            </div>
+          </div>
+        </template>
+      </div>
+      <template #footer>
+        <el-button @click="divisionStatsDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -921,14 +943,15 @@
 import { ref, reactive, onMounted, computed, onUnmounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
-import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo } from '@/api/admin'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
 import { hashPassword } from '@/utils/crypto'
+import CodeMirrorYamlEditor from '@/components/CodeMirrorYamlEditor.vue'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -953,10 +976,34 @@ const activeTab = ref('config')
 const loadingConfig = ref(false)
 const loadingUsers = ref(false)
 const loadingInviteCodes = ref(false)
+const loadingDivisionStats = ref(false)
+const divisionStatsDialogVisible = ref(false)
+const divisionStats = ref<AdminDivisionStats | null>(null)
 const loadingFonts = ref(false)
 const saving = ref(false)
 const creatingInviteCode = ref(false)
 const uploadingFont = ref(false)
+
+// 特殊地名映射
+const mappingYaml = ref('')
+const loadingMapping = ref(false)
+const yamlValidationErrors = ref<string[]>([])
+
+// YAML 格式校验处理
+function handleYamlValidation(isValid: boolean, errors: string[]) {
+  yamlValidationErrors.value = errors
+}
+const savingMapping = ref(false)
+const regeneratingNameEn = ref(false)
+const mappingStats = ref<{ total: number } | null>(null)
+
+// 边界数据管理
+const selectedBoundsFile = ref<File | null>(null)
+const importingBounds = ref(false)
+const boundsImportTask = ref<{ id: number; status: string; progress: number; result_path?: string; error_message?: string } | null>(null)
+const boundsImportPolling = ref(false)
+const loadingBoundsStats = ref(false)
+const boundsStats = ref<BoundsStatsResponse | null>(null)
 
 // 标记组件是否已挂载，用于避免卸载后更新状态
 const isMounted = ref(true)
@@ -1026,10 +1073,10 @@ const config = reactive<SystemConfig>({
   invite_code_required: false,
   show_road_sign_in_region_tree: true,
   default_map_provider: 'osm',
-  geocoding_provider: 'nominatim',
+  geocoding_provider: 'gdf',  // 默认使用本地地理编码
   geocoding_config: {
     nominatim: { url: '', email: '' },
-    gdf: { data_path: '' },
+    gdf: {},
     amap: { api_key: '', freq: 3 },
     baidu: { api_key: '', freq: 3, get_en_result: false },
   },
@@ -1078,9 +1125,7 @@ function initGeocodingConfig() {
   if (!config.geocoding_config.nominatim) {
     config.geocoding_config.nominatim = { url: 'http://localhost:8080' }
   }
-  if (!config.geocoding_config.gdf) {
-    config.geocoding_config.gdf = { data_path: '' }
-  }
+  // GDF 不需要配置，使用 spatial_backend
   if (!config.geocoding_config.amap) {
     config.geocoding_config.amap = { api_key: '', freq: 3 }
   }
@@ -1254,6 +1299,20 @@ function onGeocodingProviderChange() {
   initGeocodingConfig()
 }
 
+// 显示行政区划数据统计
+async function showAdminDivisionStats() {
+  loadingDivisionStats.value = true
+  try {
+    const response = await adminApi.getAdminDivisionStats()
+    divisionStats.value = response
+    divisionStatsDialogVisible.value = true
+  } catch (error: any) {
+    ElMessage.error(error?.message || '获取行政区划统计失败')
+  } finally {
+    loadingDivisionStats.value = false
+  }
+}
+
 // 加载用户列表
 async function loadUsers() {
   loadingUsers.value = true
@@ -1345,7 +1404,7 @@ function isFirstUser(user: User): boolean {
   if (users.value.length === 0) return false
   const firstUser = users.value.reduce((min: User | null, u: User) =>
     !min || u.id < min.id ? u : min
-  , null)
+    , null)
   return firstUser?.id === user.id
 }
 
@@ -1597,8 +1656,185 @@ async function deleteFont(font: FontInfo) {
   }
 }
 
+// ========== 特殊地名映射管理 ==========
+
+// 加载特殊地名映射
+async function loadMappings() {
+  loadingMapping.value = true
+  try {
+    const response = await adminApi.getSpecialPlaceMapping()
+    if (!isMounted.value) return
+    // 直接使用后端返回的原始 YAML 内容，保留注释和格式
+    mappingYaml.value = response.raw_yaml
+    mappingStats.value = { total: response.total }
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    if (isMounted.value) {
+      loadingMapping.value = false
+    }
+  }
+}
+
+// 从 YAML 保存映射表
+async function saveMappingsFromYaml() {
+  savingMapping.value = true
+  try {
+    // 直接发送原始 YAML 内容，保留注释和格式
+    await adminApi.updateSpecialPlaceMapping({ yaml_content: mappingYaml.value })
+    // 解析 YAML 以获取条目数量
+    const mappings: Record<string, string> = {}
+    const lines = mappingYaml.value.split('\n')
+    for (const line of lines) {
+      const trimmed = line.trim()
+      // 跳过注释和空行
+      if (!trimmed || trimmed.startsWith('#')) continue
+      // 解析 key: value
+      const colonIndex = trimmed.indexOf(':')
+      if (colonIndex > 0) {
+        const key = trimmed.substring(0, colonIndex).trim()
+        const value = trimmed.substring(colonIndex + 1).trim()
+        if (key && value) {
+          mappings[key] = value
+        }
+      }
+    }
+    mappingStats.value = { total: Object.keys(mappings).length }
+    ElMessage.success(`映射表保存成功，共 ${Object.keys(mappings).length} 条`)
+
+    // 自动重新生成英文名称
+    await regenerateNameEnInternal()
+  } catch (error) {
+    ElMessage.error('保存失败，请检查 YAML 格式')
+  } finally {
+    savingMapping.value = false
+  }
+}
+
+// 重新生成英文名称（内部调用，不显示确认对话框）
+async function regenerateNameEnInternal() {
+  try {
+    regeneratingNameEn.value = true
+    const response = await adminApi.regenerateNameEn()
+    ElMessage.success(`${response.message}，共更新 ${response.stats.updated} 条记录`)
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    regeneratingNameEn.value = false
+  }
+}
+
+// 重新生成英文名称（按钮触发，显示确认对话框）
+async function regenerateNameEn() {
+  try {
+    await ElMessageBox.confirm(
+      '确定要重新生成所有行政区划的英文名称吗？这将使用最新的特殊地名映射表。',
+      '确认操作',
+      { type: 'warning' }
+    )
+    await regenerateNameEnInternal()
+  } catch (error) {
+    // 用户取消或错误已在拦截器中处理
+  }
+}
+
+// 边界数据管理方法
+function handleBoundsFileChange(file: any) {
+  selectedBoundsFile.value = file.raw
+  boundsImportTask.value = null
+}
+
+async function importBoundsData() {
+  if (!selectedBoundsFile.value) return
+
+  try {
+    importingBounds.value = true
+    const response = await adminApi.importBoundsData(selectedBoundsFile.value)
+    // 开始轮询任务状态
+    boundsImportTask.value = { id: response.task_id, status: 'running', progress: 0 }
+    pollBoundsImportTask(response.task_id)
+    ElMessage.success('文件上传成功，正在后台处理')
+  } catch (error) {
+    // 错误已在拦截器中处理
+    importingBounds.value = false
+  }
+}
+
+async function pollBoundsImportTask(taskId: number) {
+  boundsImportPolling.value = true
+  let completed = false
+
+  while (!completed && boundsImportPolling.value && isMounted.value) {
+    try {
+      const task = await adminApi.getBoundsImportTask(taskId)
+      boundsImportTask.value = task
+
+      if (task.status === 'completed') {
+        completed = true
+        importingBounds.value = false
+        boundsImportPolling.value = false
+        selectedBoundsFile.value = null
+        ElMessage.success(`边界数据导入完成: ${task.result_path}`)
+        await loadBoundsStats()
+      } else if (task.status === 'failed') {
+        completed = true
+        importingBounds.value = false
+        boundsImportPolling.value = false
+        ElMessage.error(`导入失败: ${task.error_message}`)
+      }
+
+      // 未完成则等待 2 秒后再次轮询
+      if (!completed) {
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    } catch (error) {
+      completed = true
+      importingBounds.value = false
+      boundsImportPolling.value = false
+    }
+  }
+}
+
+async function loadBoundsStats() {
+  try {
+    loadingBoundsStats.value = true
+    boundsStats.value = await adminApi.getBoundsStats()
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    loadingBoundsStats.value = false
+  }
+}
+
+function formatBoundsStats() {
+  if (!boundsStats.value) return []
+
+  // 固定排序顺序和中文名称映射
+  const levelOrder = ['province', 'city', 'area']
+  const levelNames: Record<string, string> = {
+    province: '省级',
+    city: '地级',
+    area: '县级'
+  }
+
+  return Object.entries(boundsStats.value.by_level)
+    .sort(([a]: [string, any], [b]: [string, any]) => {
+      return levelOrder.indexOf(a) - levelOrder.indexOf(b)
+    })
+    .map(([level, data]: [string, any]) => ({
+      level: levelNames[level] || level,
+      total: data.total,
+      with_bounds: data.with_bounds
+    }))
+}
+
 // 监听 tab 切换，如果有未保存的配置更改则提示
 watch(activeTab, async (newTab, oldTab) => {
+  // 切换到边界数据 tab 时加载统计
+  if (newTab === 'bounds-data' && !boundsStats.value) {
+    loadBoundsStats()
+  }
+
   if (oldTab === 'config' && hasUnsavedConfigChanges()) {
     const action = await showUnsavedChangesDialog()
     if (action === 'leave') {
@@ -1650,6 +1886,7 @@ onMounted(async () => {
   await loadUsers()
   await loadInviteCodes()
   await loadFonts()
+  await loadMappings()
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
@@ -1664,6 +1901,7 @@ onBeforeUnmount(() => {
 
 // 组件卸载时移除监听器
 onUnmounted(() => {
+  boundsImportPolling.value = false
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
 })
@@ -1679,7 +1917,7 @@ onUnmounted(() => {
   width: 100%;
 }
 
-.admin-container > .el-container {
+.admin-container>.el-container {
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1761,7 +1999,7 @@ onUnmounted(() => {
 }
 
 /* 标签页容器固定高度 */
-.main > .el-tabs {
+.main>.el-tabs {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -1976,9 +2214,64 @@ onUnmounted(() => {
   margin-top: 8px;
   margin-left: 0;
   font-size: 12px;
-  color: #909399;
-  line-height: 1.6;
-  text-align: left;
+  color: #606266;
+  line-height: 1.5;
+}
+
+/* 行政区划统计样式 */
+.division-stats {
+  padding: 10px 0;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.stat-row:last-child {
+  border-bottom: none;
+}
+
+.stat-label {
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.stat-value {
+  font-weight: bold;
+  color: var(--el-color-primary);
+}
+
+.stats-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--el-color-error-light-9);
+  border-radius: 4px;
+  color: var(--el-color-error);
+}
+
+.missing-codes {
+  margin-top: 16px;
+  padding: 12px;
+  background-color: var(--el-color-warning-light-9);
+  border-radius: 4px;
+}
+
+.missing-title {
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--el-color-warning);
+}
+
+.missing-item {
+  font-size: 12px;
+  padding: 4px 0;
+  color: var(--el-text-color-regular);
+  font-family: monospace;
 }
 
 .postgis-notice {
@@ -2140,6 +2433,12 @@ onUnmounted(() => {
   display: inline;
 }
 
+/* 边界数据管理样式 */
+.bounds-data-tab-content {
+  overflow-y: auto;
+  display: block !important;
+}
+
 /* 移动端响应式 */
 @media (max-width: 1366px) {
   .admin-container {
@@ -2153,7 +2452,7 @@ onUnmounted(() => {
     width: 100vw;
   }
 
-  .admin-container > .el-container {
+  .admin-container>.el-container {
     height: 100%;
     width: 100%;
   }
@@ -2177,9 +2476,18 @@ onUnmounted(() => {
     box-sizing: border-box;
   }
 
-  .main > .el-tabs {
+  .main>.el-tabs {
     width: 100%;
     overflow-x: hidden;
+  }
+
+  /* 确保标签页内容可以滚动 */
+  .main>.el-tabs>.el-tabs__content {
+    overflow: visible;
+  }
+
+  .el-tab-pane {
+    overflow: visible;
   }
 
   .header-content h1 {
@@ -2404,6 +2712,11 @@ onUnmounted(() => {
     display: none;
   }
 
+  /* 边界数据统计表格在移动端仍然显示 */
+  .bounds-stats .el-table {
+    display: block !important;
+  }
+
   /* 移动端卡片列表样式 */
   .mobile-card-list {
     display: flex;
@@ -2502,11 +2815,14 @@ onUnmounted(() => {
   }
 }
 
+/* ========== 桌面端默认样式 ========== */
+
 /* 字体选择器样式 */
 .font-selector-item {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-bottom: 12px;
 }
 
 .font-selector-label {
@@ -2522,25 +2838,217 @@ onUnmounted(() => {
   margin-bottom: 4px;
 }
 
-@media (max-width: 1366px) {
-  .font-selector-item {
-    margin-bottom: 12px;
-  }
+/* 标题栏带操作按钮（桌面端） */
+.card-header-with-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
 
-  /* 对话框移动端样式 */
-  .responsive-dialog {
-    width: 95% !important;
-  }
+.card-header-with-actions>span {
+  flex-shrink: 0;
+}
 
-  .responsive-dialog .el-dialog__body {
-    max-height: 60vh;
-    overflow-y: auto;
-  }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
 
-  .dialog-form :deep(.el-form-item__label) {
-    width: 80px !important;
-    font-size: 14px;
-  }
+/* 特殊地名映射样式（桌面端） */
+.place-mapping-tab-content {
+  height: 100%;
+  overflow: hidden;
+}
+
+.place-mapping-tab-content .el-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.place-mapping-tab-content .el-card :deep(.el-card__header) {
+  padding: 12px 16px;
+}
+
+.place-mapping-tab-content .el-card :deep(.el-card__body) {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.mapping-description {
+  padding: 10px 12px;
+  background-color: var(--el-fill-color-light);
+  border-radius: 4px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+}
+
+.mapping-description p {
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+}
+
+.mapping-description code {
+  padding: 2px 6px;
+  background-color: #fff;
+  border: 1px solid var(--el-border-color);
+  border-radius: 3px;
+  font-family: monospace;
+  color: var(--el-color-primary);
+}
+
+.mapping-description-error {
+  color: var(--el-color-danger);
+  font-weight: 500;
+}
+
+/* 编辑器容器（桌面端） */
+.mapping-editor-wrapper {
+  flex: 1;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  /* 确保不超过父容器 */
+  max-height: 100%;
+}
+
+/* CodeMirror 编辑器占满容器 */
+.mapping-editor-wrapper :deep(.codemirror-yaml-editor) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color);
+  border-radius: 4px;
+}
+
+/* CodeMirror 根元素高度限制 */
+.mapping-editor-wrapper :deep(.cm-editor) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* CodeMirror 编辑器滚动 */
+.mapping-editor-wrapper :deep(.cm-scroller) {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  max-height: 100%;
+  box-sizing: border-box;
+}
+
+/* 边界数据管理样式（桌面端） */
+.bounds-data-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bounds-upload {
+  margin-bottom: 20px;
+}
+
+.bounds-upload :deep(.el-upload-dragger) {
+  padding: 40px;
+}
+
+.selected-file-info {
+  margin-top: 20px;
+  padding: 16px;
+  background-color: var(--el-fill-color-light);
+  border-radius: 4px;
+}
+
+.import-result {
+  margin-top: 20px;
+}
+
+.import-result .text-error {
+  color: var(--el-color-danger);
+}
+
+.import-progress {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 4px;
+}
+
+.import-progress--pending,
+.import-progress--running {
+  background-color: var(--el-color-info-light-9);
+}
+
+.import-progress--completed {
+  background-color: var(--el-color-success-light-9);
+}
+
+.import-progress--failed {
+  background-color: var(--el-color-danger-light-9);
+}
+
+.result-summary {
+  margin-top: 12px;
+  color: var(--el-color-success);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.error-message {
+  margin-top: 12px;
+  color: var(--el-color-danger);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.error-details {
+  margin-top: 12px;
+}
+
+.error-details h4 {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.error-details ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: var(--el-color-danger);
+}
+
+.error-details li {
+  margin: 4px 0;
+}
+
+.bounds-stats-section {
+  margin-top: 20px;
+}
+
+.bounds-stats-section h3 {
+  margin-bottom: 12px;
+  font-size: 16px;
+}
+
+.bounds-stats-section h4 {
+  margin: 20px 0 12px 0;
+  font-size: 14px;
 }
 
 /* 骨架屏样式 */
@@ -2567,5 +3075,155 @@ onUnmounted(() => {
   margin: 0;
   font-size: 14px;
   color: #606266;
+}
+
+/* 可滚动内容（桌面端） */
+.scrollable-content {
+  overflow-y: auto;
+  max-height: calc(100vh - 200px);
+}
+
+/* ========== 移动端样式覆盖 ========== */
+@media (max-width: 1366px) {
+  /* 字体选择器移动端 */
+  .font-selector-item {
+    margin-bottom: 12px;
+  }
+
+  /* 标题栏移动端 */
+  .card-header-with-actions {
+    gap: 12px;
+  }
+
+  .header-actions {
+    gap: 6px;
+  }
+
+  /* 对话框移动端样式 */
+  .responsive-dialog {
+    width: 95% !important;
+  }
+
+  .responsive-dialog .el-dialog__body {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .dialog-form :deep(.el-form-item__label) {
+    width: 80px !important;
+    font-size: 14px;
+  }
+
+  /* 特殊地名映射移动端 */
+  .mapping-editor-wrapper {
+    min-height: 400px;
+    display: flex;
+    flex-direction: column;
+    /* 确保不超过父容器 */
+    max-height: 100%;
+  }
+
+  .mapping-editor-wrapper :deep(.codemirror-yaml-editor) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+    border: 1px solid var(--el-border-color);
+    border-radius: 4px;
+  }
+
+  .mapping-editor-wrapper :deep(.cm-editor) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
+  }
+
+  .mapping-editor-wrapper :deep(.cm-scroller) {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    /* 确保不超出容器 */
+    max-height: 100%;
+    box-sizing: border-box;
+  }
+
+  /* 边界数据标签页移动端 */
+  .bounds-data-tab-content {
+    display: block !important;
+    gap: 16px;
+  }
+
+  .bounds-data-tab-content>.el-card {
+    margin-bottom: 16px;
+  }
+
+  .bounds-upload :deep(.el-upload-dragger) {
+    padding: 40px 20px;
+  }
+
+  /* 可滚动内容移动端 */
+  .scrollable-content {
+    max-height: none;
+    min-height: calc(100vh - 140px);
+    padding-bottom: 20px;
+  }
+
+  /* 边界数据统计移动端样式 */
+  .bounds-stats-section {
+    overflow-x: hidden;
+  }
+
+  .bounds-stats {
+    min-width: 100%;
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .bounds-stats h3,
+  .bounds-stats h4 {
+    font-size: 14px;
+  }
+
+  .bounds-stats .el-table {
+    width: 100%;
+  }
+
+  .bounds-stats .el-table:before {
+    display: none !important;
+  }
+
+  .bounds-stats .el-table__wrapper {
+    width: 100% !important;
+  }
+
+  .bounds-stats .el-table__body-wrapper {
+    overflow-x: hidden;
+    width: 100% !important;
+  }
+
+  .bounds-stats .el-table__body {
+    width: 100% !important;
+  }
+
+  .bounds-stats .el-table th,
+  .bounds-stats .el-table td {
+    padding: 6px 2px;
+    word-break: break-word;
+  }
+
+  .bounds-stats .el-table .el-table__cell {
+    padding: 6px 2px;
+  }
+
+  .bounds-stats .el-table .cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal;
+    line-height: 1.4;
+  }
 }
 </style>

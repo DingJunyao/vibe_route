@@ -69,10 +69,14 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # 文件存储配置
+    DATA_DIR: str = "data"
     UPLOAD_DIR: str = "data/uploads"
     TEMP_DIR: str = "data/temp"
     EXPORT_DIR: str = "data/exports"
     ROAD_SIGN_DIR: str = "data/road_signs"
+
+    # 日志目录
+    LOG_DIR: str = "logs"
 
     # 文件大小限制（字节）
     MAX_UPLOAD_SIZE: int = 100 * 1024 * 1024  # 100 MB

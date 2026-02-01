@@ -1353,13 +1353,14 @@ class TrackService:
         # 使用枚举索引作为时间顺序的位置（而非 point_index）
         # 实时记录场景下，point_index 不能保证时间顺序
         for time_idx, point in enumerate(points):
+            # 获取原始数据（为空时保持 None，不使用默认值）
             province = point.province or '未知区域'
-            city = point.city or province
-            district = point.district or city
+            city = point.city  # 可能为 None
+            district = point.district  # 可能为 None
             road_name = point.road_name
             road_number = point.road_number
 
-            # 统计各级区域（排除"未知区域"）
+            # 统计各级区域（排除"未知区域"和重复名称）
             if province and province != '未知区域': province_set.add(province)
             if city and city != province and city != '未知区域': city_set.add(city)
             if district and district != city and district != '未知区域': district_set.add(district)
@@ -1389,7 +1390,9 @@ class TrackService:
             province_node = current_province[1]
 
             # 检查是否需要创建新的市级节点
-            if current_city is None or current_city[0] != city:
+            # 只有当 city 不为空且与 province 不同时才创建
+            city_key = city if city and city != province else None
+            if city_key and (current_city is None or current_city[0] != city_key):
                 # 先结束所有下层节点的索引范围
                 if current_road is not None and prev_point is not None:
                     current_road[1]['end_index'] = time_idx - 1
@@ -1399,17 +1402,19 @@ class TrackService:
                 if current_city is not None and prev_point is not None:
                     current_city[1]['end_index'] = time_idx - 1
                 # 创建新市级节点并设置起始索引
-                new_city = create_node(city, 'city')
+                new_city = create_node(city_key, 'city')
                 new_city['start_index'] = time_idx
                 province_node['children'].append(new_city)
-                current_city = (city, new_city)
+                current_city = (city_key, new_city)
                 current_district = None
                 current_road = None
 
             city_node = current_city[1] if current_city else province_node
 
             # 检查是否需要创建新的区级节点
-            if current_district is None or current_district[0] != district:
+            # 只有当 district 不为空且与 city 不同时才创建
+            district_key = district if district and district != city_key else None
+            if district_key and (current_district is None or current_district[0] != district_key):
                 # 先结束所有下层节点的索引范围
                 if current_road is not None and prev_point is not None:
                     current_road[1]['end_index'] = time_idx - 1
@@ -1417,10 +1422,10 @@ class TrackService:
                 if current_district is not None and prev_point is not None:
                     current_district[1]['end_index'] = time_idx - 1
                 # 创建新区级节点并设置起始索引
-                new_district = create_node(district, 'district')
+                new_district = create_node(district_key, 'district')
                 new_district['start_index'] = time_idx
                 city_node['children'].append(new_district)
-                current_district = (district, new_district)
+                current_district = (district_key, new_district)
                 current_road = None
 
             district_node = current_district[1] if current_district else city_node
