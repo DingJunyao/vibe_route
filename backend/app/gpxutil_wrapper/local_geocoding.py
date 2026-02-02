@@ -227,23 +227,91 @@ class LocalGeocodingService(GeocodingService):
             '50': '重庆市',
         }
 
-        # 首先检查是否有 city 级别记录（用于处理不设区县的地级市）
+        # 不设区的地级市（硬编码列表）
+        CITIES_WITHOUT_DISTRICTS = {"441900", "442000", "460400", "620200"}
+
+        # 中心距离计算函数
+        def center_distance(div: AdminDivision, query_lat: float, query_lon: float) -> float:
+            if div.min_lat is None or div.max_lat is None or div.min_lon is None or div.max_lon is None:
+                return float('inf')
+            # 计算中心点（边界框中心）
+            center_lat = (div.min_lat + div.max_lat) / 2 / 1e6  # 转换回原始坐标
+            center_lon = (div.min_lon + div.max_lon) / 2 / 1e6
+            # 计算距离（简单的欧氏距离，对于小范围足够）
+            return ((query_lat - center_lat) ** 2 + (query_lon - center_lon) ** 2) ** 0.5
+
+        # 获取 city 和 area 级别记录
         city_divs = [d for d in divisions if d.level == "city"]
-
-        # 处理区县级查询（最常见情况）
-        # 如果有多个区县，选择距离点最近的（最精确）
         area_divs = [d for d in divisions if d.level == "area"]
-        if area_divs:
-            # 计算点到每个区县中心点的距离，选择最近的
-            def center_distance(div: AdminDivision, query_lat: float, query_lon: float) -> float:
-                if div.min_lat is None or div.max_lat is None or div.min_lon is None or div.max_lon is None:
-                    return float('inf')
-                # 计算中心点（边界框中心）
-                center_lat = (div.min_lat + div.max_lat) / 2 / 1e6  # 转换回原始坐标
-                center_lon = (div.min_lon + div.max_lon) / 2 / 1e6
-                # 计算距离（简单的欧氏距离，对于小范围足够）
-                return ((query_lat - center_lat) ** 2 + (query_lon - center_lon) ** 2) ** 0.5
 
+        # ========== 优先检查不设区地级市 ==========
+        # 如果查询结果包含不设区地级市，且它比所有 area 都更近，则优先使用
+        special_cities = [d for d in city_divs if d.code in CITIES_WITHOUT_DISTRICTS]
+        if special_cities:
+            # 计算每个特殊城市的距离
+            special_cities.sort(key=lambda d: center_distance(d, lat, lon))
+            closest_special_city = special_cities[0]
+            special_city_dist = center_distance(closest_special_city, lat, lon)
+
+            # 如果有 area，比较距离
+            if area_divs:
+                area_divs_sorted = sorted(area_divs, key=lambda d: center_distance(d, lat, lon))
+                closest_area_dist = center_distance(area_divs_sorted[0], lat, lon)
+
+                gdf_logger.debug(f"不设区地级市距离比较: {closest_special_city.name}={special_city_dist:.6f} vs "
+                               f"最近区县 {area_divs_sorted[0].name}={closest_area_dist:.6f}")
+
+                # 如果不设区地级市更近，直接使用它
+                if special_city_dist < closest_area_dist:
+                    gdf_logger.debug(f"选择不设区地级市: {closest_special_city.name}")
+                    result['city'] = closest_special_city.name
+                    if closest_special_city.name_en:
+                        result['city_en'] = closest_special_city.name_en
+                    result['area'] = ''
+                    result['area_en'] = ''
+
+                    # 填充省级
+                    if closest_special_city.province_code:
+                        province = div_dict.get(closest_special_city.province_code)
+                        if not province:
+                            province_result = await db.execute(
+                                select(AdminDivision).where(AdminDivision.code == closest_special_city.province_code)
+                            )
+                            province = province_result.scalar_one_or_none()
+                        if province:
+                            result['province'] = province.name
+                            if province.name_en:
+                                result['province_en'] = province.name_en
+
+                    gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
+                    return  # 提前返回，不再处理 area
+            else:
+                # 没有 area，直接使用不设区地级市
+                gdf_logger.debug(f"无 area，选择不设区地级市: {closest_special_city.name}")
+                result['city'] = closest_special_city.name
+                if closest_special_city.name_en:
+                    result['city_en'] = closest_special_city.name_en
+                result['area'] = ''
+                result['area_en'] = ''
+
+                # 填充省级
+                if closest_special_city.province_code:
+                    province = div_dict.get(closest_special_city.province_code)
+                    if not province:
+                        province_result = await db.execute(
+                            select(AdminDivision).where(AdminDivision.code == closest_special_city.province_code)
+                        )
+                        province = province_result.scalar_one_or_none()
+                    if province:
+                        result['province'] = province.name
+                        if province.name_en:
+                            result['province_en'] = province.name_en
+
+                gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
+                return  # 提前返回
+
+        # ========== 处理区县级查询（最常见情况）==========
+        if area_divs:
             area_divs.sort(key=lambda d: center_distance(d, lat, lon))
             area_div = area_divs[0]
 
@@ -389,8 +457,41 @@ class LocalGeocodingService(GeocodingService):
                 gdf_logger.debug(f"检测到直辖市: province_code={area_div.province_code}，清空 city")
 
         # 处理市级查询（不设区县的地级市）
-        city_div = next((d for d in divisions if d.level == "city"), None)
-        if city_div and not area_divs:
+        # 当只查询到 city 级别时（无 area），填充 city 和 province
+        if city_divs and not area_divs:
+            # 不设区地级市硬编码列表
+            CITIES_WITHOUT_DISTRICTS = {"441900", "442000", "460400", "620200"}
+
+            # 如果有多个 city，计算中心距离选择最近的
+            def city_center_distance(div: AdminDivision, query_lat: float, query_lon: float) -> float:
+                if div.min_lat is None or div.max_lat is None or div.min_lon is None or div.max_lon is None:
+                    return float('inf')
+                center_lat = (div.min_lat + div.max_lat) / 2 / 1e6
+                center_lon = (div.min_lon + div.max_lon) / 2 / 1e6
+                return ((query_lat - center_lat) ** 2 + (query_lon - center_lon) ** 2) ** 0.5
+
+            city_divs.sort(key=lambda d: city_center_distance(d, lat, lon))
+            city_div = city_divs[0]
+
+            gdf_logger.debug(f"仅查询到 city 级别: code={city_div.code}, name={city_div.name}, "
+                           f"province_code={city_div.province_code}")
+
+            # 检查是否是不设区地级市
+            if city_div.code in CITIES_WITHOUT_DISTRICTS:
+                # 不设区地级市：填充 city，清空 area
+                result['city'] = city_div.name
+                if city_div.name_en:
+                    result['city_en'] = city_div.name_en
+                result['area'] = ''
+                result['area_en'] = ''
+                gdf_logger.debug(f"检测到不设区地级市: {city_div.name}({city_div.code})")
+            else:
+                # 其他情况：可能是边界框查询不精确，暂时填充 city
+                result['city'] = city_div.name
+                if city_div.name_en:
+                    result['city_en'] = city_div.name_en
+                gdf_logger.debug(f"填充 city: {city_div.name}({city_div.code})")
+
             # 通过 province_code 查询省级
             if city_div.province_code and not result.get('province'):
                 province = div_dict.get(city_div.province_code)

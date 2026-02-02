@@ -239,9 +239,12 @@ export const adminApi = {
     return http.post('/admin/special-place-mapping/regenerate') as Promise<RegenerateNameEnResponse>
   },
 
-  // ========== 边界数据管理 ==========
+  // ========== 边界数据管理（已弃用） ==========
+  // @deprecated 此功能已被 DataV GeoJSON 在线导入取代，保留代码以备不时之需
 
-  // 上传边界数据文件并创建后台任务
+  /**
+   * @deprecated 使用 importAdminDivisionsOnline 或 uploadAdminDivisionsArchive 替代
+   */
   importBoundsData(file: File) {
     const formData = new FormData()
     formData.append('file', file)
@@ -250,7 +253,9 @@ export const adminApi = {
     }) as Promise<{ message: string; task_id: number }>
   },
 
-  // 获取边界导入任务状态
+  /**
+   * @deprecated 使用 getAdminDivisionsImportProgress 替代
+   */
   getBoundsImportTask(taskId: number) {
     return http.get(`/admin/tasks/${taskId}`) as Promise<BoundsImportTask>
   },
@@ -267,6 +272,37 @@ export const adminApi = {
     return http.post('/admin/test-upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }) as Promise<{ message: string; file_info: { filename: string; content_type: string; size: number } }>
+  },
+
+  // ========== DataV GeoJSON 行政区划导入 ==========
+
+  // 获取行政区划数据状态
+  getAdminDivisionStatus(): Promise<AdminDivisionStatusResponse> {
+    return http.get('/admin/admin-divisions/status')
+  },
+
+  // 从 DataV 在线导入
+  importFromDataVOnline(data: DataVImportRequest): Promise<DataVImportResponse> {
+    return http.post('/admin/admin-divisions/import/online', data)
+  },
+
+  // 上传压缩包导入
+  importFromUpload(file: File, force: boolean = false): Promise<DataVImportResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+    return http.post(`/admin/admin-divisions/import/upload?force=${force}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+
+  // 获取导入任务进度
+  getImportProgress(taskId: number): Promise<ImportTaskProgress> {
+    return http.get(`/admin/admin-divisions/import/progress/${taskId}`)
+  },
+
+  // 获取省份列表
+  getProvinceList(): Promise<ProvinceListResponse> {
+    return http.get('/admin/admin-divisions/provinces')
   },
 }
 
@@ -351,4 +387,60 @@ export interface RegenerateNameEnResponse {
     total: number
     updated: number
   }
+}
+
+// ========== DataV GeoJSON 行政区划导入 ==========
+
+// 行政区划状态响应
+export interface AdminDivisionStatusResponse {
+  total: number
+  by_level: {
+    province: number
+    city: number
+    area: number
+  }
+  has_bounds: number
+  has_center: number
+  last_updated: string | null
+  error?: string
+}
+
+// DataV 导入请求
+export interface DataVImportRequest {
+  province_codes?: string[]
+  force?: boolean
+  bounds_only?: boolean
+}
+
+// DataV 导入响应
+export interface DataVImportResponse {
+  message: string
+  task_id?: number
+  stats?: {
+    provinces: number
+    cities: number
+    areas: number
+    updated?: number
+    files?: number
+  }
+}
+
+// 导入任务进度响应
+export interface ImportTaskProgress {
+  id: number
+  type: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  progress: number
+  result?: string
+  error?: string
+  created_at: string
+  is_finished: boolean
+}
+
+// 省份列表响应
+export interface ProvinceListResponse {
+  provinces: Array<{
+    code: string
+    name: string
+  }>
 }

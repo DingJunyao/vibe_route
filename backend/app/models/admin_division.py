@@ -4,7 +4,7 @@
 用于本地地理编码服务（GDF），存储省/市/区三级行政区划数据。
 兼容 SQLite / MySQL / PostgreSQL，PostgreSQL 环境下可选使用 PostGIS。
 """
-from sqlalchemy import Column, String, Integer
+from sqlalchemy import Column, String, Integer, Float
 
 from app.models.base import AuditMixin
 from app.core.database import Base
@@ -39,6 +39,13 @@ class AdminDivision(Base, AuditMixin):
     max_lat = Column(Integer, nullable=True, comment="最大纬度 * 1e6")
     min_lon = Column(Integer, nullable=True, comment="最小经度 * 1e6")
     max_lon = Column(Integer, nullable=True, comment="最大经度 * 1e6")
+
+    # 中心点坐标（用于地图显示，原始浮点数）
+    center_lon = Column(Float, nullable=True, comment="中心点经度")
+    center_lat = Column(Float, nullable=True, comment="中心点纬度")
+
+    # 子级数量（用于判断不设区地级市）
+    children_num = Column(Integer, nullable=True, comment="子级行政区划数量")
 
     # 关联字段（用于查询优化）
     province_code = Column(String(12), nullable=True, index=True, comment="省代码")

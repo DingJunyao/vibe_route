@@ -185,6 +185,114 @@
                         </el-button>
                         <span class="form-hint">检查数据库中的行政区划数据完整性</span>
                       </el-form-item>
+
+                      <!-- DataV GeoJSON 行政区划导入 -->
+                      <el-form-item label="数据导入">
+                        <div class="datav-import-section">
+                          <!-- 导入模式选择 -->
+                          <el-radio-group v-model="datavImportMode" @change="onDatavImportModeChange" :disabled="datavImporting">
+                            <el-radio value="full">全量更新</el-radio>
+                            <el-radio value="bounds">仅更新边界</el-radio>
+                            <el-radio value="provinces">按省份更新</el-radio>
+                          </el-radio-group>
+                          <div class="radio-hint">
+                            <template v-if="datavImportMode === 'full'">
+                              从阿里 DataV 获取全国所有行政区划数据（省/市/区县）
+                            </template>
+                            <template v-else-if="datavImportMode === 'bounds'">
+                              仅更新边界框数据，不修改行政区划基础信息
+                            </template>
+                            <template v-else>
+                              选择需要更新的省份，仅获取指定省份的数据
+                            </template>
+                          </div>
+
+                          <!-- 按省份选择 -->
+                          <div v-if="datavImportMode === 'provinces'" class="province-selector">
+                            <el-select
+                              v-model="datavSelectedProvinces"
+                              multiple
+                              filterable
+                              placeholder="请选择省份"
+                              :loading="loadingProvinces"
+                              :disabled="datavImporting"
+                              style="width: 100%"
+                            >
+                              <el-option
+                                v-for="prov in datavProvinceList"
+                                :key="prov.code"
+                                :label="prov.name"
+                                :value="prov.code"
+                              />
+                            </el-select>
+                          </div>
+
+                          <!-- 强制覆盖选项 -->
+                          <div class="force-option">
+                            <el-checkbox v-model="datavForceOverwrite" :disabled="datavImporting">
+                              强制覆盖已有数据
+                            </el-checkbox>
+                            <span class="form-hint-inline">覆盖现有的中心点和边界框数据</span>
+                          </div>
+
+                          <!-- 操作按钮 -->
+                          <div class="import-actions">
+                            <el-button
+                              type="primary"
+                              @click="importFromDataVOnline"
+                              :loading="datavImporting"
+                              :disabled="datavImportMode === 'provinces' && datavSelectedProvinces.length === 0"
+                            >
+                              在线更新
+                            </el-button>
+                            <el-upload
+                              :show-file-list="false"
+                              :auto-upload="false"
+                              accept=".zip,.rar"
+                              :on-change="handleDatavUploadChange"
+                              :disabled="datavImporting"
+                            >
+                              <el-button :loading="datavImporting" :disabled="datavImporting">
+                                上传压缩包
+                              </el-button>
+                            </el-upload>
+                            <el-button
+                              v-if="datavUploadFile"
+                              type="success"
+                              @click="importFromUpload"
+                              :loading="datavImporting"
+                            >
+                              开始导入 ({{ datavUploadFile.name }})
+                            </el-button>
+                          </div>
+
+                          <!-- 导入进度 -->
+                          <div v-if="datavImporting && datavImportProgress" class="import-progress">
+                            <el-progress
+                              :percentage="datavImportProgress.progress"
+                              :status="datavImportProgress.status === 'failed' ? 'exception' : undefined"
+                            />
+                            <div class="progress-text">
+                              <span v-if="datavImportProgress.status === 'running'">正在导入...</span>
+                              <span v-else-if="datavImportProgress.status === 'pending'">等待中...</span>
+                              <span v-else-if="datavImportProgress.status === 'completed'">导入完成</span>
+                              <span v-else-if="datavImportProgress.status === 'failed'" class="error-text">
+                                {{ datavImportProgress.error || '导入失败' }}
+                              </span>
+                            </div>
+                          </div>
+
+                          <!-- 当前状态显示 -->
+                          <div v-if="datavDivisionStatus" class="division-status">
+                            <span class="status-label">当前数据：</span>
+                            <span>{{ datavDivisionStatus.total }} 条记录</span>
+                            <span class="status-sep">|</span>
+                            <span>有边界 {{ datavDivisionStatus.has_bounds }}</span>
+                            <span class="status-sep">|</span>
+                            <span>有中心点 {{ datavDivisionStatus.has_center }}</span>
+                          </div>
+                        </div>
+                      </el-form-item>
                     </template>
 
                     <!-- 高德地图配置 -->
@@ -688,8 +796,8 @@
             </div>
           </el-tab-pane>
 
-          <!-- 特殊地名映射 -->
-          <el-tab-pane label="地名映射" name="place-mapping">
+          <!-- 特殊地名映射（仅 GDF 地理编码时显示） -->
+          <el-tab-pane v-if="config.geocoding_provider === 'gdf'" label="地名映射" name="place-mapping">
             <div class="place-mapping-tab-content">
               <el-card shadow="never" class="mapping-card">
                 <template #header>
@@ -720,8 +828,9 @@
             </div>
           </el-tab-pane>
 
-          <!-- 边界数据管理 -->
-          <el-tab-pane label="边界数据" name="bounds-data">
+          <!-- 边界数据管理（已弃用，保留代码但不显示） -->
+          <!-- @deprecated 此功能已被 DataV GeoJSON 在线导入取代，保留代码以备不时之需 -->
+          <el-tab-pane v-if="false" label="边界数据" name="bounds-data">
             <div class="bounds-data-tab-content">
               <!-- 边界数据导入 -->
               <el-card shadow="never">
@@ -945,7 +1054,7 @@ import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
-import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask } from '@/api/admin'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask, type AdminDivisionStatusResponse, type ImportTaskProgress } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
@@ -1004,6 +1113,19 @@ const boundsImportTask = ref<{ id: number; status: string; progress: number; res
 const boundsImportPolling = ref(false)
 const loadingBoundsStats = ref(false)
 const boundsStats = ref<BoundsStatsResponse | null>(null)
+
+// DataV GeoJSON 行政区划导入
+const datavImportMode = ref<'full' | 'bounds' | 'provinces'>('full')
+const datavForceOverwrite = ref(false)
+const datavSelectedProvinces = ref<string[]>([])
+const datavProvinceList = ref<Array<{ code: string; name: string }>>([])
+const loadingProvinces = ref(false)
+const datavImporting = ref(false)
+const datavImportTaskId = ref<number | null>(null)
+const datavImportProgress = ref<ImportTaskProgress | null>(null)
+const datavUploadFile = ref<File | null>(null)
+const datavDivisionStatus = ref<AdminDivisionStatusResponse | null>(null)
+const loadingDivisionStatus = ref(false)
 
 // 标记组件是否已挂载，用于避免卸载后更新状态
 const isMounted = ref(true)
@@ -1310,6 +1432,151 @@ async function showAdminDivisionStats() {
     ElMessage.error(error?.message || '获取行政区划统计失败')
   } finally {
     loadingDivisionStats.value = false
+  }
+}
+
+// ========== DataV GeoJSON 行政区划导入 ==========
+
+// 加载行政区划状态
+async function loadDivisionStatus() {
+  loadingDivisionStatus.value = true
+  try {
+    datavDivisionStatus.value = await adminApi.getAdminDivisionStatus()
+  } catch (error: any) {
+    console.error('加载行政区划状态失败:', error)
+  } finally {
+    loadingDivisionStatus.value = false
+  }
+}
+
+// 加载省份列表（用于按省份导入）
+async function loadProvinceList() {
+  if (datavProvinceList.value.length > 0) return  // 已加载
+  loadingProvinces.value = true
+  try {
+    const response = await adminApi.getProvinceList()
+    datavProvinceList.value = response.provinces
+  } catch (error: any) {
+    ElMessage.error('获取省份列表失败')
+  } finally {
+    loadingProvinces.value = false
+  }
+}
+
+// 导入模式切换时加载省份列表
+function onDatavImportModeChange() {
+  if (datavImportMode.value === 'provinces') {
+    loadProvinceList()
+  }
+}
+
+// 从 DataV 在线导入
+async function importFromDataVOnline() {
+  // 如果是按省份导入但没选省份
+  if (datavImportMode.value === 'provinces' && datavSelectedProvinces.value.length === 0) {
+    ElMessage.warning('请至少选择一个省份')
+    return
+  }
+
+  datavImporting.value = true
+  datavImportProgress.value = null
+
+  try {
+    const response = await adminApi.importFromDataVOnline({
+      province_codes: datavImportMode.value === 'provinces' ? datavSelectedProvinces.value : undefined,
+      force: datavForceOverwrite.value,
+      bounds_only: datavImportMode.value === 'bounds',
+    })
+
+    if (response.task_id) {
+      datavImportTaskId.value = response.task_id
+      ElMessage.success('导入任务已启动')
+      // 开始轮询进度
+      pollDatavImportProgress()
+    } else {
+      ElMessage.success(response.message)
+      datavImporting.value = false
+      // 刷新状态
+      loadDivisionStatus()
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '启动导入任务失败')
+    datavImporting.value = false
+  }
+}
+
+// 上传压缩包导入
+async function importFromUpload() {
+  if (!datavUploadFile.value) {
+    ElMessage.warning('请选择文件')
+    return
+  }
+
+  datavImporting.value = true
+  datavImportProgress.value = null
+
+  try {
+    const response = await adminApi.importFromUpload(datavUploadFile.value, datavForceOverwrite.value)
+
+    if (response.task_id) {
+      datavImportTaskId.value = response.task_id
+      ElMessage.success('导入任务已启动')
+      pollDatavImportProgress()
+    } else {
+      ElMessage.success(response.message)
+      datavImporting.value = false
+      datavUploadFile.value = null
+      loadDivisionStatus()
+    }
+  } catch (error: any) {
+    ElMessage.error(error?.message || '上传导入失败')
+    datavImporting.value = false
+  }
+}
+
+// 轮询导入进度
+let datavPollingTimer: ReturnType<typeof setTimeout> | null = null
+
+async function pollDatavImportProgress() {
+  if (!datavImportTaskId.value || !isMounted.value) return
+
+  try {
+    const progress = await adminApi.getImportProgress(datavImportTaskId.value)
+    datavImportProgress.value = progress
+
+    if (progress.is_finished) {
+      datavImporting.value = false
+      datavImportTaskId.value = null
+      datavUploadFile.value = null
+
+      if (progress.status === 'completed') {
+        ElMessage.success('导入完成')
+      } else if (progress.status === 'failed') {
+        ElMessage.error(progress.error || '导入失败')
+      }
+
+      // 刷新状态
+      loadDivisionStatus()
+    } else {
+      // 继续轮询
+      datavPollingTimer = setTimeout(pollDatavImportProgress, 1000)
+    }
+  } catch (error: any) {
+    console.error('获取导入进度失败:', error)
+    datavPollingTimer = setTimeout(pollDatavImportProgress, 2000)
+  }
+}
+
+// 处理上传文件选择
+function handleDatavUploadChange(file: any) {
+  datavUploadFile.value = file.raw
+}
+
+// 清理 DataV 导入轮询
+function cleanupDatavPolling() {
+  if (datavPollingTimer) {
+    clearTimeout(datavPollingTimer)
+    datavPollingTimer = null
   }
 }
 
@@ -1887,6 +2154,8 @@ onMounted(async () => {
   await loadInviteCodes()
   await loadFonts()
   await loadMappings()
+  // 加载行政区划状态
+  loadDivisionStatus()
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
@@ -1902,6 +2171,7 @@ onBeforeUnmount(() => {
 // 组件卸载时移除监听器
 onUnmounted(() => {
   boundsImportPolling.value = false
+  cleanupDatavPolling()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
 })
@@ -2216,6 +2486,70 @@ onUnmounted(() => {
   font-size: 12px;
   color: #606266;
   line-height: 1.5;
+}
+
+/* DataV GeoJSON 行政区划导入 */
+.datav-import-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.province-selector {
+  margin-top: 4px;
+}
+
+.force-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-hint-inline {
+  font-size: 12px;
+  color: #909399;
+}
+
+.import-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.import-progress {
+  margin-top: 8px;
+}
+
+.progress-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.error-text {
+  color: var(--el-color-error);
+}
+
+.division-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #606266;
+  padding: 8px;
+  background-color: var(--el-fill-color-light);
+  border-radius: 4px;
+}
+
+.status-label {
+  font-weight: 500;
+}
+
+.status-sep {
+  color: #c0c4cc;
+  margin: 0 4px;
 }
 
 /* 行政区划统计样式 */

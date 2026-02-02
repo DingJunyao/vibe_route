@@ -1,6 +1,7 @@
 """
 管理员相关 API 路由
 """
+import asyncio
 from typing import List, Dict
 from pathlib import Path
 import yaml
@@ -1066,14 +1067,17 @@ async def test_upload(
     }
 
 
-@router.post("/import-bounds-data")
+@router.post("/import-bounds-data", deprecated=True)
 async def import_bounds_data(
     file: UploadFile = File(..., description="ZIP 或 RAR 压缩文件，包含 GeoJSON 数据"),
     current_admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    上传边界数据文件并创建后台导入任务（管理员）
+    [已弃用] 上传边界数据文件并创建后台导入任务（管理员）
+
+    ⚠️ 此端点已弃用，请使用 /admin/admin-divisions/import/online 或
+    /admin/admin-divisions/import/upload 替代。
 
     支持 ZIP 和 RAR 格式。
     压缩文件应包含 GeoJSON 文件，文件名格式为行政区划代码（如 110000.json）。
@@ -1167,7 +1171,9 @@ async def _process_bounds_import_task(
     filename: str
 ):
     """
-    后台处理边界数据导入任务
+    [已弃用] 后台处理边界数据导入任务
+
+    ⚠️ 此函数已弃用，仅为兼容旧版 /import-bounds-data 端点保留。
     """
     import asyncio
     import json
@@ -1272,7 +1278,7 @@ async def _process_bounds_import_task(
 
 
 def _read_geojson_file(file_path: Path) -> dict:
-    """在线程池中读取 GeoJSON 文件"""
+    """[已弃用] 在线程池中读取 GeoJSON 文件"""
     import json
     with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -1410,4 +1416,443 @@ async def get_bounds_stats(
         "by_level": level_stats,
         "missing_by_province": missing_by_province
     }
+
+
+# ========== DataV GeoJSON 行政区划导入（新） ==========
+
+class DataVImportRequest(BaseModel):
+    """DataV 在线导入请求"""
+    province_codes: List[str] | None = None  # 省级代码列表，None 表示全国
+    force: bool = False  # 是否强制覆盖
+    bounds_only: bool = False  # 仅更新边界数据
+
+
+class DataVImportResponse(BaseModel):
+    """导入响应"""
+    message: str
+    task_id: int | None = None
+    stats: Dict | None = None
+
+
+@router.get("/admin-divisions/status")
+async def get_admin_divisions_status(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取行政区划数据状态（管理员）
+
+    返回各层级数量、边界数据完整度等信息。
+    """
+    from app.models.admin_division import AdminDivision
+
+    result = {
+        "total": 0,
+        "by_level": {},
+        "has_bounds": 0,
+        "has_center": 0,
+        "last_updated": None,
+    }
+
+    try:
+        # 各层级统计
+        for level in ["province", "city", "area"]:
+            count_result = await db.execute(
+                select(func.count(AdminDivision.id)).where(
+                    and_(
+                        AdminDivision.level == level,
+                        AdminDivision.is_valid == True
+                    )
+                )
+            )
+            count = count_result.scalar() or 0
+            result["by_level"][level] = count
+            result["total"] += count
+
+        # 有边界框的记录数
+        bounds_result = await db.execute(
+            select(func.count(AdminDivision.id)).where(
+                and_(
+                    AdminDivision.min_lat.isnot(None),
+                    AdminDivision.is_valid == True
+                )
+            )
+        )
+        result["has_bounds"] = bounds_result.scalar() or 0
+
+        # 有中心点的记录数
+        center_result = await db.execute(
+            select(func.count(AdminDivision.id)).where(
+                and_(
+                    AdminDivision.center_lat.isnot(None),
+                    AdminDivision.is_valid == True
+                )
+            )
+        )
+        result["has_center"] = center_result.scalar() or 0
+
+        # 最后更新时间
+        latest_result = await db.execute(
+            select(func.max(AdminDivision.updated_at)).where(
+                AdminDivision.is_valid == True
+            )
+        )
+        latest = latest_result.scalar()
+        if latest:
+            result["last_updated"] = latest.isoformat()
+
+    except Exception as e:
+        result["error"] = str(e)
+
+    return result
+
+
+@router.post("/admin-divisions/import/online", response_model=DataVImportResponse)
+async def import_admin_divisions_online(
+    request: DataVImportRequest,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    从阿里 DataV 在线拉取并导入行政区划数据（管理员）
+
+    这是一个长时间运行的操作，会创建后台任务。
+    返回 task_id 用于查询进度。
+    """
+    import asyncio
+    from app.services.task_service import task_service
+
+    # 创建后台任务
+    task = await task_service.create_task(db, current_admin.id, "datav_import")
+    logger.info(f"[DataV导入] 创建任务 {task.id}")
+
+    # 在后台异步处理
+    asyncio.create_task(
+        _process_datav_import_task(
+            task_id=task.id,
+            province_codes=request.province_codes,
+            force=request.force,
+            bounds_only=request.bounds_only,
+        )
+    )
+
+    return DataVImportResponse(
+        message="导入任务已创建，正在后台处理",
+        task_id=task.id
+    )
+
+
+async def _process_datav_import_task(
+    task_id: int,
+    province_codes: List[str] | None,
+    force: bool,
+    bounds_only: bool,
+):
+    """后台处理 DataV 导入任务"""
+    from app.core.database import async_session_maker
+    from app.services.admin_division_import_service import AdminDivisionImportService
+    from app.services.task_service import task_service
+
+    async def update_progress(progress: int):
+        """使用独立会话更新进度，避免会话状态冲突"""
+        try:
+            async with async_session_maker() as progress_db:
+                await task_service.update_task(progress_db, task_id, progress=progress)
+        except Exception as e:
+            logger.warning(f"[DataV导入] 更新进度失败: {e}")
+
+    async with async_session_maker() as db:
+        try:
+            await task_service.update_task(db, task_id, status="running", progress=5)
+
+            service = AdminDivisionImportService()
+
+            def progress_callback(message: str, current: int, total: int):
+                # 异步更新进度（使用独立会话）
+                progress = 5 + int(90 * current / total) if total > 0 else 5
+                asyncio.create_task(update_progress(progress))
+                logger.info(f"[DataV导入] {message} ({current}/{total})")
+
+            if bounds_only:
+                # 仅更新边界
+                from app.services.datav_geo_service import datav_geo_service
+
+                if province_codes:
+                    features = await datav_geo_service.fetch_provinces_selective(
+                        province_codes, progress_callback
+                    )
+                else:
+                    features = await datav_geo_service.fetch_all_recursive(
+                        progress_callback=progress_callback
+                    )
+
+                # DataV 在线数据使用 GCJ02 坐标系，需要转换为 WGS84
+                updated = await service.import_bounds_only(db, features, progress_callback, convert_coords=True)
+                result = f"更新边界数据 {updated} 条"
+            else:
+                # 完整导入
+                stats = await service.import_from_datav_online(
+                    db,
+                    province_codes=province_codes,
+                    progress_callback=progress_callback,
+                    force=force
+                )
+                result = f"导入完成: 省 {stats['provinces']}, 市 {stats['cities']}, 区县 {stats['areas']}"
+
+            await task_service.update_task(
+                db, task_id,
+                status="completed",
+                progress=100,
+                result_path=result
+            )
+            logger.info(f"[DataV导入] 任务 {task_id} 完成: {result}")
+
+        except Exception as e:
+            logger.error(f"[DataV导入] 任务 {task_id} 失败: {e}")
+            await task_service.update_task(
+                db, task_id,
+                status="failed",
+                error_message=str(e)
+            )
+
+
+@router.post("/admin-divisions/import/upload", response_model=DataVImportResponse)
+async def import_admin_divisions_upload(
+    file: UploadFile = File(..., description="GeoJSON 压缩包（ZIP/RAR）"),
+    force: bool = Query(False, description="是否强制覆盖"),
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    上传 GeoJSON 压缩包导入行政区划数据（管理员）
+
+    支持 ZIP 和 RAR 格式，压缩包内应包含 DataV 格式的 GeoJSON 文件。
+    """
+    import asyncio
+    import uuid
+    from app.utils.archive_helper import ArchiveExtractor
+    from app.services.task_service import task_service
+
+    # 检查文件格式
+    filename = file.filename or "upload"
+    if not ArchiveExtractor.is_supported(filename):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不支持的文件格式，请上传 ZIP 或 RAR 文件"
+        )
+
+    # 创建临时目录
+    temp_dir = Path(settings.TEMP_DIR) / f"datav_import_{uuid.uuid4()}"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # 保存上传的文件
+    safe_filename = Path(filename).name
+    archive_path = temp_dir / safe_filename
+
+    try:
+        content = await file.read()
+        with open(archive_path, "wb") as f:
+            f.write(content)
+
+        if archive_path.stat().st_size == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="上传的文件为空"
+            )
+
+        # 创建后台任务
+        task = await task_service.create_task(db, current_admin.id, "datav_upload_import")
+        logger.info(f"[DataV上传导入] 创建任务 {task.id}")
+
+        # 在后台异步处理
+        asyncio.create_task(
+            _process_datav_upload_task(
+                task_id=task.id,
+                archive_path=str(archive_path),
+                temp_dir=str(temp_dir),
+                force=force,
+            )
+        )
+
+        return DataVImportResponse(
+            message="文件上传成功，正在后台处理",
+            task_id=task.id
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[DataV上传导入] 上传失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"上传失败: {str(e)}"
+        )
+
+
+async def _process_datav_upload_task(
+    task_id: int,
+    archive_path: str,
+    temp_dir: str,
+    force: bool,
+):
+    """后台处理 DataV 压缩包导入任务"""
+    import shutil
+    from pathlib import Path
+    from app.core.database import async_session_maker
+    from app.services.admin_division_import_service import AdminDivisionImportService
+    from app.services.task_service import task_service
+
+    temp_path = Path(temp_dir)
+    archive_file = Path(archive_path)
+
+    async def update_progress(progress: int):
+        """使用独立会话更新进度，避免会话状态冲突"""
+        try:
+            async with async_session_maker() as progress_db:
+                await task_service.update_task(progress_db, task_id, progress=progress)
+        except Exception as e:
+            logger.warning(f"[DataV上传导入] 更新进度失败: {e}")
+
+    async with async_session_maker() as db:
+        try:
+            await task_service.update_task(db, task_id, status="running", progress=5)
+
+            service = AdminDivisionImportService()
+
+            def progress_callback(message: str, current: int, total: int):
+                progress = 5 + int(90 * current / total) if total > 0 else 5
+                asyncio.create_task(update_progress(progress))
+                logger.info(f"[DataV上传导入] {message} ({current}/{total})")
+
+            stats = await service.import_from_geojson_archive(
+                db,
+                archive_path=archive_file,
+                progress_callback=progress_callback,
+                force=force
+            )
+
+            result = f"导入完成: 省 {stats['provinces']}, 市 {stats['cities']}, 区县 {stats['areas']}, 文件 {stats['files']}"
+
+            await task_service.update_task(
+                db, task_id,
+                status="completed",
+                progress=100,
+                result_path=result
+            )
+            logger.info(f"[DataV上传导入] 任务 {task_id} 完成: {result}")
+
+        except Exception as e:
+            logger.error(f"[DataV上传导入] 任务 {task_id} 失败: {e}")
+            await task_service.update_task(
+                db, task_id,
+                status="failed",
+                error_message=str(e)
+            )
+
+        finally:
+            # 清理临时目录
+            shutil.rmtree(temp_path, ignore_errors=True)
+
+
+@router.get("/admin-divisions/import/progress/{task_id}")
+async def get_admin_divisions_import_progress(
+    task_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取行政区划导入任务进度（管理员）
+    """
+    from app.services.task_service import task_service
+
+    task = await task_service.get_task(db, task_id)
+
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在"
+        )
+
+    # 只有管理员或任务创建者可以查看
+    if task.user_id != current_admin.id and not current_admin.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权访问此任务"
+        )
+
+    return {
+        "id": task.id,
+        "type": task.type,
+        "status": task.status,
+        "progress": task.progress,
+        "result": task.result_path,
+        "error": task.error_message,
+        "created_at": task.created_at.isoformat(),
+        "is_finished": task.is_finished,
+    }
+
+
+@router.get("/admin-divisions/provinces")
+async def get_province_list(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取省份列表（用于按省份导入选择）
+    """
+    from app.models.admin_division import AdminDivision
+
+    result = await db.execute(
+        select(AdminDivision.code, AdminDivision.name)
+        .where(
+            and_(
+                AdminDivision.level == "province",
+                AdminDivision.is_valid == True
+            )
+        )
+        .order_by(AdminDivision.code)
+    )
+
+    provinces = [{"code": row[0], "name": row[1]} for row in result.fetchall()]
+
+    # 如果数据库中没有省份数据，返回预设列表
+    if not provinces:
+        provinces = [
+            {"code": "110000", "name": "北京市"},
+            {"code": "120000", "name": "天津市"},
+            {"code": "130000", "name": "河北省"},
+            {"code": "140000", "name": "山西省"},
+            {"code": "150000", "name": "内蒙古自治区"},
+            {"code": "210000", "name": "辽宁省"},
+            {"code": "220000", "name": "吉林省"},
+            {"code": "230000", "name": "黑龙江省"},
+            {"code": "310000", "name": "上海市"},
+            {"code": "320000", "name": "江苏省"},
+            {"code": "330000", "name": "浙江省"},
+            {"code": "340000", "name": "安徽省"},
+            {"code": "350000", "name": "福建省"},
+            {"code": "360000", "name": "江西省"},
+            {"code": "370000", "name": "山东省"},
+            {"code": "410000", "name": "河南省"},
+            {"code": "420000", "name": "湖北省"},
+            {"code": "430000", "name": "湖南省"},
+            {"code": "440000", "name": "广东省"},
+            {"code": "450000", "name": "广西壮族自治区"},
+            {"code": "460000", "name": "海南省"},
+            {"code": "500000", "name": "重庆市"},
+            {"code": "510000", "name": "四川省"},
+            {"code": "520000", "name": "贵州省"},
+            {"code": "530000", "name": "云南省"},
+            {"code": "540000", "name": "西藏自治区"},
+            {"code": "610000", "name": "陕西省"},
+            {"code": "620000", "name": "甘肃省"},
+            {"code": "630000", "name": "青海省"},
+            {"code": "640000", "name": "宁夏回族自治区"},
+            {"code": "650000", "name": "新疆维吾尔自治区"},
+            {"code": "710000", "name": "台湾省"},
+            {"code": "810000", "name": "香港特别行政区"},
+            {"code": "820000", "name": "澳门特别行政区"},
+        ]
+
+    return {"provinces": provinces}
 

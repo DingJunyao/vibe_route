@@ -1055,3 +1055,57 @@ points.value.sort((a, b) => {
 - `point_index` 字段仍保留在数据库中，用于 GPX 导入等场景
 - 实时记录期间的 `point_index` 可能不准确，但停止时会自动修复
 - 所有新代码查询轨迹点时，必须按时间排序而非 `point_index`
+
+### DataV GeoJSON 行政区划导入
+
+**功能**：从阿里 DataV GeoAtlas API 获取行政区划数据，支持在线更新和压缩包上传。
+
+**数据源**：
+- API 地址：`https://geo.datav.aliyun.com/areas_v3/bound`
+- 数据格式：GeoJSON，包含省/市/区县三级行政区划
+
+**坐标系处理**：
+- **DataV 在线数据**：使用 GCJ02 坐标系（火星坐标），导入时自动转换为 WGS84
+- **压缩包数据**：假设为 WGS84 坐标系（用户需确认），不进行转换
+- 边界框和中心点坐标都会进行相应的坐标转换
+
+**导入模式**：
+- **全量更新**：获取全国所有行政区划数据
+- **仅更新边界**：只更新边界框数据，不修改基础信息
+- **按省份更新**：选择性更新指定省份
+
+**数据库字段扩展**：
+- `center_lon`/`center_lat`：行政区划中心点坐标（浮点数，WGS84）
+- `children_num`：子级行政区划数量
+
+**特殊行政区划处理**：
+- **直辖市**（110000、120000、310000、500000）：区县直接归属省级
+- **不设区地级市**（441900 东莞、442000 中山、460400 儋州、620200 嘉峪关）：保留市级，不获取镇级
+- **省辖县级单位**（如济源市）：`childrenNum=0` 的 city 级存为 area
+
+**本地反向地理编码修复**：
+- 正确处理只查询到 city 级别的不设区地级市情况
+- 按中心距离选择最近的区域（当有多个匹配时）
+
+**后端服务**：
+- [`DataVGeoService`](backend/app/services/datav_geo_service.py)：从 DataV API 获取数据
+- [`AdminDivisionImportService.import_from_datav_online()`](backend/app/services/admin_division_import_service.py)：在线导入
+- [`AdminDivisionImportService.import_from_geojson_archive()`](backend/app/services/admin_division_import_service.py)：压缩包导入
+
+**API 端点**：
+- `GET /admin/admin-divisions/status`：获取行政区划数据状态
+- `POST /admin/admin-divisions/import/online`：在线导入（后台任务）
+- `POST /admin/admin-divisions/import/upload`：上传压缩包导入
+- `GET /admin/admin-divisions/import/progress/{task_id}`：获取导入进度
+- `GET /admin/admin-divisions/provinces`：获取省份列表
+
+**前端 UI**（[`Admin.vue`](frontend/src/views/Admin.vue)）：
+- 导入模式选择（全量/边界/按省份）
+- 省份多选（按省份模式）
+- 强制覆盖选项
+- 在线更新/上传压缩包按钮
+- 进度条显示
+- 当前数据状态显示
+
+**废弃方法**：
+- `import_from_sqlite()`：已标记为 DEPRECATED，建议使用新的 DataV 导入方法

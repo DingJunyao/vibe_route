@@ -1,0 +1,16 @@
+-- 011: 添加行政区划中心点和子级数量字段 (PostgreSQL 版本)
+--
+-- 为 AdminDivision 模型添加以下字段：
+-- - center_lon: 中心点经度（浮点数）
+-- - center_lat: 中心点纬度（浮点数）
+-- - children_num: 子级数量
+
+ALTER TABLE admin_divisions
+    ADD COLUMN center_lon DOUBLE PRECISION,
+    ADD COLUMN center_lat DOUBLE PRECISION,
+    ADD COLUMN children_num INTEGER;
+
+-- 添加注释
+COMMENT ON COLUMN admin_divisions.center_lon IS '中心点经度';
+COMMENT ON COLUMN admin_divisions.center_lat IS '中心点纬度';
+COMMENT ON COLUMN admin_divisions.children_num IS '子级数量';

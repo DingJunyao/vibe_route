@@ -1408,6 +1408,20 @@ class TrackService:
                 current_city = (city_key, new_city)
                 current_district = None
                 current_road = None
+            elif not city_key and current_city is not None:
+                # city 为空但之前有市级节点，需要重置（如从儋州市切换到临高县）
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                # 结束旧市级节点的索引范围
+                if prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                # 重置市级节点和下层节点
+                current_city = None
+                current_district = None
+                current_road = None
 
             city_node = current_city[1] if current_city else province_node
 
