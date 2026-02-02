@@ -319,6 +319,38 @@ class DataVGeoService:
         return (None, None)
 
     @staticmethod
+    def convert_geometry_to_wgs84(geometry: dict) -> dict:
+        """
+        将 GeoJSON 几何从 GCJ02 转换为 WGS84
+
+        支持 Polygon 和 MultiPolygon 类型。
+
+        Args:
+            geometry: GeoJSON 几何对象
+
+        Returns:
+            转换后的几何对象（深拷贝，不修改原对象）
+        """
+        import copy
+
+        result = copy.deepcopy(geometry)
+        geom_type = result.get("type")
+
+        def convert_ring(ring):
+            """转换一个坐标环"""
+            return [list(gcj02_to_wgs84(lon, lat)) for lon, lat in ring]
+
+        if geom_type == "Polygon":
+            result["coordinates"] = [convert_ring(ring) for ring in result["coordinates"]]
+        elif geom_type == "MultiPolygon":
+            result["coordinates"] = [
+                [convert_ring(ring) for ring in polygon]
+                for polygon in result["coordinates"]
+            ]
+
+        return result
+
+    @staticmethod
     def extract_bounds(feature: dict, convert_to_wgs84: bool = True) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
         """
         从 GeoJSON feature 中提取边界框

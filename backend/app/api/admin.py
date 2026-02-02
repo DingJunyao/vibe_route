@@ -442,14 +442,26 @@ async def get_admin_division_stats(
         except Exception:
             stats["has_postgis"] = 0
 
-        # 检查缺少 city_code 或 province_code 的区县记录
+        # 检查缺少 city_code 的区县记录（排除正常情况）
+        # 正常情况：直辖市区县、省辖县级单位
+        # 直辖市代码前两位：11(北京)、12(天津)、31(上海)、50(重庆)
+        MUNICIPALITY_PREFIXES = ['11', '12', '31', '50']
         result = await db.execute(
-            select(AdminDivision.code, AdminDivision.name, AdminDivision.city_code, AdminDivision.province_code).where(
+            select(
+                AdminDivision.code,
+                AdminDivision.name,
+                AdminDivision.city_code,
+                AdminDivision.province_code
+            ).where(
                 and_(
                     AdminDivision.level == "area",
+                    AdminDivision.city_code.is_(None),
+                    # 排除直辖市区县
+                    func.left(AdminDivision.province_code, 2).notin_(MUNICIPALITY_PREFIXES),
+                    # 排除省辖县级单位（parent_code 直接指向省级，以 0000 结尾）
                     or_(
-                        AdminDivision.city_code.is_(None),
-                        AdminDivision.province_code.is_(None)
+                        AdminDivision.parent_code.is_(None),
+                        ~AdminDivision.parent_code.like('%0000')
                     )
                 )
             ).limit(5)

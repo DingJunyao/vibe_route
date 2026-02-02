@@ -32,6 +32,110 @@ class AdminDivisionImportService:
         # 旧路径保留用于向后兼容
         self.geojson_path = self.data_path / "area_geojson"
         self.special_mapping = None
+        # PostGIS 可用性缓存
+        self._postgis_available: Optional[bool] = None
+
+    async def _is_postgis_available(self, db: AsyncSession) -> bool:
+        """
+        检测 PostGIS 是否可用，并自动补全空间表结构
+
+        条件：
+        1. 数据库类型为 PostgreSQL
+        2. 已安装 PostGIS 扩展
+
+        如果 PostGIS 可用但空间表结构不完整，会自动创建。
+
+        Returns:
+            bool: PostGIS 是否可用
+        """
+        # 使用缓存
+        if self._postgis_available is not None:
+            return self._postgis_available
+
+        if settings.DATABASE_TYPE != "postgresql":
+            self._postgis_available = False
+            return False
+
+        try:
+            # 检查 PostGIS 扩展是否存在
+            result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+            )
+            postgis_installed = result.scalar_one()
+
+            if not postgis_installed:
+                self._postgis_available = False
+                return False
+
+            # PostGIS 已安装，检查并补全空间表结构
+            await self._ensure_spatial_table(db)
+            self._postgis_available = True
+
+        except Exception as e:
+            logger.warning(f"PostGIS 检测失败: {e}")
+            self._postgis_available = False
+
+        return self._postgis_available
+
+    async def _ensure_spatial_table(self, db: AsyncSession) -> None:
+        """
+        确保 PostGIS 空间表结构完整
+
+        如果表不存在或 geom 字段不存在，自动创建。
+        """
+        try:
+            # 检查表是否存在
+            result = await db.execute(text("""
+                SELECT EXISTS(
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'admin_divisions_spatial'
+                )
+            """))
+            table_exists = result.scalar_one()
+
+            if not table_exists:
+                # 创建完整的空间表
+                logger.info("创建 admin_divisions_spatial 表")
+                await db.execute(text("""
+                    CREATE TABLE admin_divisions_spatial (
+                        division_id INTEGER PRIMARY KEY REFERENCES admin_divisions(id) ON DELETE CASCADE,
+                        geom GEOMETRY(GEOMETRY, 4326)
+                    )
+                """))
+                await db.execute(text("""
+                    CREATE INDEX idx_admin_divisions_spatial_geom
+                        ON admin_divisions_spatial USING GIST(geom)
+                """))
+                await db.commit()
+                logger.info("admin_divisions_spatial 表创建成功")
+            else:
+                # 表存在，检查 geom 字段是否存在
+                result = await db.execute(text("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'admin_divisions_spatial' AND column_name = 'geom'
+                    )
+                """))
+                geom_exists = result.scalar_one()
+
+                if not geom_exists:
+                    # 添加 geom 字段
+                    logger.info("添加 geom 字段到 admin_divisions_spatial 表")
+                    await db.execute(text("""
+                        ALTER TABLE admin_divisions_spatial
+                        ADD COLUMN geom GEOMETRY(GEOMETRY, 4326)
+                    """))
+                    await db.execute(text("""
+                        CREATE INDEX IF NOT EXISTS idx_admin_divisions_spatial_geom
+                            ON admin_divisions_spatial USING GIST(geom)
+                    """))
+                    await db.commit()
+                    logger.info("geom 字段添加成功")
+
+        except Exception as e:
+            logger.error(f"确保空间表结构失败: {e}")
+            await db.rollback()
+            raise
 
     async def import_from_sqlite(
         self,
@@ -556,10 +660,15 @@ class AdminDivisionImportService:
         """
         from app.services.datav_geo_service import datav_geo_service
 
-        stats = {"provinces": 0, "cities": 0, "areas": 0, "updated": 0}
+        stats = {"provinces": 0, "cities": 0, "areas": 0, "updated": 0, "postgis": 0}
 
         # 加载特殊地名映射
         self.special_mapping = load_special_mapping()
+
+        # 检测 PostGIS 可用性
+        postgis_available = await self._is_postgis_available(db)
+        if postgis_available:
+            logger.info("PostGIS 可用，将同时保存几何数据")
 
         try:
             # 如果强制重新导入，先删除已有数据
@@ -593,9 +702,15 @@ class AdminDivisionImportService:
             for i, feature in enumerate(features):
                 try:
                     # DataV 在线数据使用 GCJ02 坐标系，需要转换为 WGS84
-                    updated = await self._import_datav_feature(db, feature, force, convert_coords=True)
+                    updated = await self._import_datav_feature(
+                        db, feature, force,
+                        convert_coords=True,
+                        save_postgis=postgis_available
+                    )
                     if updated:
                         stats["updated"] += 1
+                        if postgis_available and feature.get("geometry"):
+                            stats["postgis"] += 1
 
                     # 统计层级
                     props = feature.get("properties", {})
@@ -799,7 +914,8 @@ class AdminDivisionImportService:
         db: AsyncSession,
         feature: dict,
         force: bool,
-        convert_coords: bool = True
+        convert_coords: bool = True,
+        save_postgis: bool = False
     ) -> bool:
         """
         导入单个 DataV 格式的 GeoJSON feature
@@ -809,6 +925,7 @@ class AdminDivisionImportService:
             feature: GeoJSON feature
             force: 是否强制覆盖
             convert_coords: 是否将坐标从 GCJ02 转换为 WGS84（DataV 在线数据需要转换）
+            save_postgis: 是否保存几何到 PostGIS 空间表
 
         Returns:
             bool: 是否成功导入/更新
@@ -843,7 +960,10 @@ class AdminDivisionImportService:
         )
         existing = result.scalar_one_or_none()
 
+        division_id = None
+
         if existing:
+            division_id = existing.id
             if force:
                 # 更新已有记录
                 existing.name = name
@@ -861,7 +981,6 @@ class AdminDivisionImportService:
                 if center[0] is not None:
                     existing.center_lon = center[0]
                     existing.center_lat = center[1]
-                return True
             else:
                 # 仅更新边界和中心点（如果之前没有）
                 if existing.min_lon is None and bounds[0] is not None:
@@ -874,7 +993,6 @@ class AdminDivisionImportService:
                     existing.center_lat = center[1]
                 if existing.children_num is None:
                     existing.children_num = children_num
-                return True
         else:
             # 创建新记录
             division = AdminDivision(
@@ -894,7 +1012,32 @@ class AdminDivisionImportService:
                 center_lat=center[1],
             )
             db.add(division)
-            return True
+            # 刷新以获取 ID
+            await db.flush()
+            division_id = division.id
+
+        # 保存 PostGIS 几何（如果启用）
+        if save_postgis and division_id:
+            geometry = feature.get("geometry")
+            if geometry:
+                try:
+                    # 使用 savepoint 隔离 PostGIS 操作，避免失败时影响整个事务
+                    async with db.begin_nested():
+                        # 坐标转换
+                        if convert_coords:
+                            geometry = DataVGeoService.convert_geometry_to_wgs84(geometry)
+
+                        # 插入或更新 PostGIS 几何
+                        geojson_str = json.dumps(geometry)
+                        await db.execute(text("""
+                            INSERT INTO admin_divisions_spatial (division_id, geom)
+                            VALUES (:division_id, ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326))
+                            ON CONFLICT (division_id) DO UPDATE SET geom = EXCLUDED.geom
+                        """), {"division_id": division_id, "geojson": geojson_str})
+                except Exception as e:
+                    logger.warning(f"保存 PostGIS 几何失败 [{adcode}]: {e}")
+
+        return True
 
     async def _import_legacy_feature(
         self,

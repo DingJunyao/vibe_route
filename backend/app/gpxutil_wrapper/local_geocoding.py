@@ -4,7 +4,7 @@
 使用本地存储的行政区划数据进行反向地理编码。
 支持边界框查询和 PostGIS 空间查询。
 """
-from typing import Any
+from typing import Any, Optional
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, text
@@ -42,6 +42,7 @@ class LocalGeocodingService(GeocodingService):
         # 使用 spatial_backend 配置（向后兼容旧的 query_mode 参数）
         spatial_backend = config.get("spatial_backend", config.get("query_mode", "auto"))
         self._database_type = getattr(settings, 'DATABASE_TYPE', 'sqlite')
+        self._spatial_backend = spatial_backend
 
         # 根据 spatial_backend 设置是否使用 PostGIS
         if spatial_backend == "auto":
@@ -51,7 +52,52 @@ class LocalGeocodingService(GeocodingService):
         else:  # spatial_backend == "python"
             self.use_postgis = False
 
+        # PostGIS 可用性缓存（None 表示未检测）
+        self._postgis_available: Optional[bool] = None
+
         gdf_logger.info(f"GDF 初始化: database={self._database_type}, spatial_backend={spatial_backend}, use_postgis={self.use_postgis}")
+
+    async def _check_postgis_available(self, db) -> bool:
+        """
+        检测 PostGIS 是否真正可用（有数据）
+
+        检查条件：
+        1. PostGIS 扩展已安装
+        2. admin_divisions_spatial 表存在且有数据
+
+        如果不可用，会自动回退到边界框查询。
+        """
+        if self._postgis_available is not None:
+            return self._postgis_available
+
+        try:
+            # 检查 PostGIS 扩展
+            result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+            )
+            if not result.scalar_one():
+                gdf_logger.info("PostGIS 扩展未安装，回退到边界框查询")
+                self._postgis_available = False
+                return False
+
+            # 检查空间表是否有数据
+            result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM admin_divisions_spatial LIMIT 1)")
+            )
+            has_data = result.scalar_one()
+
+            if not has_data:
+                gdf_logger.info("PostGIS 空间表无数据，回退到边界框查询")
+                self._postgis_available = False
+                return False
+
+            self._postgis_available = True
+            return True
+
+        except Exception as e:
+            gdf_logger.warning(f"PostGIS 可用性检测失败: {e}，回退到边界框查询")
+            self._postgis_available = False
+            return False
 
     async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
         """
@@ -81,7 +127,10 @@ class LocalGeocodingService(GeocodingService):
 
         try:
             async with async_session_maker() as db:
-                if self.use_postgis:
+                # 检测是否应该使用 PostGIS
+                use_postgis_query = self.use_postgis and await self._check_postgis_available(db)
+
+                if use_postgis_query:
                     gdf_logger.debug(f"使用 PostGIS 查询: ({lat}, {lon})")
                     divisions = await self._query_with_postgis(db, lat, lon)
                 else:
