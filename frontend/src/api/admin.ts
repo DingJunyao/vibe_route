@@ -304,6 +304,23 @@ export const adminApi = {
   getProvinceList(): Promise<ProvinceListResponse> {
     return http.get('/admin/admin-divisions/provinces')
   },
+
+  // ========== PostGIS 几何数据同步 ==========
+
+  // 获取 PostGIS 同步状态
+  getPostgisSyncStatus(): Promise<PostgisSyncStatus> {
+    return http.get('/admin/admin-divisions/postgis-status')
+  },
+
+  // 同步到 PostGIS
+  syncPostgisGeometry(): Promise<{ message: string; task_id: number }> {
+    return http.post('/admin/admin-divisions/sync-postgis')
+  },
+
+  // 获取任务状态（通用）
+  getTask(taskId: number): Promise<TaskProgress> {
+    return http.get(`/admin/tasks/${taskId}`)
+  },
 }
 
 // 边界导入任务状态
@@ -443,4 +460,28 @@ export interface ProvinceListResponse {
     code: string
     name: string
   }>
+}
+
+// ========== PostGIS 几何数据同步 ==========
+
+// PostGIS 同步状态
+export interface PostgisSyncStatus {
+  has_geometry: number      // 有 geometry 字段的记录数
+  has_postgis: number       // PostGIS 空间表有数据的记录数
+  need_sync: number         // 需要同步的记录数
+  postgis_enabled: boolean  // PostGIS 扩展是否启用
+  spatial_table_exists: boolean  // 空间表是否存在
+}
+
+// 任务进度（通用）
+export interface TaskProgress {
+  id: number
+  type: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  progress: number
+  result?: string
+  result_path?: string
+  error?: string
+  created_at: string
+  is_finished: boolean
 }

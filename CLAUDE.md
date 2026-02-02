@@ -1219,3 +1219,37 @@ if province and not city and not area:
         "area_code": None
     }
 ```
+
+### PostGIS 几何数据同步
+
+**背景**：
+- `admin_divisions.geometry` 字段存储 GeoJSON 多边形（用于 shapely 判断）
+- `admin_divisions_spatial.geom` 字段存储 PostGIS 几何（用于 PostGIS 空间查询）
+- 两套数据独立存储，需要手动同步
+
+**问题**：当用户在后台管理中切换 `spatial_backend` 为 `postgis` 时，不会自动同步 PostGIS 几何数据。
+
+**解决方案**：提供手动同步功能，从 `geometry` 字段同步到 PostGIS 空间表。
+
+**后端 API**：
+- `GET /admin/admin-divisions/postgis-status`：获取同步状态（几何数据数、PostGIS 数、需同步数）
+- `POST /admin/admin-divisions/sync-postgis`：触发同步任务（后台执行）
+
+**实现逻辑**（[`AdminDivisionImportService.sync_postgis_from_geometry`](backend/app/services/admin_division_import_service.py)）：
+1. 检查 PostgreSQL + PostGIS 环境是否可用
+2. 确保 `admin_divisions_spatial` 表存在
+3. 遍历所有有 `geometry` 的记录
+4. 使用 `ST_GeomFromGeoJSON` 将 GeoJSON 转换为 PostGIS 几何
+5. 使用 `ON CONFLICT ... DO UPDATE` 处理重复记录
+
+**前端功能**（[`Admin.vue`](frontend/src/views/Admin.vue)）：
+- 在"空间计算设置"区域显示同步状态
+- "同步到 PostGIS"按钮（当需同步数 > 0 时启用）
+- 进度条显示同步进度
+- 自动轮询任务状态，完成后刷新同步状态
+
+**涉及文件**：
+- [`admin_division_import_service.py`](backend/app/services/admin_division_import_service.py) - `sync_postgis_from_geometry()` 方法
+- [`admin.py`](backend/app/api/admin.py) - API 端点
+- [`admin.ts`](frontend/src/api/admin.ts) - API 客户端
+- [`Admin.vue`](frontend/src/views/Admin.vue) - UI 和交互

@@ -197,7 +197,7 @@
                           </el-radio-group>
                           <div class="radio-hint">
                             <template v-if="datavImportMode === 'full'">
-                              从阿里 DataV 获取全国所有行政区划数据（省/市/区县）
+                              从 <el-link href="https://datav.aliyun.com/portal/school/atlas/area_selector" target="_blank" type="primary">阿里 DataV</el-link> 获取全国所有行政区划数据（省/市/区县），或者从 <el-link href="https://map.vanbyte.com/street.html" target="_blank" type="primary">全国行政区划边界 GeoJSON 数据</el-link> 获取压缩包上传。
                             </template>
                             <template v-else-if="datavImportMode === 'bounds'">
                               仅更新边界框数据，不修改行政区划基础信息
@@ -354,6 +354,43 @@
                           <template v-else>
                             使用 PostGIS 空间函数，高性能
                           </template>
+                        </div>
+                      </el-form-item>
+
+                      <!-- PostGIS 几何数据同步 -->
+                      <el-form-item v-if="databaseInfo?.database_type === 'postgresql' && databaseInfo?.postgis_enabled && (config.spatial_backend === 'postgis' || config.spatial_backend === 'auto')" label="PostGIS 几何数据">
+                        <div v-if="postgisSyncStatusLoading" class="postgis-sync-loading">
+                          <el-icon class="is-loading"><Loading /></el-icon>
+                          <span>加载状态中...</span>
+                        </div>
+                        <div v-else class="postgis-sync-status">
+                          <div class="sync-status-item">
+                            <span class="status-label">几何数据 (geometry):</span>
+                            <span class="status-value">{{ postgisSyncStatus.has_geometry || 0 }} 条</span>
+                          </div>
+                          <div class="sync-status-item">
+                            <span class="status-label">PostGIS 空间表:</span>
+                            <span class="status-value">{{ postgisSyncStatus.has_postgis || 0 }} 条</span>
+                          </div>
+                          <div v-if="postgisSyncStatus.need_sync > 0" class="sync-status-item need-sync">
+                            <span class="status-label">需要同步:</span>
+                            <span class="status-value">{{ postgisSyncStatus.need_sync }} 条</span>
+                          </div>
+                          <el-button
+                            type="primary"
+                            @click="syncPostGISGeometry"
+                            :loading="syncingPostGIS"
+                            :disabled="postgisSyncStatus.need_sync === 0"
+                          >
+                            {{ syncingPostGIS ? '同步中...' : '同步到 PostGIS' }}
+                          </el-button>
+                          <div v-if="postgisSyncProgress.show" class="sync-progress">
+                            <el-progress
+                              :percentage="postgisSyncProgress.percentage"
+                              :status="postgisSyncProgress.status"
+                            />
+                            <span class="progress-text">{{ postgisSyncProgress.text }}</span>
+                          </div>
                         </div>
                       </el-form-item>
                     </template>
@@ -1215,6 +1252,36 @@ const originalConfig = ref<SystemConfig | null>(null)
 // 数据库信息（用于判断是否显示 PostGIS 设置）
 const databaseInfo = ref<DatabaseInfo | null>(null)
 
+// PostGIS 同步状态
+const postgisSyncStatus = ref<{
+  has_geometry: number
+  has_postgis: number
+  need_sync: number
+  postgis_enabled: boolean
+  spatial_table_exists: boolean
+}>({
+  has_geometry: 0,
+  has_postgis: 0,
+  need_sync: 0,
+  postgis_enabled: false,
+  spatial_table_exists: false,
+})
+const postgisSyncStatusLoading = ref(false)
+const syncingPostGIS = ref(false)
+const postgisSyncProgress = ref<{
+  show: boolean
+  percentage: number
+  status: '' | 'success' | 'exception'
+  text: string
+}>({
+  show: false,
+  percentage: 0,
+  status: '',
+  text: '',
+})
+let postgisSyncTaskId: number | null = null
+let postgisSyncTimer: ReturnType<typeof setInterval> | null = null
+
 // 用户列表
 const users = ref<User[]>([])
 
@@ -1318,6 +1385,111 @@ async function clearRoadSignCache(signType?: 'way' | 'expwy') {
     clearingExpwyCache.value = false
     clearingAllCache.value = false
   }
+}
+
+// 获取 PostGIS 同步状态
+async function loadPostgisSyncStatus() {
+  if (!databaseInfo.value?.postgis_enabled) {
+    return
+  }
+  postgisSyncStatusLoading.value = true
+  try {
+    const response = await adminApi.getPostgisSyncStatus()
+    if (isMounted.value) {
+      postgisSyncStatus.value = response
+    }
+  } catch (error) {
+    // 静默失败，可能不是 PostgreSQL
+  } finally {
+    if (isMounted.value) {
+      postgisSyncStatusLoading.value = false
+    }
+  }
+}
+
+// 同步到 PostGIS
+async function syncPostGISGeometry() {
+  try {
+    await ElMessageBox.confirm(
+      '将 geometry 字段的数据同步到 PostGIS 空间表，这可能需要一些时间。是否继续？',
+      '确认同步',
+      {
+        confirmButtonText: '开始同步',
+        cancelButtonText: '取消',
+        type: 'info',
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  syncingPostGIS.value = true
+  postgisSyncProgress.value = {
+    show: true,
+    percentage: 0,
+    status: '',
+    text: '创建同步任务...',
+  }
+
+  try {
+    const response = await adminApi.syncPostgisGeometry()
+    postgisSyncTaskId = response.task_id
+
+    // 开始轮询任务进度
+    postgisSyncProgress.value.text = '同步中...'
+    pollPostgisSyncProgress()
+  } catch (error) {
+    syncingPostGIS.value = false
+    postgisSyncProgress.value.show = false
+    // 错误已在拦截器中处理
+  }
+}
+
+// 轮询 PostGIS 同步进度
+async function pollPostgisSyncProgress() {
+  if (postgisSyncTaskId === null) return
+
+  postgisSyncTimer = setInterval(async () => {
+    try {
+      const task = await adminApi.getTask(postgisSyncTaskId)
+
+      if (task.is_finished) {
+        clearInterval(postgisSyncTimer!)
+        postgisSyncTimer = null
+
+        if (task.status === 'completed') {
+          postgisSyncProgress.value.percentage = 100
+          postgisSyncProgress.value.status = 'success'
+          postgisSyncProgress.value.text = '同步完成！'
+          ElMessage.success('PostGIS 几何数据同步完成')
+
+          // 刷新同步状态
+          await loadPostgisSyncStatus()
+        } else if (task.status === 'failed') {
+          postgisSyncProgress.value.status = 'exception'
+          postgisSyncProgress.value.text = '同步失败: ' + (task.error || '未知错误')
+          ElMessage.error('同步失败: ' + (task.error || '未知错误'))
+        }
+
+        syncingPostGIS.value = false
+
+        // 3秒后隐藏进度条
+        setTimeout(() => {
+          if (isMounted.value) {
+            postgisSyncProgress.value.show = false
+          }
+        }, 3000)
+      } else {
+        // 更新进度
+        postgisSyncProgress.value.percentage = task.progress || 0
+      }
+    } catch (error) {
+      clearInterval(postgisSyncTimer!)
+      postgisSyncTimer = null
+      syncingPostGIS.value = false
+      postgisSyncProgress.value.show = false
+    }
+  }, 1000)
 }
 
 // 初始化地图层列表
@@ -1550,13 +1722,27 @@ async function pollDatavImportProgress() {
       datavUploadFile.value = null
 
       if (progress.status === 'completed') {
-        ElMessage.success('导入完成')
+        // 解析结果中的 PostGIS 同步信息
+        const result = progress.result || progress.result_path || ''
+        let message = '导入完成'
+        if (result.includes('成功=') && result.includes('PostGIS')) {
+          // 提取 PostGIS 同步结果
+          const match = result.match(/成功=(\d+).*失败=(\d+)/)
+          if (match) {
+            message = `导入完成，PostGIS 同步：成功 ${match[1]} 条${match[2] > 0 ? `，失败 ${match[2]} 条` : ''}`
+          }
+        }
+        ElMessage.success(message)
       } else if (progress.status === 'failed') {
         ElMessage.error(progress.error || '导入失败')
       }
 
       // 刷新状态
       loadDivisionStatus()
+      // 如果是 PostgreSQL 环境，刷新 PostGIS 同步状态
+      if (databaseInfo.value?.postgis_enabled) {
+        loadPostgisSyncStatus()
+      }
     } else {
       // 继续轮询
       datavPollingTimer = setTimeout(pollDatavImportProgress, 1000)
@@ -2156,6 +2342,8 @@ onMounted(async () => {
   await loadMappings()
   // 加载行政区划状态
   loadDivisionStatus()
+  // 加载 PostGIS 同步状态
+  loadPostgisSyncStatus()
 
   // 添加窗口大小监听
   window.addEventListener('resize', handleResize)
@@ -2174,6 +2362,11 @@ onUnmounted(() => {
   cleanupDatavPolling()
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  // 清理 PostGIS 同步定时器
+  if (postgisSyncTimer) {
+    clearInterval(postgisSyncTimer)
+    postgisSyncTimer = null
+  }
 })
 </script>
 
@@ -2483,9 +2676,13 @@ onUnmounted(() => {
   width: 100%;
   margin-top: 8px;
   margin-left: 0;
-  font-size: 12px;
-  color: #606266;
   line-height: 1.5;
+}
+
+.radio-hint a {
+  font-size: inherit;
+  font-weight: inherit;
+  vertical-align: baseline;
 }
 
 /* DataV GeoJSON 行政区划导入 */
@@ -2506,7 +2703,7 @@ onUnmounted(() => {
   gap: 8px;
 }
 
-.form-hint-inline {
+.form-hint-inline, .radio-hint {
   font-size: 12px;
   color: #909399;
 }
@@ -2632,6 +2829,53 @@ onUnmounted(() => {
 
 .postgis-notice a:hover {
   text-decoration: underline;
+}
+
+/* PostGIS 同步状态 */
+.postgis-sync-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #909399;
+  font-size: 13px;
+}
+
+.postgis-sync-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.sync-status-item .status-label {
+  color: #606266;
+}
+
+.sync-status-item .status-value {
+  font-weight: 500;
+  color: #303133;
+}
+
+.sync-status-item.need-sync .status-value {
+  color: #e6a23c;
+  font-weight: 600;
+}
+
+.sync-progress {
+  margin-top: 8px;
+}
+
+.sync-progress .progress-text {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .card-header {

@@ -1868,3 +1868,108 @@ async def get_province_list(
 
     return {"provinces": provinces}
 
+
+@router.get("/admin-divisions/postgis-status")
+async def get_postgis_sync_status(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取 PostGIS 几何数据同步状态（管理员）
+
+    返回 geometry 字段和 PostGIS 空间表的数据对比。
+    """
+    from app.services.admin_division_import_service import AdminDivisionImportService
+
+    service = AdminDivisionImportService()
+    status = await service.get_postgis_sync_status(db)
+
+    return status
+
+
+@router.post("/admin-divisions/sync-postgis")
+async def sync_postgis_geometry(
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    从 geometry 字段同步数据到 PostGIS 空间表（管理员）
+
+    这是一个长时间运行的操作，会创建后台任务。
+    返回 task_id 用于查询进度。
+    """
+    import asyncio
+    from app.services.task_service import task_service
+    from app.services.admin_division_import_service import AdminDivisionImportService
+
+    # 检查是否为 PostgreSQL
+    from app.core.config import settings
+    if settings.DATABASE_TYPE != "postgresql":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PostGIS 同步仅支持 PostgreSQL 数据库"
+        )
+
+    # 创建后台任务
+    task = await task_service.create_task(db, current_admin.id, "postgis_sync")
+    logger.info(f"[PostGIS同步] 创建任务 {task.id}")
+
+    # 在后台异步处理
+    asyncio.create_task(
+        _process_postgis_sync_task(task_id=task.id)
+    )
+
+    return {
+        "message": "同步任务已创建，正在后台处理",
+        "task_id": task.id
+    }
+
+
+async def _process_postgis_sync_task(task_id: int):
+    """后台处理 PostGIS 同步任务"""
+    from app.core.database import async_session_maker
+    from app.services.admin_division_import_service import AdminDivisionImportService
+    from app.services.task_service import task_service
+
+    async def update_progress(progress: int):
+        """使用独立会话更新进度"""
+        try:
+            async with async_session_maker() as progress_db:
+                await task_service.update_task(progress_db, task_id, progress=progress)
+        except Exception as e:
+            logger.warning(f"[PostGIS同步] 更新进度失败: {e}")
+
+    async with async_session_maker() as db:
+        try:
+            await task_service.update_task(db, task_id, status="running", progress=5)
+
+            service = AdminDivisionImportService()
+
+            def progress_callback(message: str, current: int, total: int):
+                progress = 5 + int(90 * current / total) if total > 0 else 5
+                asyncio.create_task(update_progress(progress))
+                logger.info(f"[PostGIS同步] {message} ({current}/{total})")
+
+            stats = await service.sync_postgis_from_geometry(
+                db,
+                progress_callback=progress_callback
+            )
+
+            result = f"同步完成: 成功={stats['success']}, 跳过={stats['skipped']}, 失败={stats['failed']}"
+
+            await task_service.update_task(
+                db, task_id,
+                status="completed",
+                progress=100,
+                result_path=result
+            )
+            logger.info(f"[PostGIS同步] 任务 {task_id} 完成: {result}")
+
+        except Exception as e:
+            logger.error(f"[PostGIS同步] 任务 {task_id} 失败: {e}")
+            await task_service.update_task(
+                db, task_id,
+                status="failed",
+                error_message=str(e)
+            )
+

@@ -9,7 +9,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional, Callable
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, text
+from sqlalchemy import select, and_, text, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from loguru import logger
 
@@ -733,6 +733,66 @@ class AdminDivisionImportService:
 
             await db.commit()
             logger.info(f"DataV 在线导入完成: {stats}")
+
+            # 自动同步 PostGIS 几何数据（如果环境支持）
+            if settings.DATABASE_TYPE == "postgresql":
+                try:
+                    # 检查 PostGIS 扩展是否可用
+                    result = await db.execute(
+                        text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+                    )
+                    postgis_enabled = result.scalar_one()
+
+                    if postgis_enabled:
+                        if progress_callback:
+                            progress_callback("正在同步 PostGIS 几何数据...", 1, 1)
+
+                        # 确保空间表存在
+                        await self._ensure_spatial_table_exists(db)
+
+                        # 同步到 PostGIS 空间表
+                        sync_stats = {"success": 0, "skipped": 0, "failed": 0}
+
+                        result = await db.execute(
+                            select(AdminDivision.id, AdminDivision.code, AdminDivision.name, AdminDivision.geometry)
+                            .where(
+                                and_(
+                                    AdminDivision.geometry.isnot(None),
+                                    AdminDivision.is_valid == True
+                                )
+                            )
+                        )
+                        divisions = result.fetchall()
+
+                        for div_id, code, name, geometry_json in divisions:
+                            try:
+                                geometry_data = json.loads(geometry_json) if isinstance(geometry_json, str) else geometry_json
+                                if geometry_data and "type" in geometry_data:
+                                    await db.execute(text("""
+                                        INSERT INTO admin_divisions_spatial (division_id, geom)
+                                        VALUES (:division_id, ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326))
+                                        ON CONFLICT (division_id) DO UPDATE
+                                        SET geom = EXCLUDED.geom
+                                    """), {
+                                        "division_id": div_id,
+                                        "geojson": json.dumps(geometry_data, ensure_ascii=False)
+                                    })
+                                    sync_stats["success"] += 1
+
+                                    if sync_stats["success"] % 100 == 0:
+                                        await db.commit()
+
+                            except Exception as e:
+                                sync_stats["failed"] += 1
+                                logger.warning(f"同步 PostGIS 失败 [{code} {name}]: {e}")
+
+                        await db.commit()
+                        logger.info(f"PostGIS 自动同步完成: 成功={sync_stats['success']}, 失败={sync_stats['failed']}")
+                        stats["postgis_sync"] = sync_stats
+
+                except Exception as e:
+                    logger.warning(f"PostGIS 自动同步失败: {e}")
+
             return stats
 
         except Exception as e:
@@ -840,6 +900,80 @@ class AdminDivisionImportService:
 
             await db.commit()
             logger.info(f"GeoJSON 压缩包导入完成: {stats}")
+
+            # 自动同步 PostGIS 几何数据（如果环境支持）
+            if settings.DATABASE_TYPE == "postgresql":
+                try:
+                    # 检查 PostGIS 扩展是否可用
+                    result = await db.execute(
+                        text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+                    )
+                    postgis_enabled = result.scalar_one()
+
+                    if postgis_enabled:
+                        if progress_callback:
+                            progress_callback("正在同步 PostGIS 几何数据...", 1, 1)
+
+                        # 确保空间表存在
+                        await self._ensure_spatial_table_exists(db)
+
+                        # 统计需要同步的记录数
+                        result = await db.execute(
+                            select(func.count(AdminDivision.id)).where(
+                                and_(
+                                    AdminDivision.geometry.isnot(None),
+                                    AdminDivision.is_valid == True
+                                )
+                            )
+                        )
+                        total_sync = result.scalar() or 0
+
+                        if total_sync > 0:
+                            logger.info(f"开始自动同步 PostGIS 几何数据，共 {total_sync} 条记录")
+
+                            # 同步到 PostGIS 空间表
+                            sync_stats = {"success": 0, "skipped": 0, "failed": 0}
+
+                            result = await db.execute(
+                                select(AdminDivision.id, AdminDivision.code, AdminDivision.name, AdminDivision.geometry)
+                                .where(
+                                    and_(
+                                        AdminDivision.geometry.isnot(None),
+                                        AdminDivision.is_valid == True
+                                    )
+                                )
+                            )
+                            divisions = result.fetchall()
+
+                            for div_id, code, name, geometry_json in divisions:
+                                try:
+                                    geometry_data = json.loads(geometry_json) if isinstance(geometry_json, str) else geometry_json
+                                    if geometry_data and "type" in geometry_data:
+                                        await db.execute(text("""
+                                            INSERT INTO admin_divisions_spatial (division_id, geom)
+                                            VALUES (:division_id, ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326))
+                                            ON CONFLICT (division_id) DO UPDATE
+                                            SET geom = EXCLUDED.geom
+                                        """), {
+                                            "division_id": div_id,
+                                            "geojson": json.dumps(geometry_data, ensure_ascii=False)
+                                        })
+                                        sync_stats["success"] += 1
+
+                                        if sync_stats["success"] % 100 == 0:
+                                            await db.commit()
+
+                                except Exception as e:
+                                    sync_stats["failed"] += 1
+                                    logger.warning(f"同步 PostGIS 失败 [{code} {name}]: {e}")
+
+                            await db.commit()
+                            logger.info(f"PostGIS 自动同步完成: 成功={sync_stats['success']}, 失败={sync_stats['failed']}")
+                            stats["postgis_sync"] = sync_stats
+
+                except Exception as e:
+                    logger.warning(f"PostGIS 自动同步失败: {e}")
+
             return stats
 
         finally:
@@ -1143,14 +1277,28 @@ class AdminDivisionImportService:
         # 不设区地级市（只有这 4 个，level=3 但应存为 city）
         CITIES_WITHOUT_DISTRICTS = {"441900", "442000", "460400", "620200"}
 
+        # 省辖县级行政单位列表（手动维护，因为旧格式数据没有 childrenNum 字段）
+        # 这些城市代码的 level=3，但实际是省直辖的县级行政单位
+        PROVINCE_ADMINISTERED_AREAS = {
+            "419000",  # 湖北省直辖（仙桃市、潜江市、天门市等）
+            "429000",  # 湖北省直辖（潜江市）
+            "469000",  # 海南省直辖
+            "659000",  # 新疆兵团城市
+        }
+
         # 转换层级
         level_map = {2: "province", 3: "city", 4: "area"}
         level = level_map.get(level_num, "area")
 
-        # 特殊处理：不设区地级市保持为 city，其他 level=3 的都视为省辖县级行政单位（area）
-        is_province_administered = (level == "city" and code not in CITIES_WITHOUT_DISTRICTS)
-        if is_province_administered:
-            level = "area"  # 仙桃、潜江、天门、济源、兵团城市等都存为 area
+        # 特殊处理：省辖县级行政单位转换为 area
+        # 通过代码前缀判断（如 4190 表示湖北省直辖）
+        is_province_administered = False
+        if level == "city" and code not in CITIES_WITHOUT_DISTRICTS:
+            # 检查代码是否属于省辖县级行政单位范围
+            code_prefix = code[:4] if len(code) >= 4 else ""
+            if code_prefix in PROVINCE_ADMINISTERED_AREAS or any(code.startswith(p) for p in ["4190", "4290", "4690", "6590"]):
+                is_province_administered = True
+                level = "area"
 
         # 确定省市代码
         if level == "province":
@@ -1262,3 +1410,231 @@ class AdminDivisionImportService:
             return "legacy"  # 当前 map 目录格式
         else:
             return "unknown"
+
+    async def sync_postgis_from_geometry(
+        self,
+        db: AsyncSession,
+        progress_callback: Optional[Callable] = None
+    ) -> dict:
+        """
+        从 geometry 字段同步数据到 PostGIS 空间表
+
+        将 admin_divisions.geometry 字段中的 GeoJSON 数据
+        同步到 admin_divisions_spatial.geom 字段。
+
+        Args:
+            db: 数据库会话
+            progress_callback: 进度回调函数
+
+        Returns:
+            dict: 同步统计 {"success": 成功数, "skipped": 跳过数, "failed": 失败数}
+        """
+        stats = {"success": 0, "skipped": 0, "failed": 0}
+
+        # 1. 检查是否为 PostgreSQL 数据库
+        if settings.DATABASE_TYPE != "postgresql":
+            raise ValueError("PostGIS 几何同步仅支持 PostgreSQL 数据库")
+
+        # 2. 检查 PostGIS 扩展是否可用
+        try:
+            result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+            )
+            postgis_enabled = result.scalar_one()
+            if not postgis_enabled:
+                raise ValueError("PostGIS 扩展未启用，请先安装 PostGIS 扩展")
+        except Exception as e:
+            raise ValueError(f"检查 PostGIS 扩展失败: {e}")
+
+        # 3. 确保 admin_divisions_spatial 表存在
+        await self._ensure_spatial_table_exists(db)
+
+        # 4. 查询所有有 geometry 的记录
+        result = await db.execute(
+            select(AdminDivision.id, AdminDivision.code, AdminDivision.name, AdminDivision.geometry)
+            .where(
+                and_(
+                    AdminDivision.geometry.is_not(None),
+                    AdminDivision.is_valid == True
+                )
+            )
+        )
+        divisions = result.fetchall()
+
+        total = len(divisions)
+        if total == 0:
+            logger.info("没有找到需要同步的 geometry 数据")
+            return stats
+
+        logger.info(f"开始同步 {total} 条记录到 PostGIS 空间表")
+
+        # 5. 逐条同步
+        for i, (div_id, code, name, geometry_json) in enumerate(divisions):
+            try:
+                # 验证 GeoJSON 格式
+                geometry_data = json.loads(geometry_json) if isinstance(geometry_json, str) else geometry_json
+                if not geometry_data or "type" not in geometry_data:
+                    stats["skipped"] += 1
+                    logger.warning(f"跳过无效的 geometry [{code} {name}]")
+                    continue
+
+                # 插入或更新 PostGIS 几何
+                await db.execute(text("""
+                    INSERT INTO admin_divisions_spatial (division_id, geom)
+                    VALUES (:division_id, ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326))
+                    ON CONFLICT (division_id) DO UPDATE
+                    SET geom = EXCLUDED.geom
+                """), {
+                    "division_id": div_id,
+                    "geojson": json.dumps(geometry_data, ensure_ascii=False)
+                })
+
+                stats["success"] += 1
+
+                # 每处理 100 条提交一次
+                if (i + 1) % 100 == 0:
+                    await db.commit()
+
+                # 进度回调
+                if progress_callback and i % 10 == 0:
+                    progress_callback("同步中", i + 1, total)
+
+            except Exception as e:
+                stats["failed"] += 1
+                logger.warning(f"同步失败 [{code} {name}]: {e}")
+
+        # 最终提交
+        await db.commit()
+
+        logger.info(f"PostGIS 几何同步完成: 成功={stats['success']}, 跳过={stats['skipped']}, 失败={stats['failed']}")
+
+        return stats
+
+    async def _ensure_spatial_table_exists(self, db: AsyncSession) -> None:
+        """
+        确保 admin_divisions_spatial 表存在
+
+        如果表不存在则创建，如果 geom 字段不存在则添加。
+        """
+        # 检查表是否存在
+        result = await db.execute(text("""
+            SELECT EXISTS(
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'admin_divisions_spatial'
+            )
+        """))
+        table_exists = result.scalar_one()
+
+        if not table_exists:
+            logger.info("创建 admin_divisions_spatial 表")
+            await db.execute(text("""
+                CREATE TABLE admin_divisions_spatial (
+                    division_id INTEGER PRIMARY KEY REFERENCES admin_divisions(id) ON DELETE CASCADE,
+                    geom GEOMETRY(GEOMETRY, 4326)
+                )
+            """))
+            await db.execute(text("""
+                CREATE INDEX idx_admin_divisions_spatial_geom
+                    ON admin_divisions_spatial USING GIST(geom)
+            """))
+            await db.commit()
+            logger.info("admin_divisions_spatial 表创建成功")
+            return
+
+        # 表存在，检查 geom 字段是否存在
+        result = await db.execute(text("""
+            SELECT EXISTS(
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'admin_divisions_spatial' AND column_name = 'geom'
+            )
+        """))
+        geom_exists = result.scalar_one()
+
+        if not geom_exists:
+            logger.info("添加 geom 字段到 admin_divisions_spatial 表")
+            await db.execute(text("""
+                ALTER TABLE admin_divisions_spatial
+                ADD COLUMN geom GEOMETRY(GEOMETRY, 4326)
+            """))
+            await db.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_admin_divisions_spatial_geom
+                    ON admin_divisions_spatial USING GIST(geom)
+            """))
+            await db.commit()
+            logger.info("geom 字段添加成功")
+
+    async def get_postgis_sync_status(self, db: AsyncSession) -> dict:
+        """
+        获取 PostGIS 同步状态
+
+        返回 geometry 字段有数据的记录数和 PostGIS 空间表有数据的记录数。
+
+        Args:
+            db: 数据库会话
+
+        Returns:
+            dict: 同步状态信息
+        """
+        status = {
+            "has_geometry": 0,
+            "has_postgis": 0,
+            "need_sync": 0,
+            "postgis_enabled": False,
+            "spatial_table_exists": False
+        }
+
+        # 检查是否为 PostgreSQL
+        if settings.DATABASE_TYPE != "postgresql":
+            return status
+
+        # 检查 PostGIS 扩展
+        try:
+            result = await db.execute(
+                text("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'postgis')")
+            )
+            status["postgis_enabled"] = result.scalar_one()
+        except Exception:
+            pass
+
+        if not status["postgis_enabled"]:
+            return status
+
+        # 检查空间表是否存在
+        try:
+            result = await db.execute(text("""
+                SELECT EXISTS(
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'admin_divisions_spatial'
+                )
+            """))
+            status["spatial_table_exists"] = result.scalar_one()
+        except Exception:
+            pass
+
+        if not status["spatial_table_exists"]:
+            return status
+
+        # 统计有 geometry 的记录数
+        result = await db.execute(
+            select(func.count(AdminDivision.id)).where(
+                and_(
+                    AdminDivision.geometry.is_not(None),
+                    AdminDivision.is_valid == True
+                )
+            )
+        )
+        status["has_geometry"] = result.scalar() or 0
+
+        # 统计有 PostGIS 几何的记录数
+        try:
+            result = await db.execute(
+                text("SELECT COUNT(*) FROM admin_divisions_spatial")
+            )
+            status["has_postgis"] = result.scalar() or 0
+        except Exception:
+            pass
+
+        # 计算需要同步的数量
+        status["need_sync"] = max(0, status["has_geometry"] - status["has_postgis"])
+
+        return status

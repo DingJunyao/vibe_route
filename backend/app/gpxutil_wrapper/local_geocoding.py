@@ -351,70 +351,36 @@ class LocalGeocodingService(GeocodingService):
             return  # 提前返回，不再处理其他逻辑
 
         # ========== 优先检查不设区地级市 ==========
-        # 如果查询结果包含不设区地级市，且它比所有 area 都更近，则优先使用
+        # 如果查询结果包含不设区地级市，直接使用它，忽略所有 area
         special_cities = [d for d in city_divs if d.code in CITIES_WITHOUT_DISTRICTS]
         if special_cities:
-            # 计算每个特殊城市的距离
+            # 选择距离最近的不设区地级市
             special_cities.sort(key=lambda d: center_distance(d, lat, lon))
             closest_special_city = special_cities[0]
-            special_city_dist = center_distance(closest_special_city, lat, lon)
 
-            # 如果有 area，比较距离
-            if area_divs:
-                area_divs_sorted = sorted(area_divs, key=lambda d: center_distance(d, lat, lon))
-                closest_area_dist = center_distance(area_divs_sorted[0], lat, lon)
+            gdf_logger.debug(f"检测到不设区地级市: {closest_special_city.name}，忽略所有下级区划")
 
-                gdf_logger.debug(f"不设区地级市距离比较: {closest_special_city.name}={special_city_dist:.6f} vs "
-                               f"最近区县 {area_divs_sorted[0].name}={closest_area_dist:.6f}")
+            result['city'] = closest_special_city.name
+            if closest_special_city.name_en:
+                result['city_en'] = closest_special_city.name_en
+            result['area'] = ''
+            result['area_en'] = ''
 
-                # 如果不设区地级市更近，直接使用它
-                if special_city_dist < closest_area_dist:
-                    gdf_logger.debug(f"选择不设区地级市: {closest_special_city.name}")
-                    result['city'] = closest_special_city.name
-                    if closest_special_city.name_en:
-                        result['city_en'] = closest_special_city.name_en
-                    result['area'] = ''
-                    result['area_en'] = ''
+            # 填充省级
+            if closest_special_city.province_code:
+                province = div_dict.get(closest_special_city.province_code)
+                if not province:
+                    province_result = await db.execute(
+                        select(AdminDivision).where(AdminDivision.code == closest_special_city.province_code)
+                    )
+                    province = province_result.scalar_one_or_none()
+                if province:
+                    result['province'] = province.name
+                    if province.name_en:
+                        result['province_en'] = province.name_en
 
-                    # 填充省级
-                    if closest_special_city.province_code:
-                        province = div_dict.get(closest_special_city.province_code)
-                        if not province:
-                            province_result = await db.execute(
-                                select(AdminDivision).where(AdminDivision.code == closest_special_city.province_code)
-                            )
-                            province = province_result.scalar_one_or_none()
-                        if province:
-                            result['province'] = province.name
-                            if province.name_en:
-                                result['province_en'] = province.name_en
-
-                    gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
-                    return  # 提前返回，不再处理 area
-            else:
-                # 没有 area，直接使用不设区地级市
-                gdf_logger.debug(f"无 area，选择不设区地级市: {closest_special_city.name}")
-                result['city'] = closest_special_city.name
-                if closest_special_city.name_en:
-                    result['city_en'] = closest_special_city.name_en
-                result['area'] = ''
-                result['area_en'] = ''
-
-                # 填充省级
-                if closest_special_city.province_code:
-                    province = div_dict.get(closest_special_city.province_code)
-                    if not province:
-                        province_result = await db.execute(
-                            select(AdminDivision).where(AdminDivision.code == closest_special_city.province_code)
-                        )
-                        province = province_result.scalar_one_or_none()
-                    if province:
-                        result['province'] = province.name
-                        if province.name_en:
-                            result['province_en'] = province.name_en
-
-                gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
-                return  # 提前返回
+            gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
+            return  # 提前返回，不再处理 area
 
         # ========== 处理区县级查询（最常见情况）==========
         if area_divs:
