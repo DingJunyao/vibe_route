@@ -786,6 +786,9 @@ class AdminDivisionImportService:
 
             stats["files"] = len(geojson_files)
 
+            # 解析省级名称映射（解压后才能找到文件）
+            province_name_mapping = self._parse_province_name_mapping(temp_dir)
+
             # 如果强制重新导入，先删除已有数据
             if force:
                 await db.execute(text("DELETE FROM admin_divisions"))
@@ -810,8 +813,8 @@ class AdminDivisionImportService:
                             # 目前默认假设压缩包是 WGS84（用户需确认数据源）
                             updated = await self._import_datav_feature(db, feature, force, convert_coords=False)
                         else:
-                            # 旧格式转换后导入
-                            updated = await self._import_legacy_feature(db, feature, force)
+                            # 旧格式转换后导入（传入省级名称映射）
+                            updated = await self._import_legacy_feature(db, feature, force, province_name_mapping)
 
                         if updated:
                             stats["updated"] += 1
@@ -842,6 +845,57 @@ class AdminDivisionImportService:
         finally:
             # 清理临时目录
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _parse_province_name_mapping(self, temp_dir: Path) -> dict[str, str]:
+        """
+        从压缩包中的"地图数据目录.txt"解析省级名称映射
+
+        格式：--- 110000 北京市 ---
+        返回：{"110000": "北京市", ...}
+
+        Args:
+            temp_dir: 临时解压目录
+
+        Returns:
+            省级代码到完整名称的映射
+        """
+        mapping = {}
+        # 尝试常见的文件名和编码
+        possible_names = ["地图数据目录.txt", "地图数据目录"]
+        possible_encodings = ["utf-8", "gbk", "gb2312"]
+
+        # 递归搜索所有 txt 文件
+        txt_files = list(temp_dir.rglob("*.txt"))
+
+        for txt_file in txt_files:
+            # 检查文件名是否匹配
+            if not any(name in txt_file.name for name in possible_names):
+                continue
+
+            for encoding in possible_encodings:
+                try:
+                    with open(txt_file, "r", encoding=encoding) as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("--- ") and line.endswith(" ---"):
+                                # 解析格式：--- 110000 北京市 ---
+                                parts = line[4:-4].strip().split()
+                                if len(parts) >= 2:
+                                    code = parts[0]
+                                    name = " ".join(parts[1:])  # 名称可能包含空格
+                                    mapping[code] = name
+                    if mapping:
+                        logger.info(f"从 {txt_file.relative_to(temp_dir)} 解析到 {len(mapping)} 个省级名称映射")
+                        return mapping
+                except Exception:
+                    continue
+
+        if mapping:
+            logger.info(f"解析到 {len(mapping)} 个省级名称映射")
+        else:
+            logger.debug("未找到或无法解析'地图数据目录.txt'")
+
+        return mapping
 
     async def import_bounds_only(
         self,
@@ -947,6 +1001,14 @@ class AdminDivisionImportService:
         bounds = DataVGeoService.extract_bounds(feature, convert_to_wgs84=convert_coords)
         center = DataVGeoService.extract_center(feature, convert_to_wgs84=convert_coords)
 
+        # 提取并转换 geometry（用于 shapely 多边形判断）
+        geometry = feature.get("geometry")
+        geometry_json = None
+        if geometry:
+            if convert_coords:
+                geometry = DataVGeoService.convert_geometry_to_wgs84(geometry)
+            geometry_json = json.dumps(geometry)
+
         # 获取父级代码
         parent = props.get("parent", {})
         parent_code = str(parent.get("adcode", "")).zfill(6) if parent and parent.get("adcode") else None
@@ -981,6 +1043,8 @@ class AdminDivisionImportService:
                 if center[0] is not None:
                     existing.center_lon = center[0]
                     existing.center_lat = center[1]
+                if geometry_json is not None:
+                    existing.geometry = geometry_json
             else:
                 # 仅更新边界和中心点（如果之前没有）
                 if existing.min_lon is None and bounds[0] is not None:
@@ -993,6 +1057,8 @@ class AdminDivisionImportService:
                     existing.center_lat = center[1]
                 if existing.children_num is None:
                     existing.children_num = children_num
+                if existing.geometry is None and geometry_json is not None:
+                    existing.geometry = geometry_json
         else:
             # 创建新记录
             division = AdminDivision(
@@ -1010,6 +1076,7 @@ class AdminDivisionImportService:
                 max_lat=bounds[3],
                 center_lon=center[0],
                 center_lat=center[1],
+                geometry=geometry_json,
             )
             db.add(division)
             # 刷新以获取 ID
@@ -1043,7 +1110,8 @@ class AdminDivisionImportService:
         self,
         db: AsyncSession,
         feature: dict,
-        force: bool
+        force: bool,
+        province_name_mapping: dict[str, str] = None
     ) -> bool:
         """
         导入旧格式（map 目录）的 GeoJSON feature
@@ -1052,6 +1120,7 @@ class AdminDivisionImportService:
             db: 数据库会话
             feature: GeoJSON feature
             force: 是否强制覆盖
+            province_name_mapping: 省级代码到完整名称的映射（来自"地图数据目录.txt"）
 
         Returns:
             bool: 是否成功导入/更新
@@ -1064,9 +1133,24 @@ class AdminDivisionImportService:
         if not code or not name:
             return False
 
+        # 对于省级单位，使用映射中的完整名称（如果存在）
+        if level_num == 2 and province_name_mapping and code in province_name_mapping:
+            name = province_name_mapping[code]
+
+        if not code or not name:
+            return False
+
+        # 不设区地级市（只有这 4 个，level=3 但应存为 city）
+        CITIES_WITHOUT_DISTRICTS = {"441900", "442000", "460400", "620200"}
+
         # 转换层级
         level_map = {2: "province", 3: "city", 4: "area"}
         level = level_map.get(level_num, "area")
+
+        # 特殊处理：不设区地级市保持为 city，其他 level=3 的都视为省辖县级行政单位（area）
+        is_province_administered = (level == "city" and code not in CITIES_WITHOUT_DISTRICTS)
+        if is_province_administered:
+            level = "area"  # 仙桃、潜江、天门、济源、兵团城市等都存为 area
 
         # 确定省市代码
         if level == "province":
@@ -1078,15 +1162,27 @@ class AdminDivisionImportService:
             city_code = code
             parent_code = province_code
         else:
+            # area 级别
             province_code = code[:2] + "0000" if len(code) >= 2 else None
-            city_code = code[:4] + "00" if len(code) >= 4 else None
-            parent_code = city_code
+            if is_province_administered:
+                # 省辖县级行政单位（原 level=3）：没有市级
+                city_code = None
+                parent_code = province_code
+            else:
+                # 正常区县（原 level=4）：有市级
+                city_code = code[:4] + "00" if len(code) >= 4 else None
+                parent_code = city_code
 
         # 生成英文名称
         name_en = get_name_en(name, code, level, self.special_mapping)
 
-        # 提取边界
-        coords = self._extract_coordinates(feature.get("geometry", {}))
+        # 提取边界和 geometry
+        geometry = feature.get("geometry")
+        geometry_json = None
+        if geometry:
+            geometry_json = json.dumps(geometry)
+
+        coords = self._extract_coordinates(geometry)
         if coords:
             min_lon = int(min(c[1] for c in coords) * 1e6)
             min_lat = int(min(c[0] for c in coords) * 1e6)
@@ -1114,6 +1210,8 @@ class AdminDivisionImportService:
                     existing.min_lat = min_lat
                     existing.max_lon = max_lon
                     existing.max_lat = max_lat
+                if geometry_json is not None:
+                    existing.geometry = geometry_json
                 return True
             else:
                 if existing.min_lon is None and min_lon is not None:
@@ -1121,6 +1219,8 @@ class AdminDivisionImportService:
                     existing.min_lat = min_lat
                     existing.max_lon = max_lon
                     existing.max_lat = max_lat
+                if existing.geometry is None and geometry_json is not None:
+                    existing.geometry = geometry_json
                 return True
         else:
             division = AdminDivision(
@@ -1135,6 +1235,7 @@ class AdminDivisionImportService:
                 min_lat=min_lat,
                 max_lon=max_lon,
                 max_lat=max_lat,
+                geometry=geometry_json,
             )
             db.add(division)
             return True

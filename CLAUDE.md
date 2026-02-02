@@ -1109,3 +1109,113 @@ points.value.sort((a, b) => {
 
 **废弃方法**：
 - `import_from_sqlite()`：已标记为 DEPRECATED，建议使用新的 DataV 导入方法
+
+## 最新更改 (2026-02)
+
+### 多边形几何字段与 Shapely 精确地理匹配
+
+**问题背景**：不使用 PostGIS 时，地理信息填充使用矩形边界框（min_lat, max_lat, min_lon, max_lon）进行查询，导致边界附近的点匹配不准确。
+
+**解决方案**：添加 `geometry` 字段存储完整的 GeoJSON 多边形数据，使用 shapely 进行精确的多边形包含判断。
+
+**数据库变更**：
+- `AdminDivision` 模型添加 `geometry TEXT` 字段存储 GeoJSON 多边形
+- 迁移脚本：`012_add_geometry_to_admin_divisions.*`（支持 SQLite/MySQL/PostgreSQL）
+
+**DataV 导入**：
+- 在线导入：自动保存完整 geometry（含 GCJ02→WGS84 坐标转换）
+- 压缩包导入：保存原始 geometry（假设为 WGS84）
+
+**本地反向地理编码**（[`local_geocoding.py`](backend/app/gpxutil_wrapper/local_geocoding.py)）：
+- 先用边界框快速过滤候选区域
+- 再用 shapely `polygon.contains(point)` 精确匹配
+- 无 geometry 的区域跳过（不回退到边界框判断）
+
+**批量查询优化**：
+- `get_batch_candidates()`: 一次查询获取所有候选区域
+- `find_division_for_point()`: 内存中进行 shapely 判断
+- 减少数据库访问次数
+
+**涉及文件**：
+- [`admin_division.py`](backend/app/models/admin_division.py) - `geometry` 字段
+- [`admin_division_import_service.py`](backend/app/services/admin_division_import_service.py) - 导入时保存 geometry
+- [`local_geocoding.py`](backend/app/gpxutil_wrapper/local_geocoding.py) - shapely 判断逻辑
+
+### 省辖县级行政单位分类修复
+
+**问题**：仙桃、潜江、天门、济源等省直辖县级行政单位被错误分类为 `city` 级别，导致层级结构混乱。
+
+**解决方案**：
+
+**不设区地级市**（仅 4 个硬编码）：
+- 东莞（441900）、中山（442000）
+- 儋州（460400）、嘉峪关（620200）
+- 保留为 `city` 级别，`children_num = 0`
+
+**省辖县级行政单位**：
+- 仙桃、潜江、天门、济源等（`level=3` 且 `childrenNum=0`）
+- 分类为 `area` 级别（等同于 district）
+- `city_code` 为空（无上级市）
+- 正常区县（`level=4`）保留 `city_code`
+
+**处理逻辑**（[`_import_legacy_feature`](backend/app/services/admin_division_import_service.py)）：
+```python
+is_province_administered = (
+    level == 3 and
+    adcode not in NON_DISTRICT_CITIES and
+    children.get("num", 0) == 0
+)
+
+if is_province_administered:
+    level_type = "area"
+    city_code = None
+else:
+    # 正常分类逻辑...
+```
+
+**涉及文件**：
+- [`admin_division_import_service.py`](backend/app/services/admin_division_import_service.py) - `NON_DISTRICT_CITIES` 常量
+
+### 省份名称后缀映射
+
+**问题**：压缩包中的省份名称不带后缀（如"北京"而非"北京市"），与数据库格式不一致。
+
+**解决方案**：解析压缩包内的 `地图数据目录.txt`，建立省份代码到完整名称的映射。
+
+**文件格式**（`backend/data/area_data/map/地图数据目录.txt`）：
+```
+--- 110000 北京市 ---
+--- 120000 天津市 ---
+...
+```
+
+**解析逻辑**（[`_parse_province_name_mapping`](backend/app/services/admin_division_import_service.py)）：
+- 使用 `temp_dir.rglob("*.txt")` 递归搜索文件
+- 正则提取代码和名称：`(\d+)\s+(.+)`
+- 仅对 `level=2`（省级）应用映射
+
+**处理顺序**（[`import_from_geojson_archive`](backend/app/services/admin_division_import_service.py)）：
+1. 解压压缩包
+2. 递归解析省份名称映射
+3. 导入 GeoJSON 特性（应用映射）
+
+**涉及文件**：
+- [`admin_division_import_service.py`](backend/app/services/admin_division_import_service.py) - `_parse_province_name_mapping()` 方法
+
+### 层级构建修复
+
+**问题**：当只匹配到省级记录时（如省直辖县级行政单位），`_build_hierarchy` 返回空的 city/area，导致地理信息缺失。
+
+**解决方案**（[`_build_hierarchy`](backend/app/gpxutil_wrapper/local_geocoding.py)）：
+```python
+# 只有 province 时，直接填充 province
+if province and not city and not area:
+    return {
+        "province": province,
+        "province_code": province_code,
+        "city": None,
+        "city_code": None,
+        "area": None,
+        "area_code": None
+    }
+```

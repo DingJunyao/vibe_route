@@ -1,0 +1,7 @@
+-- 012: 添加 geometry 字段到 admin_divisions 表 (MySQL 版本)
+--
+-- 为 AdminDivision 模型添加 geometry 字段，用于存储 GeoJSON 格式的多边形数据。
+-- 支持使用 shapely 库进行精确的多边形包含判断。
+
+ALTER TABLE admin_divisions
+    ADD COLUMN geometry TEXT NULL COMMENT 'GeoJSON 多边形几何（用于 shapely 精确判断）';

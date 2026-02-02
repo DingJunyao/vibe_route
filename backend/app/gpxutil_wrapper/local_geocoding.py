@@ -2,8 +2,9 @@
 本地地理编码服务
 
 使用本地存储的行政区划数据进行反向地理编码。
-支持边界框查询和 PostGIS 空间查询。
+支持边界框查询、shapely 多边形判断和 PostGIS 空间查询。
 """
+import json
 from typing import Any, Optional
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,14 @@ from app.models.admin_division import AdminDivision
 from app.core.database import async_session_maker
 from app.core.config import settings
 from loguru import logger
+
+# shapely 用于多边形包含判断（延迟导入）
+try:
+    from shapely.geometry import shape, Point
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    SHAPELY_AVAILABLE = False
+    logger.warning("shapely 未安装，多边形精确判断功能不可用")
 
 # 添加 GDF 专用日志文件
 gdf_logger = logger.bind(service="gdf")
@@ -208,11 +217,13 @@ class LocalGeocodingService(GeocodingService):
         lon: float
     ) -> list[AdminDivision]:
         """
-        使用边界框进行查询
+        使用边界框 + shapely 多边形判断进行查询
 
-        先用边界框快速过滤，然后使用射线法判断点是否在多边形内。
+        1. 先用边界框快速过滤
+        2. 如果有 geometry 数据，使用 shapely 进行多边形包含判断
+        3. 如果没有 geometry 数据，跳过该区域（不回退到边界框查询）
         """
-        gdf_logger.debug(f"边界框查询: ({lat}, {lon})")
+        gdf_logger.debug(f"边界框 + shapely 查询: ({lat}, {lon})")
 
         # 将坐标转换为整数（* 1e6）
         lat_scaled = int(lat * 1e6)
@@ -231,19 +242,53 @@ class LocalGeocodingService(GeocodingService):
             )
         )
 
-        divisions = list(result.scalars().all())
+        candidates = list(result.scalars().all())
 
-        if divisions:
-            levels_found = [d.level for d in divisions]
-            names_found = [d.name for d in divisions]
-            gdf_logger.debug(f"边界框查询结果: 层级={levels_found}, 名称={names_found}, 总数={len(divisions)}")
-        else:
+        if not candidates:
             gdf_logger.debug(f"边界框查询结果: 无匹配")
+            return []
 
-        # TODO: 可以添加射线法进一步精确判断
-        # 目前边界框对于区县级别的精度已经足够
+        levels_found = [d.level for d in candidates]
+        names_found = [d.name for d in candidates]
+        gdf_logger.debug(f"边界框过滤: 层级={levels_found}, 名称={names_found}, 总数={len(candidates)}")
 
-        return divisions
+        # 如果 shapely 可用，进行多边形精确判断
+        if SHAPELY_AVAILABLE:
+            point = Point(lon, lat)
+            matched = []
+            skipped = 0
+
+            for div in candidates:
+                if div.geometry:
+                    try:
+                        polygon = shape(json.loads(div.geometry))
+                        if polygon.contains(point):
+                            matched.append(div)
+                            gdf_logger.debug(f"  shapely 匹配: {div.name}({div.level})")
+                    except Exception as e:
+                        gdf_logger.warning(f"  shapely 判断失败 [{div.name}]: {e}")
+                        # geometry 无效，跳过（不回退到边界框）
+                        skipped += 1
+                else:
+                    # 没有 geometry 数据，跳过（不回退到边界框）
+                    skipped += 1
+                    gdf_logger.debug(f"  跳过（无 geometry）: {div.name}")
+
+            if skipped > 0:
+                gdf_logger.debug(f"  跳过 {skipped} 个无 geometry 的区域")
+
+            if matched:
+                matched_levels = [d.level for d in matched]
+                matched_names = [d.name for d in matched]
+                gdf_logger.debug(f"shapely 精确判断结果: 层级={matched_levels}, 名称={matched_names}, 总数={len(matched)}")
+            else:
+                gdf_logger.debug(f"shapely 精确判断结果: 无匹配（所有候选区域都被跳过）")
+
+            return matched
+        else:
+            # shapely 不可用，回退到边界框查询（兼容旧逻辑）
+            gdf_logger.debug(f"shapely 不可用，使用边界框查询结果")
+            return candidates
 
     async def _build_hierarchy(self, db: AsyncSession, result: dict, divisions: list[AdminDivision], lat: float, lon: float):
         """
@@ -292,6 +337,18 @@ class LocalGeocodingService(GeocodingService):
         # 获取 city 和 area 级别记录
         city_divs = [d for d in divisions if d.level == "city"]
         area_divs = [d for d in divisions if d.level == "area"]
+        province_divs = [d for d in divisions if d.level == "province"]
+
+        # ========== 特殊处理：只有省级记录时直接填充 ==========
+        # 当 sub-level 区域缺少 geometry 数据时，可能只匹配到省级
+        # 这种情况下至少填充 province
+        if not city_divs and not area_divs and province_divs:
+            province = province_divs[0]
+            gdf_logger.debug(f"仅匹配到省级记录，直接填充: {province.name}")
+            result['province'] = province.name
+            if province.name_en:
+                result['province_en'] = province.name_en
+            return  # 提前返回，不再处理其他逻辑
 
         # ========== 优先检查不设区地级市 ==========
         # 如果查询结果包含不设区地级市，且它比所有 area 都更近，则优先使用
@@ -555,3 +612,93 @@ class LocalGeocodingService(GeocodingService):
                         result['province_en'] = province.name_en
 
         gdf_logger.debug(f"构建结果: province={result.get('province')}, city={result.get('city')}, area={result.get('area')}")
+
+    async def get_batch_candidates(
+        self,
+        db: AsyncSession,
+        min_lat: float,
+        max_lat: float,
+        min_lon: float,
+        max_lon: float
+    ) -> list[AdminDivision]:
+        """
+        批量获取指定边界框内的所有行政区划候选
+
+        用于轨迹填充时的批量优化，一次性获取所有可能相关的区域。
+
+        Args:
+            db: 数据库会话
+            min_lat: 最小纬度
+            max_lat: 最大纬度
+            min_lon: 最小经度
+            max_lon: 最大经度
+
+        Returns:
+            带有 geometry 数据的行政区划列表
+        """
+        # 将坐标转换为整数（* 1e6）
+        min_lat_scaled = int(min_lat * 1e6)
+        max_lat_scaled = int(max_lat * 1e6)
+        min_lon_scaled = int(min_lon * 1e6)
+        max_lon_scaled = int(max_lon * 1e6)
+
+        # 查询边界框内的所有行政区划，只要有 geometry 数据
+        result = await db.execute(
+            select(AdminDivision).where(
+                and_(
+                    AdminDivision.min_lat <= max_lat_scaled,
+                    AdminDivision.max_lat >= min_lat_scaled,
+                    AdminDivision.min_lon <= max_lon_scaled,
+                    AdminDivision.max_lon >= min_lon_scaled,
+                    AdminDivision.is_valid == True,
+                    AdminDivision.geometry.is_not(None)
+                )
+            )
+        )
+
+        candidates = list(result.scalars().all())
+        gdf_logger.debug(f"批量获取候选区域: 边界框=({min_lat:.4f},{max_lat:.4f},{min_lon:.4f},{max_lon:.4f}), "
+                        f"候选数={len(candidates)}")
+
+        return candidates
+
+    def find_division_for_point(
+        self,
+        lat: float,
+        lon: float,
+        candidates: list[AdminDivision]
+    ) -> Optional[AdminDivision]:
+        """
+        从候选区域列表中查找包含指定点的区域（使用 shapely）
+
+        Args:
+            lat: 纬度
+            lon: 经度
+            candidates: 候选行政区划列表
+
+        Returns:
+            匹配的行政区划，如果没有匹配则返回 None
+        """
+        if not SHAPELY_AVAILABLE:
+            # shapely 不可用，返回 None（不使用边界框回退）
+            return None
+
+        point = Point(lon, lat)
+
+        # 优先匹配 area 级别，然后 city，最后 province
+        candidates_sorted = sorted(candidates, key=lambda d: {
+            "area": 0,
+            "city": 1,
+            "province": 2
+        }.get(d.level, 3))
+
+        for div in candidates_sorted:
+            if div.geometry:
+                try:
+                    polygon = shape(json.loads(div.geometry))
+                    if polygon.contains(point):
+                        return div
+                except Exception:
+                    continue
+
+        return None
