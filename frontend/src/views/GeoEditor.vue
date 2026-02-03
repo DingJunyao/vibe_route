@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, HomeFilled, Undo, Redo, Check, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { useGeoEditorStore } from '@/stores/geoEditor'
+import { useGeoEditorStore, type TrackType } from '@/stores/geoEditor'
+import UniversalMap from '@/components/map/UniversalMap.vue'
+import GeoChartPanel from '@/components/geo-editor/GeoChartPanel.vue'
+import TimelineTracks from '@/components/geo-editor/TimelineTracks.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -12,11 +15,54 @@ const geoEditorStore = useGeoEditorStore()
 const trackId = ref<number>(parseInt(route.params.id as string))
 const isLoading = ref(true)
 const isSaving = ref(false)
+const trackName = ref('')
+
+// 地图引用
+const mapRef = ref<InstanceType<typeof UniversalMap> | null>(null)
+
+// 高亮区域（基于选中的段落）
+const highlightedSegment = computed(() => {
+  const id = geoEditorStore.selectedSegmentId || geoEditorStore.hoveredSegmentId
+  if (!id) return null
+
+  // 从所有轨道中查找段落
+  for (const track of geoEditorStore.tracks) {
+    const segment = track.segments.find(s => s.id === id)
+    if (segment) {
+      return {
+        start: segment.startIndex,
+        end: segment.endIndex,
+      }
+    }
+  }
+  return null
+})
+
+// 转换点数据为 UniversalMap 格式
+const mapPoints = computed(() => {
+  return geoEditorStore.points.map(p => ({
+    latitude: p.latitude,
+    longitude: p.longitude,
+    latitude_wgs84: p.latitude,
+    longitude_wgs84: p.longitude,
+    latitude_gcj02: null,
+    longitude_gcj02: null,
+    latitude_bd09: null,
+    longitude_bd09: null,
+    elevation: null,
+    time: p.time,
+    speed: null,
+  }))
+})
+
+// 轨道数据（用于时间轴显示）
+const tracksData = computed(() => geoEditorStore.tracks)
 
 // 加载数据
 onMounted(async () => {
   try {
     await geoEditorStore.loadEditorData(trackId.value)
+    trackName.value = `轨迹 #${trackId.value}`
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '加载编辑器数据失败')
     router.back()
@@ -110,6 +156,33 @@ async function handleSave() {
     isSaving.value = false
   }
 }
+
+// 时间轴段落选择
+function handleSegmentSelect(segmentId: string) {
+  geoEditorStore.selectSegment(segmentId)
+}
+
+function handleSegmentHover(segmentId: string | null) {
+  geoEditorStore.hoverSegment(segmentId)
+}
+
+// 时间轴段落保存
+function handleSegmentSave(data: { trackType: TrackType; segmentId: string; value: string; valueEn: string | null }) {
+  geoEditorStore.updateSegmentValue(data.trackType, data.segmentId, data.value, data.valueEn)
+}
+
+// 图表高亮
+function handleChartHighlight(dataIndex: number) {
+  // 找到包含该点的段落
+  for (const track of geoEditorStore.tracks) {
+    for (const segment of track.segments) {
+      if (dataIndex >= segment.startIndex && dataIndex <= segment.endIndex) {
+        geoEditorStore.selectSegment(segment.id)
+        return
+      }
+    }
+  }
+}
 </script>
 
 <template>
@@ -119,7 +192,7 @@ async function handleSave() {
       <div class="header-left">
         <el-button :icon="ArrowLeft" @click="handleBack" circle />
         <el-button :icon="HomeFilled" @click="goHome" circle />
-        <h1 class="track-title">地理信息编辑器 #{{ trackId }}</h1>
+        <h1 class="track-title">{{ trackName }}</h1>
       </div>
       <div class="header-right">
         <el-button
@@ -155,10 +228,15 @@ async function handleSave() {
     <!-- 主内容区 -->
     <el-main class="geo-editor-main">
       <el-empty v-if="isLoading" description="加载中..." />
-      <div v-else class="editor-content">
+      <div v-else-if="geoEditorStore.points.length > 0" class="editor-content">
         <!-- 地图区域 -->
         <div class="map-section">
-          <p>地图区域（待集成 UniversalMap）</p>
+          <UniversalMap
+            ref="mapRef"
+            :points="mapPoints"
+            :highlight-segment="highlightedSegment"
+            mode="detail"
+          />
         </div>
 
         <!-- 图表区域 -->
@@ -169,8 +247,13 @@ async function handleSave() {
               {{ geoEditorStore.isChartExpanded ? '折叠' : '展开' }}
             </el-button>
           </div>
-          <div v-if="geoEditorStore.isChartExpanded" class="chart-content">
-            <p>海拔/速度图表（待集成 ECharts）</p>
+          <div v-show="geoEditorStore.isChartExpanded" class="chart-content">
+            <GeoChartPanel
+              :points="geoEditorStore.points"
+              :time-scale-unit="geoEditorStore.timeScaleUnit"
+              :highlighted-range="highlightedSegment"
+              @highlight="handleChartHighlight"
+            />
           </div>
         </div>
 
@@ -187,9 +270,15 @@ async function handleSave() {
               {{ geoEditorStore.isTimelineExpanded ? '折叠' : '展开' }}
             </el-button>
           </div>
-          <div v-if="geoEditorStore.isTimelineExpanded" class="timeline-content">
-            <!-- 时间轴轨道（待集成） -->
-            <p>时间轴轨道（待实现）</p>
+          <div v-show="geoEditorStore.isTimelineExpanded" class="timeline-content">
+            <TimelineTracks
+              :tracks="tracksData"
+              :selected-segment-id="geoEditorStore.selectedSegmentId"
+              :hovered-segment-id="geoEditorStore.hoveredSegmentId"
+              @select="handleSegmentSelect"
+              @hover="handleSegmentHover"
+              @save="handleSegmentSave"
+            />
           </div>
         </div>
       </div>
@@ -253,10 +342,7 @@ async function handleSave() {
 .map-section {
   flex: 1;
   border-bottom: 1px solid var(--el-border-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 200px;
+  overflow: hidden;
 }
 
 .chart-section,
@@ -265,34 +351,31 @@ async function handleSave() {
 }
 
 .chart-section {
-  height: 180px;
+  height: 160px;
 }
 
 .timeline-section {
-  height: 200px;
+  height: 180px;
 }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
+  padding: 6px 16px;
   background: var(--el-bg-color-page);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .section-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--el-text-color-secondary);
 }
 
 .chart-content,
 .timeline-content {
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--el-text-color-placeholder);
+  height: calc(100% - 36px);
+  overflow: hidden;
 }
 </style>

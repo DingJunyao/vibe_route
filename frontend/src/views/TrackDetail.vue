@@ -682,6 +682,13 @@
             <el-icon><LocationFilled /></el-icon>
             {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充地理信息' : '填充地理信息' }}
           </el-button>
+          <el-button
+            @click="handleOpenGeoEditor"
+            class="fill-geo-btn"
+          >
+            <el-icon><Edit /></el-icon>
+            在线编辑地理信息
+          </el-button>
           <div class="dialog-footer-right">
             <el-button @click="editDialogVisible = false">取消</el-button>
             <el-button type="primary" :loading="saving || changingCrs" @click="saveEdit">
@@ -1608,6 +1615,14 @@ async function handleFillGeocoding() {
   } catch (error) {
     // 错误已在拦截器中处理
   }
+}
+
+// 打开地理信息在线编辑器
+function handleOpenGeoEditor() {
+  // 关闭编辑对话框
+  editDialogVisible.value = false
+  // 导航到地理编辑器页面
+  router.push(`/tracks/${trackId.value}/geo-editor`)
 }
 
 // 停止填充地理信息
