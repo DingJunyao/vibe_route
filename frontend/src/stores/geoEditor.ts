@@ -102,9 +102,14 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   async function loadEditorData(trackIdParam: number) {
     const data = await geoEditorApi.getEditorData(trackIdParam)
 
+    console.log('[GeoEditor] API response:', data)
+    console.log('[GeoEditor] Points count:', data.points.length)
+
     trackId.value = data.track_id
     points.value = data.points
     totalDuration.value = data.total_duration
+
+    console.log('[GeoEditor] Store points after load:', points.value.length)
 
     // 初始化轨道
     initializeTracks()
