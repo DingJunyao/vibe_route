@@ -107,6 +107,7 @@ ref/
 backend/data/area_data/
 
 .spec-workflow/
+.serena/
 
 # Git worktrees
 .worktrees/
