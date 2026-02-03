@@ -11,8 +11,12 @@ class TrackPointGeoData(BaseModel):
     point_index: int
     time: Optional[datetime]
     created_at: Optional[datetime]
-    latitude: float
-    longitude: float
+    latitude: float  # WGS84 纬度
+    longitude: float  # WGS84 经度
+    latitude_gcj02: Optional[float] = None  # GCJ02 纬度（高德、腾讯）
+    longitude_gcj02: Optional[float] = None  # GCJ02 经度
+    latitude_bd09: Optional[float] = None  # BD09 纬度（百度）
+    longitude_bd09: Optional[float] = None  # BD09 经度
     elevation: Optional[float] = None  # 海拔（米）
     speed: Optional[float] = None  # 速度（m/s）
     province: Optional[str] = None

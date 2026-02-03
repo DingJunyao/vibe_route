@@ -5,8 +5,12 @@ export interface TrackPointGeoData {
   point_index: number
   time: string | null
   created_at: string | null
-  latitude: number
-  longitude: number
+  latitude: number        // WGS84 纬度
+  longitude: number       // WGS84 经度
+  latitude_gcj02: number | null   // GCJ02 纬度（高德、腾讯）
+  longitude_gcj02: number | null  // GCJ02 经度
+  latitude_bd09: number | null   // BD09 纬度（百度）
+  longitude_bd09: number | null  // BD09 经度
   elevation: number | null  // 海拔（米）
   speed: number | null  // 速度（m/s）
   province: string | null

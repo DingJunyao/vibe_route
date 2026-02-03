@@ -44,14 +44,14 @@ const mapTracks = computed(() => {
     {
       id: trackId.value,
       points: geoEditorStore.points.map(p => ({
-        latitude: p.latitude,
-        longitude: p.longitude,
-        latitude_wgs84: p.latitude,
-        longitude_wgs84: p.longitude,
-        latitude_gcj02: null,
-        longitude_gcj02: null,
-        latitude_bd09: null,
-        longitude_bd09: null,
+        latitude: p.latitude,        // WGS84
+        longitude: p.longitude,       // WGS84
+        latitude_wgs84: p.latitude,   // WGS84
+        longitude_wgs84: p.longitude, // WGS84
+        latitude_gcj02: p.latitude_gcj02,
+        longitude_gcj02: p.longitude_gcj02,
+        latitude_bd09: p.latitude_bd09,
+        longitude_bd09: p.longitude_bd09,
         elevation: p.elevation,
         time: p.time,
         speed: p.speed,
@@ -408,6 +408,7 @@ function handlePointerChange(position: number) {
                 :points="geoEditorStore.points"
                 :zoom-start="geoEditorStore.zoomStart"
                 :zoom-end="geoEditorStore.zoomEnd"
+                :time-scale-unit="geoEditorStore.timeScaleUnit"
                 @pointer-change="handlePointerChange"
               />
             </div>
@@ -564,11 +565,11 @@ function handlePointerChange(position: number) {
 }
 
 .scale-section {
-  /* 不需要 margin，内部的 .timeline-scale 有 margin-left: -65px */
+  margin-left: 10px;  /* 与图表保持一致，内部的 .timeline-scale 有 margin-left: -65px */
 }
 
 .tracks-section {
-  /* 不需要 margin，内部的 .timeline-tracks 有 margin-left: -65px */
+  margin-left: 10px;  /* 与图表保持一致，内部的 .timeline-tracks 有 margin-left: -65px */
 }
 
 .global-playhead {
