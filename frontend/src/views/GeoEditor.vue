@@ -65,9 +65,11 @@ const isPointerVisible = computed(() => {
 })
 
 const playheadXPosition = computed(() => {
-  if (!isPointerVisible.value) return 0
-  return ((geoEditorStore.pointerPosition - geoEditorStore.zoomStart) /
-          (geoEditorStore.zoomEnd - geoEditorStore.zoomStart)) * 100
+  if (!isPointerVisible.value) return '65px'
+  const percent = (geoEditorStore.pointerPosition - geoEditorStore.zoomStart) /
+                  (geoEditorStore.zoomEnd - geoEditorStore.zoomStart)
+  // 0% 时在 65px（内容起始位置），100% 时在 100%
+  return `calc(65px + (100% - 65px) * ${percent})`
 })
 
 // 指针时间文本
@@ -100,12 +102,11 @@ function handlePlayheadMouseDown(e: MouseEvent) {
     const container = (e.currentTarget as HTMLElement).parentElement
     if (!container) return
     const rect = container.getBoundingClientRect()
-    const styles = window.getComputedStyle(container)
-    const paddingLeft = parseFloat(styles.paddingLeft) || 0
 
-    // 计算相对于内容区域的 x 坐标（排除左边距）
-    const contentWidth = rect.width - paddingLeft
-    const x = Math.max(0, Math.min(contentWidth, e.clientX - rect.left - paddingLeft))
+    // 计算相对于内容区域的 x 坐标（从 65px 开始）
+    const CONTENT_START = 65
+    const x = Math.max(0, Math.min(rect.width - CONTENT_START, e.clientX - rect.left - CONTENT_START))
+    const contentWidth = rect.width - CONTENT_START
     const position = geoEditorStore.zoomStart + (x / contentWidth) * (geoEditorStore.zoomEnd - geoEditorStore.zoomStart)
     geoEditorStore.setPointerPosition(position)
   }
@@ -532,7 +533,18 @@ function handlePointerChange(position: number) {
 
 .timeline-content {
   position: relative;
-  padding-left: 65px;  /* 统一左边距，确保标签对齐 */
+}
+
+.chart-section {
+  margin-left: 10px;  /* 为 Y 轴标签留出 55px 空间 */
+}
+
+.scale-section {
+  /* 不需要 margin，内部的 .timeline-scale 有 margin-left: -65px */
+}
+
+.tracks-section {
+  /* 不需要 margin，内部的 .timeline-tracks 有 margin-left: -65px */
 }
 
 .global-playhead {

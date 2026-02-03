@@ -98,7 +98,7 @@ function updateChart() {
 
   const option: EChartsOption = {
     grid: {
-      left: 10,
+      left: 50,
       right: 10,
       top: 5,
       bottom: 5,
@@ -120,6 +120,7 @@ function updateChart() {
         type: 'value',
         name: '海拔',
         position: 'left',
+        offset: 0,
         axisLabel: {
           formatter: '{value}',
           fontSize: 10,
@@ -133,7 +134,7 @@ function updateChart() {
         type: 'value',
         name: '速度',
         position: 'left',
-        offset: 45,
+        offset: 40,
         axisLabel: {
           formatter: '{value}',
           fontSize: 10,

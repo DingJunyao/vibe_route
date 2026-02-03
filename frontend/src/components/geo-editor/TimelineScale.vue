@@ -119,6 +119,7 @@ function handleScaleClick(e: MouseEvent) {
   position: relative;
   width: 100%;
   height: 32px;
+  margin-left: -65px;  /* 抵消父容器的 margin-left，使刻度标签位于标签区域内 */
   background: var(--el-bg-color-page);
   border-bottom: 1px solid var(--el-border-color-lighter);
   cursor: crosshair;
@@ -163,7 +164,9 @@ function handleScaleClick(e: MouseEvent) {
 .tick-label {
   position: absolute;
   top: 10px;
-  left: 4px;
+  left: 65px;  /* 标签区域右边缘 */
+  transform: translateX(-100%);  /* 文本右对齐 */
+  padding-right: 4px;
   font-size: 11px;
   color: var(--el-text-color-secondary);
   white-space: nowrap;
