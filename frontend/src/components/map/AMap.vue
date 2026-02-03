@@ -1354,7 +1354,7 @@ watch(() => props.highlightPointIndex, (newIndex) => {
 
   // 计算位置
   const position: [number, number] = [
-    point.longitude_wgs84 || point.latitude || 0,
+    point.longitude_wgs84 || point.longitude || 0,
     point.latitude_wgs84 || point.latitude || 0,
   ]
 
