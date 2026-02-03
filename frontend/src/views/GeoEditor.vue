@@ -326,7 +326,10 @@ function handlePointerChange(position: number) {
     <!-- 主内容区 -->
     <el-main class="geo-editor-main">
       <el-empty v-if="isLoading" description="加载中..." />
-      <div v-else-if="geoEditorStore.points.length > 0" class="editor-content">
+      <div v-else-if="geoEditorStore.points.length === 0" class="empty-state">
+        <el-empty description="暂无轨迹数据" />
+      </div>
+      <div v-else class="editor-content">
         <!-- 地图区域 -->
         <div class="map-section">
           <UniversalMap
@@ -414,7 +417,7 @@ function handlePointerChange(position: number) {
             <div
               v-if="isPointerVisible"
               class="global-playhead"
-              :style="{ left: `${playheadXPosition}%` }"
+              :style="{ left: playheadXPosition }"
               @mousedown="handlePlayheadMouseDown"
             >
               <div class="playhead-top"></div>
@@ -479,6 +482,13 @@ function handlePointerChange(position: number) {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.empty-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .map-section {
