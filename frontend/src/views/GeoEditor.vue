@@ -38,21 +38,26 @@ const highlightedSegment = computed(() => {
   return null
 })
 
-// 转换点数据为 UniversalMap 格式
-const mapPoints = computed(() => {
-  return geoEditorStore.points.map(p => ({
-    latitude: p.latitude,
-    longitude: p.longitude,
-    latitude_wgs84: p.latitude,
-    longitude_wgs84: p.longitude,
-    latitude_gcj02: null,
-    longitude_gcj02: null,
-    latitude_bd09: null,
-    longitude_bd09: null,
-    elevation: p.elevation,
-    time: p.time,
-    speed: p.speed,
-  }))
+// 转换点数据为 UniversalMap 格式（tracks 数组）
+const mapTracks = computed(() => {
+  return [
+    {
+      id: trackId.value,
+      points: geoEditorStore.points.map(p => ({
+        latitude: p.latitude,
+        longitude: p.longitude,
+        latitude_wgs84: p.latitude,
+        longitude_wgs84: p.longitude,
+        latitude_gcj02: null,
+        longitude_gcj02: null,
+        latitude_bd09: null,
+        longitude_bd09: null,
+        elevation: p.elevation,
+        time: p.time,
+        speed: p.speed,
+      })),
+    },
+  ]
 })
 
 // 轨道数据（用于时间轴显示）
@@ -334,7 +339,7 @@ function handlePointerChange(position: number) {
         <div class="map-section">
           <UniversalMap
             ref="mapRef"
-            :points="mapPoints"
+            :tracks="mapTracks"
             :highlight-segment="highlightedSegment"
             mode="detail"
           />
