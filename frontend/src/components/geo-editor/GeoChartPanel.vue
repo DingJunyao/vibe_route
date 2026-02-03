@@ -216,6 +216,31 @@ watch(() => [chartData.value, props.timeScaleUnit, props.highlightedRange], () =
   updateChart()
 }, { deep: true })
 
+// 监听指针位置变化，同步显示 tooltip
+watch(() => props.pointerPosition, (newPosition) => {
+  if (!chart || !chartData.value || chartData.value.xAxis.length === 0) return
+
+  // 计算指针对应的可见数据索引
+  const totalPoints = props.points.length
+  const startIndex = Math.floor(totalPoints * props.zoomStart)
+  const endIndex = Math.ceil(totalPoints * props.zoomEnd)
+  const visibleCount = endIndex - startIndex
+
+  // 指针在可见区域中的位置 (0-1)
+  const visiblePosition = (newPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart)
+  const visibleIndex = Math.floor(visiblePosition * visibleCount)
+
+  // 限制在有效范围内
+  const clampedIndex = Math.max(0, Math.min(visibleIndex, visibleCount - 1))
+
+  // 显示 tooltip
+  chart.dispatchAction({
+    type: 'showTip',
+    seriesIndex: 0,
+    dataIndex: clampedIndex,
+  })
+})
+
 // 窗口大小变化
 function handleResize() {
   chart?.resize()

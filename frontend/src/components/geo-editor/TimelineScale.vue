@@ -90,8 +90,10 @@ const ticks = computed(() => {
 function handleScaleClick(e: MouseEvent) {
   if (!scaleRef.value) return
   const rect = scaleRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  const position = x / rect.width
+  // 考虑 margin-left: -65px 的偏移，实际内容从 65px 开始
+  const x = Math.max(0, e.clientX - rect.left - 65)
+  const contentWidth = rect.width - 65
+  const position = x / contentWidth
 
   // 转换为全局位置
   const globalPosition = props.zoomStart + position * (props.zoomEnd - props.zoomStart)

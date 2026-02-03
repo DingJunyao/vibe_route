@@ -63,6 +63,13 @@ const mapTracks = computed(() => {
 // 轨道数据（用于时间轴显示）
 const tracksData = computed(() => geoEditorStore.tracks)
 
+// 计算指针对应的点索引（用于地图 tooltip 同步）
+const highlightPointIndex = computed(() => {
+  if (geoEditorStore.points.length === 0) return undefined
+  const position = geoEditorStore.pointerPosition
+  return Math.floor(position * geoEditorStore.points.length)
+})
+
 // 计算指针在可见区域的位置
 const isPointerVisible = computed(() => {
   return geoEditorStore.pointerPosition >= geoEditorStore.zoomStart &&
@@ -341,6 +348,7 @@ function handlePointerChange(position: number) {
             ref="mapRef"
             :tracks="mapTracks"
             :highlight-segment="highlightedSegment"
+            :highlight-point-index="highlightPointIndex"
             mode="detail"
           />
         </div>
@@ -425,6 +433,7 @@ function handlePointerChange(position: number) {
               :style="{ left: playheadXPosition }"
               @mousedown="handlePlayheadMouseDown"
             >
+              <div class="playhead-line"></div>
               <div class="playhead-top"></div>
               <div class="playhead-time">{{ pointerTimeText }}</div>
               <div class="playhead-bottom"></div>

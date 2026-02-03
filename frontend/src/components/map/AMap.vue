@@ -144,6 +144,7 @@ interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  highlightPointIndex?: number
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -152,6 +153,7 @@ const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  highlightPointIndex: undefined,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -1329,6 +1331,34 @@ watch(() => props.highlightTrackId, () => {
 
 watch(() => props.highlightSegment, () => {
   updateTracks()
+})
+
+// 监听外部指定的高亮点索引（用于指针同步）
+watch(() => props.highlightPointIndex, (newIndex) => {
+  if (newIndex === undefined || newIndex === null || !props.tracks || props.tracks.length === 0) {
+    hideMarker()
+    return
+  }
+
+  const track = props.tracks[0]
+  if (!track || !track.points || newIndex >= track.points.length) {
+    hideMarker()
+    return
+  }
+
+  const point = track.points[newIndex]
+  if (!point) {
+    hideMarker()
+    return
+  }
+
+  // 计算位置
+  const position: [number, number] = [
+    point.longitude_wgs84 || point.latitude || 0,
+    point.latitude_wgs84 || point.latitude || 0,
+  ]
+
+  updateMarker({ point, index: newIndex, position })
 })
 
 // 生命周期

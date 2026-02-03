@@ -7,6 +7,7 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :highlight-point-index="highlightPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -19,6 +20,7 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :highlight-point-index="highlightPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -31,6 +33,7 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :highlight-point-index="highlightPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -43,6 +46,7 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :highlight-point-index="highlightPointIndex"
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
       :mode="mode"
@@ -153,6 +157,7 @@ interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  highlightPointIndex?: number  // 新增：高亮指定索引的点
   defaultLayerId?: string
   mode?: 'home' | 'detail'
   liveStatusText?: string  // 实时更新状态文字（已废弃，使用 liveUpdateTime）
@@ -163,6 +168,7 @@ const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  highlightPointIndex: undefined,
   defaultLayerId: undefined,
   mode: 'detail',
   liveStatusText: '',
