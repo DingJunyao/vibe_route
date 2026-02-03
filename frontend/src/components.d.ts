@@ -65,6 +65,7 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     TencentMap: typeof import('./components/map/TencentMap.vue')['default']
+    TimelineScale: typeof import('./components/geo-editor/TimelineScale.vue')['default']
     TimelineTracks: typeof import('./components/geo-editor/TimelineTracks.vue')['default']
     UniversalMap: typeof import('./components/map/UniversalMap.vue')['default']
   }

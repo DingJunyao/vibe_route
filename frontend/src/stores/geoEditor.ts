@@ -82,6 +82,10 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   const pointerPosition = ref(0)
   const isPointerDragging = ref(false)
 
+  // 缩放状态（0-1）
+  const zoomStart = ref(0)
+  const zoomEnd = ref(1)
+
   // Getters
   const canUndo = computed(() => historyIndex.value > 0)
   const canRedo = computed(() => historyIndex.value < history.value.length - 1)
@@ -340,6 +344,56 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     await loadEditorData(trackId.value)
   }
 
+  // 选择段落
+  function selectSegment(segmentId: string) {
+    selectedSegmentId.value = segmentId
+  }
+
+  // 悬停段落
+  function hoverSegment(segmentId: string | null) {
+    hoveredSegmentId.value = segmentId
+  }
+
+  // 缩放控制
+  function zoomIn() {
+    const range = zoomEnd.value - zoomStart.value
+    const center = (zoomStart.value + zoomEnd.value) / 2
+    const newRange = range * 0.8
+    zoomStart.value = Math.max(0, center - newRange / 2)
+    zoomEnd.value = Math.min(1, center + newRange / 2)
+  }
+
+  function zoomOut() {
+    const range = zoomEnd.value - zoomStart.value
+    const center = (zoomStart.value + zoomEnd.value) / 2
+    const newRange = Math.min(1, range * 1.25)
+    zoomStart.value = Math.max(0, center - newRange / 2)
+    zoomEnd.value = Math.min(1, center + newRange / 2)
+  }
+
+  function resetZoom() {
+    zoomStart.value = 0
+    zoomEnd.value = 1
+  }
+
+  function setZoom(start: number, end: number) {
+    zoomStart.value = Math.max(0, Math.min(1, start))
+    zoomEnd.value = Math.max(0, Math.min(1, end))
+  }
+
+  // 指针控制
+  function setPointerPosition(position: number) {
+    pointerPosition.value = Math.max(0, Math.min(1, position))
+  }
+
+  function startPointerDrag() {
+    isPointerDragging.value = true
+  }
+
+  function stopPointerDrag() {
+    isPointerDragging.value = false
+  }
+
   return {
     // State
     trackId,
@@ -357,6 +411,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     lastSavedAt,
     pointerPosition,
     isPointerDragging,
+    zoomStart,
+    zoomEnd,
 
     // Getters
     canUndo,
@@ -374,5 +430,14 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     saveToServer,
     getTrackDefinition,
     getAllTrackTypes,
+    selectSegment,
+    hoverSegment,
+    zoomIn,
+    zoomOut,
+    resetZoom,
+    setZoom,
+    setPointerPosition,
+    startPointerDrag,
+    stopPointerDrag,
   }
 })

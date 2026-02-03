@@ -8,6 +8,9 @@ interface Props {
   tracks: TrackTimeline[]
   selectedSegmentId: string | null
   hoveredSegmentId: string | null
+  zoomStart: number
+  zoomEnd: number
+  pointerPosition: number
 }
 
 const props = defineProps<Props>()
@@ -42,6 +45,43 @@ const totalPoints = computed(() => {
   return props.tracks[0]?.segments.reduce((sum, seg) => sum + seg.pointCount, 0) || 0
 })
 
+// 计算可见段落（只显示缩放范围内的段落）
+const visibleSegments = computed(() => {
+  const result: Array<{ segment: TrackSegment; trackType: TrackType; visibleStart: number; visibleWidth: number }> = []
+
+  for (const track of props.tracks) {
+    for (const segment of track.segments) {
+      const segmentStart = segment.startIndex / totalPoints.value
+      const segmentEnd = (segment.startIndex + segment.pointCount) / totalPoints.value
+
+      // 计算段落与可见区域的交集
+      const overlapStart = Math.max(props.zoomStart, segmentStart)
+      const overlapEnd = Math.min(props.zoomEnd, segmentEnd)
+
+      if (overlapStart < overlapEnd) {
+        // 转换为相对于可见区域的百分比
+        const visibleStart = (overlapStart - props.zoomStart) / (props.zoomEnd - props.zoomStart)
+        const visibleWidth = (overlapEnd - overlapStart) / (props.zoomEnd - props.zoomStart)
+
+        result.push({
+          segment,
+          trackType: track.type,
+          visibleStart: visibleStart * 100,
+          visibleWidth: visibleWidth * 100,
+        })
+      }
+    }
+  }
+
+  return result
+})
+
+// 计算指针位置（相对于可见区域）
+const pointerVisiblePosition = computed(() => {
+  if (props.pointerPosition < props.zoomStart || props.pointerPosition > props.zoomEnd) return null
+  return ((props.pointerPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart)) * 100
+})
+
 // 双击编辑
 function handleDoubleClick(trackType: TrackType, segment: TrackSegment) {
   editTrackType.value = trackType
@@ -57,7 +97,6 @@ async function handleSave() {
   const cleanedValueEn = editValueEn.value.trim() || null
 
   if (!cleanedValue) {
-    // 如果清除值，需要确认
     try {
       await ElMessageBox.confirm(
         '确定要清除该字段吗？',
@@ -93,6 +132,17 @@ function handleHover(segmentId: string | null) {
 function getTrackConfig(trackType: TrackType) {
   return TRACK_CONFIG[trackType]
 }
+
+// 按轨道类型分组可见段落
+const segmentsByTrack = computed(() => {
+  const grouped: Record<string, typeof visibleSegments.value> = {}
+  for (const item of visibleSegments.value) {
+    const key = item.trackType
+    if (!grouped[key]) grouped[key] = []
+    grouped[key].push(item)
+  }
+  return grouped
+})
 </script>
 
 <template>
@@ -109,28 +159,35 @@ function getTrackConfig(trackType: TrackType) {
       <div class="track-content">
         <!-- 段落块 -->
         <div
-          v-for="segment in track.segments"
-          :key="segment.id"
+          v-for="item in (segmentsByTrack[track.type] || [])"
+          :key="item.segment.id"
           class="segment-block"
           :class="{
-            'is-selected': segment.id === selectedSegmentId,
-            'is-hovered': segment.id === hoveredSegmentId,
-            'is-edited': segment.isEdited,
-            'is-empty': !segment.value
+            'is-selected': item.segment.id === selectedSegmentId,
+            'is-hovered': item.segment.id === hoveredSegmentId,
+            'is-edited': item.segment.isEdited,
+            'is-empty': !item.segment.value
           }"
           :style="{
-            left: `${(segment.startIndex / totalPoints) * 100}%`,
-            width: `${(segment.pointCount / totalPoints) * 100}%`
+            left: `${item.visibleStart}%`,
+            width: `${item.visibleWidth}%`
           }"
-          @click="handleSelect(segment.id)"
-          @dblclick="handleDoubleClick(track.type, segment)"
-          @mouseenter="handleHover(segment.id)"
+          @click="handleSelect(item.segment.id)"
+          @dblclick="handleDoubleClick(track.type, item.segment)"
+          @mouseenter="handleHover(item.segment.id)"
           @mouseleave="handleHover(null)"
         >
-          <span v-if="segment.value || (segment.id === selectedSegmentId || segment.id === hoveredSegmentId)" class="segment-text">
-            {{ segment.value || '(空)' }}
+          <span v-if="item.segment.value || (item.segment.id === selectedSegmentId || item.segment.id === hoveredSegmentId)" class="segment-text">
+            {{ item.segment.value || '(空)' }}
           </span>
         </div>
+
+        <!-- 指针线 -->
+        <div
+          v-if="pointerVisiblePosition !== null"
+          class="track-pointer"
+          :style="{ left: `${pointerVisiblePosition}%` }"
+        ></div>
       </div>
     </div>
 
@@ -170,21 +227,21 @@ function getTrackConfig(trackType: TrackType) {
 
 <style scoped>
 .timeline-tracks {
-  padding: 8px 0;
+  padding: 4px 0;
 }
 
 .track-row {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 32px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .track-label {
-  width: 80px;
+  width: 65px;
   flex-shrink: 0;
-  padding-left: 16px;
-  font-size: 13px;
+  padding-left: 12px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
   border-right: 1px solid var(--el-border-color-lighter);
 }
@@ -197,18 +254,18 @@ function getTrackConfig(trackType: TrackType) {
 
 .segment-block {
   position: absolute;
-  height: 24px;
+  height: 22px;
   display: flex;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 3px;
   background: var(--el-color-primary-light-9);
   border: 1px solid var(--el-color-primary-light-7);
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: 3px;
+  font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 
 .segment-block.is-hovered {
@@ -242,5 +299,15 @@ function getTrackConfig(trackType: TrackType) {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+.track-pointer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #f56c6c;
+  pointer-events: none;
+  z-index: 20;
 }
 </style>

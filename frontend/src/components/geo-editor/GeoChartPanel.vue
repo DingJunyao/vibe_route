@@ -7,6 +7,9 @@ interface Props {
   points: any[]
   timeScaleUnit: 'time' | 'duration' | 'index'
   highlightedRange?: { start: number; end: number } | null
+  zoomStart: number
+  zoomEnd: number
+  pointerPosition: number
 }
 
 const props = defineProps<Props>()
@@ -18,13 +21,14 @@ const emit = defineEmits<{
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
-// 缩放范围 (0-1)
-const zoomStart = ref(0)
-const zoomEnd = ref(1)
-
-// 计算图表数据
+// 计算图表数据（只显示当前缩放范围内的数据）
 const chartData = computed(() => {
   if (props.points.length === 0) return { xAxis: [], elevation: [], speed: [] }
+
+  const totalPoints = props.points.length
+  const startIndex = Math.floor(totalPoints * props.zoomStart)
+  const endIndex = Math.ceil(totalPoints * props.zoomEnd)
+  const visiblePoints = props.points.slice(startIndex, endIndex)
 
   const xAxis: string[] = []
   const elevation: number[] = []
@@ -32,26 +36,24 @@ const chartData = computed(() => {
 
   let startTime = props.points[0]?.time ? new Date(props.points[0].time).getTime() : 0
 
-  props.points.forEach((point, index) => {
-    // x 轴标签根据单位变化
-    let label = ''
+  visiblePoints.forEach((point, index) => {
+    const actualIndex = startIndex + index
+
     if (props.timeScaleUnit === 'index') {
-      label = index.toString()
+      xAxis.push(actualIndex.toString())
     } else if (props.timeScaleUnit === 'duration') {
       const pointTime = point.time ? new Date(point.time).getTime() : startTime
       const duration = pointTime - startTime
-      label = formatDuration(duration)
+      xAxis.push(formatDuration(duration))
     } else {
-      label = point.time ? formatTime(point.time) : index.toString()
+      xAxis.push(point.time ? formatTime(point.time) : actualIndex.toString())
     }
 
-    xAxis.push(label)
     elevation.push(point.elevation ?? 0)
-    // 速度从 m/s 转换为 km/h
     speed.push(point.speed != null ? point.speed * 3.6 : 0)
   })
 
-  return { xAxis, elevation, speed }
+  return { xAxis, elevation, speed, startIndex }
 })
 
 function formatDuration(ms: number): string {
@@ -96,10 +98,10 @@ function updateChart() {
 
   const option: EChartsOption = {
     grid: {
-      left: 60,
-      right: 20,
-      top: 10,
-      bottom: 30,
+      left: 65,
+      right: 10,
+      top: 5,
+      bottom: 5,
       containLabel: false,
     },
     tooltip: {
@@ -108,37 +110,19 @@ function updateChart() {
         type: 'cross',
       },
     },
-    dataZoom: [
-      {
-        type: 'inside',
-        start: Math.round(zoomStart.value * 100),
-        end: Math.round(zoomEnd.value * 100),
-        zoomOnMouseWheel: false,  // 禁用鼠标滚轮缩放，改为手动控制
-        moveOnMouseMove: false,
-        moveOnMouseWheel: false,
-      },
-    ],
     xAxis: {
       type: 'category',
       data: chartData.value.xAxis,
-      axisLabel: {
-        formatter: (value: string, index: number) => {
-          // 简化显示，只显示部分标签
-          if (chartData.value.xAxis.length > 20) {
-            const step = Math.ceil(chartData.value.xAxis.length / 10)
-            return index % step === 0 ? value : ''
-          }
-          return value
-        },
-      },
+      show: false,  // 隐藏 x 轴，由时间刻度组件负责显示
     },
     yAxis: [
       {
         type: 'value',
-        name: '海拔 (m)',
+        name: '海拔',
         position: 'left',
         axisLabel: {
           formatter: '{value}',
+          fontSize: 10,
         },
         splitLine: {
           show: true,
@@ -147,11 +131,12 @@ function updateChart() {
       },
       {
         type: 'value',
-        name: '速度 (km/h)',
+        name: '速度',
         position: 'left',
-        offset: 50,  // 向右偏移，避免与海拔轴重叠
+        offset: 45,
         axisLabel: {
           formatter: '{value}',
+          fontSize: 10,
         },
         splitLine: {
           show: false,
@@ -219,34 +204,10 @@ function setupChartEvents() {
 
   chart.on('click', (params: any) => {
     if (params.dataIndex !== undefined) {
-      emit('highlight', params.dataIndex)
+      const actualIndex = chartData.value.startIndex + params.dataIndex
+      emit('highlight', actualIndex)
     }
   })
-}
-
-// 缩放控制
-function zoomIn() {
-  const range = zoomEnd.value - zoomStart.value
-  const center = (zoomStart.value + zoomEnd.value) / 2
-  const newRange = range * 0.8
-  zoomStart.value = Math.max(0, center - newRange / 2)
-  zoomEnd.value = Math.min(1, center + newRange / 2)
-  updateChart()
-}
-
-function zoomOut() {
-  const range = zoomEnd.value - zoomStart.value
-  const center = (zoomStart.value + zoomEnd.value) / 2
-  const newRange = Math.min(1, range * 1.25)
-  zoomStart.value = Math.max(0, center - newRange / 2)
-  zoomEnd.value = Math.min(1, center + newRange / 2)
-  updateChart()
-}
-
-function resetZoom() {
-  zoomStart.value = 0
-  zoomEnd.value = 1
-  updateChart()
 }
 
 // 监听变化
@@ -272,7 +233,7 @@ onUnmounted(() => {
 })
 
 // 暴露方法
-defineExpose({ refresh: () => { nextTick(() => initChart()) }, zoomIn, zoomOut, resetZoom })
+defineExpose({ refresh: () => { nextTick(() => initChart()) } })
 </script>
 
 <template>
