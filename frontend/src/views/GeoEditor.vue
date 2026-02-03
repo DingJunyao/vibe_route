@@ -561,15 +561,15 @@ function handlePointerChange(position: number) {
 }
 
 .chart-section {
-  margin-left: 10px;  /* 为 Y 轴标签留出 55px 空间 */
+  padding-left: 10px;  /* 与刻度/轨道保持对齐 */
 }
 
 .scale-section {
-  margin-left: 10px;  /* 与图表保持一致，内部的 .timeline-scale 有 margin-left: -65px */
+  /* 无需额外边距，TimelineScale 内部处理 */
 }
 
 .tracks-section {
-  margin-left: 10px;  /* 与图表保持一致，内部的 .timeline-tracks 有 margin-left: -65px */
+  /* 无需额外边距，TimelineTracks 内部处理 */
 }
 
 .global-playhead {

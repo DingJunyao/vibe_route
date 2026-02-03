@@ -89,20 +89,6 @@ const ticks = computed(() => {
           label,
           isMajor: true,
         })
-
-        // 次刻度
-        const minorInterval = interval / 6
-        for (let i = 1; i < 6; i++) {
-          const minorTime = t + minorInterval * i
-          const minorPosition = (minorTime - startTime) / totalDuration
-          if (minorPosition <= props.zoomEnd) {
-            result.push({
-              position: (minorPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart),
-              label: '',
-              isMajor: false,
-            })
-          }
-        }
       }
     }
   } else if (props.timeScaleUnit === 'duration') {
@@ -130,20 +116,6 @@ const ticks = computed(() => {
           label: formatDuration(t - startTime),
           isMajor: true,
         })
-
-        // 次刻度
-        const minorInterval = interval / 6
-        for (let i = 1; i < 6; i++) {
-          const minorTime = t + minorInterval * i
-          const minorPosition = (minorTime - startTime) / totalDuration
-          if (minorPosition <= props.zoomEnd) {
-            result.push({
-              position: (minorPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart),
-              label: '',
-              isMajor: false,
-            })
-          }
-        }
       }
     }
   } else {
@@ -170,20 +142,6 @@ const ticks = computed(() => {
           label: String(idx),
           isMajor: true,
         })
-
-        // 次刻度
-        const minorInterval = interval / 5
-        for (let i = 1; i < 5; i++) {
-          const minorIndex = idx + minorInterval * i
-          const minorPosition = minorIndex / totalPoints
-          if (minorPosition <= props.zoomEnd) {
-            result.push({
-              position: (minorPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart),
-              label: '',
-              isMajor: false,
-            })
-          }
-        }
       }
     }
   }
@@ -195,10 +153,10 @@ function handleScaleClick(e: MouseEvent) {
   if (!scaleRef.value) return
   const rect = scaleRef.value.getBoundingClientRect()
 
-  // 考虑 margin-left: -65px 的偏移，实际内容从 65px 开始
-  // 加上父容器的 margin-left: 10px
-  const x = Math.max(0, e.clientX - rect.left - 65)
-  const contentWidth = rect.width - 65
+  // 点击位置相对于内容区域（从标签区域后开始）
+  const LABEL_WIDTH = 65
+  const x = Math.max(0, e.clientX - rect.left - LABEL_WIDTH)
+  const contentWidth = rect.width - LABEL_WIDTH
   const position = x / contentWidth
 
   // 转换为全局位置
@@ -209,15 +167,18 @@ function handleScaleClick(e: MouseEvent) {
 
 <template>
   <div class="timeline-scale" ref="scaleRef" @click="handleScaleClick">
-    <!-- 刻度 -->
-    <div
-      v-for="(tick, index) in ticks"
-      :key="index"
-      class="tick"
-      :class="{ 'tick-major': tick.isMajor, 'tick-minor': !tick.isMajor }"
-      :style="{ left: `${tick.position * 100}%` }"
-    >
-      <div v-if="tick.isMajor && tick.label" class="tick-label">{{ tick.label }}</div>
+    <!-- 刻度容器（包含标签区域和内容区域） -->
+    <div class="scale-content">
+      <!-- 刻度 -->
+      <div
+        v-for="(tick, index) in ticks"
+        :key="index"
+        class="tick"
+        :class="{ 'tick-major': tick.isMajor }"
+        :style="{ left: `${tick.position * 100}%` }"
+      >
+        <div v-if="tick.isMajor && tick.label" class="tick-label">{{ tick.label }}</div>
+      </div>
     </div>
   </div>
 </template>
@@ -227,11 +188,18 @@ function handleScaleClick(e: MouseEvent) {
   position: relative;
   width: 100%;
   height: 32px;
-  margin-left: -65px;  /* 抵消父容器的 margin-left，使刻度标签位于标签区域内 */
   background: var(--el-bg-color-page);
   border-bottom: 1px solid var(--el-border-color-lighter);
   cursor: crosshair;
   user-select: none;
+}
+
+.scale-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding-left: 65px;  /* 标签区域宽度 */
+  box-sizing: border-box;
 }
 
 .tick {
@@ -255,25 +223,11 @@ function handleScaleClick(e: MouseEvent) {
   background: var(--el-text-color-secondary);
 }
 
-.tick-minor {
-  border-left: 1px solid transparent;
-}
-
-.tick-minor::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 1px;
-  height: 4px;
-  background: var(--el-border-color-darker);
-}
-
 .tick-label {
   position: absolute;
   top: 10px;
-  left: 65px;  /* 标签区域右边缘 */
-  transform: translateX(-100%);  /* 文本右对齐 */
+  left: -4px;  /* 紧贴刻度线左侧，带一点间距 */
+  transform: translateX(-100%);  /* 向右平移自身宽度，实现右对齐 */
   padding-right: 4px;
   font-size: 11px;
   color: var(--el-text-color-secondary);

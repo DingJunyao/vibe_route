@@ -214,7 +214,6 @@ const segmentsByTrack = computed(() => {
 <style scoped>
 .timeline-tracks {
   padding: 4px 0;
-  margin-left: -65px;  /* 抵消父容器的 margin-left，使标签位于标签区域内 */
 }
 
 .track-row {
