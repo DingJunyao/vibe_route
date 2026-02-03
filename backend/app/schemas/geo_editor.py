@@ -13,6 +13,8 @@ class TrackPointGeoData(BaseModel):
     created_at: Optional[datetime]
     latitude: float
     longitude: float
+    elevation: Optional[float] = None  # 海拔（米）
+    speed: Optional[float] = None  # 速度（m/s）
     province: Optional[str] = None
     city: Optional[str] = None
     district: Optional[str] = None

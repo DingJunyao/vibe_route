@@ -7,6 +7,8 @@ export interface TrackPointGeoData {
   created_at: string | null
   latitude: number
   longitude: number
+  elevation: number | null  // 海拔（米）
+  speed: number | null  // 速度（m/s）
   province: string | null
   city: string | null
   district: string | null

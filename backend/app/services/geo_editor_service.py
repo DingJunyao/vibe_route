@@ -73,6 +73,8 @@ class GeoEditorService:
                 created_at=p.created_at,
                 latitude=p.latitude_wgs84,
                 longitude=p.longitude_wgs84,
+                elevation=p.elevation,
+                speed=p.speed,
                 province=p.province,
                 city=p.city,
                 district=p.district,

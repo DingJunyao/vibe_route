@@ -18,6 +18,10 @@ const emit = defineEmits<{
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
+// 缩放范围 (0-1)
+const zoomStart = ref(0)
+const zoomEnd = ref(1)
+
 // 计算图表数据
 const chartData = computed(() => {
   if (props.points.length === 0) return { xAxis: [], elevation: [], speed: [] }
@@ -42,8 +46,9 @@ const chartData = computed(() => {
     }
 
     xAxis.push(label)
-    elevation.push(point.elevation || 0)
-    speed.push(point.speed || 0)
+    elevation.push(point.elevation ?? 0)
+    // 速度从 m/s 转换为 km/h
+    speed.push(point.speed != null ? point.speed * 3.6 : 0)
   })
 
   return { xAxis, elevation, speed }
@@ -53,7 +58,6 @@ function formatDuration(ms: number): string {
   const hours = Math.floor(ms / 3600000)
   const minutes = Math.floor((ms % 3600000) / 60000)
   const seconds = Math.floor((ms % 60000) / 1000)
-  const milliseconds = ms % 1000
 
   if (hours > 0) {
     return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
@@ -92,10 +96,11 @@ function updateChart() {
 
   const option: EChartsOption = {
     grid: {
-      left: 50,
-      right: 50,
-      top: 20,
+      left: 60,
+      right: 20,
+      top: 10,
       bottom: 30,
+      containLabel: false,
     },
     tooltip: {
       trigger: 'axis',
@@ -103,6 +108,16 @@ function updateChart() {
         type: 'cross',
       },
     },
+    dataZoom: [
+      {
+        type: 'inside',
+        start: Math.round(zoomStart.value * 100),
+        end: Math.round(zoomEnd.value * 100),
+        zoomOnMouseWheel: false,  // 禁用鼠标滚轮缩放，改为手动控制
+        moveOnMouseMove: false,
+        moveOnMouseWheel: false,
+      },
+    ],
     xAxis: {
       type: 'category',
       data: chartData.value.xAxis,
@@ -133,7 +148,8 @@ function updateChart() {
       {
         type: 'value',
         name: '速度 (km/h)',
-        position: 'right',
+        position: 'left',
+        offset: 50,  // 向右偏移，避免与海拔轴重叠
         axisLabel: {
           formatter: '{value}',
         },
@@ -208,6 +224,31 @@ function setupChartEvents() {
   })
 }
 
+// 缩放控制
+function zoomIn() {
+  const range = zoomEnd.value - zoomStart.value
+  const center = (zoomStart.value + zoomEnd.value) / 2
+  const newRange = range * 0.8
+  zoomStart.value = Math.max(0, center - newRange / 2)
+  zoomEnd.value = Math.min(1, center + newRange / 2)
+  updateChart()
+}
+
+function zoomOut() {
+  const range = zoomEnd.value - zoomStart.value
+  const center = (zoomStart.value + zoomEnd.value) / 2
+  const newRange = Math.min(1, range * 1.25)
+  zoomStart.value = Math.max(0, center - newRange / 2)
+  zoomEnd.value = Math.min(1, center + newRange / 2)
+  updateChart()
+}
+
+function resetZoom() {
+  zoomStart.value = 0
+  zoomEnd.value = 1
+  updateChart()
+}
+
 // 监听变化
 watch(() => [chartData.value, props.timeScaleUnit, props.highlightedRange], () => {
   updateChart()
@@ -230,14 +271,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
 
-// 暴露刷新方法
-function refresh() {
-  nextTick(() => {
-    initChart()
-  })
-}
-
-defineExpose({ refresh })
+// 暴露方法
+defineExpose({ refresh: () => { nextTick(() => initChart()) }, zoomIn, zoomOut, resetZoom })
 </script>
 
 <template>

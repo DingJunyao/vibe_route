@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, WarningFilled, ZoomIn, ZoomOut, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useGeoEditorStore, type TrackType } from '@/stores/geoEditor'
 import UniversalMap from '@/components/map/UniversalMap.vue'
@@ -19,6 +19,8 @@ const trackName = ref('')
 
 // 地图引用
 const mapRef = ref<InstanceType<typeof UniversalMap> | null>(null)
+// 图表引用
+const chartRef = ref<InstanceType<typeof GeoChartPanel> | null>(null)
 
 // 高亮区域（基于选中的段落）
 const highlightedSegment = computed(() => {
@@ -49,9 +51,9 @@ const mapPoints = computed(() => {
     longitude_gcj02: null,
     latitude_bd09: null,
     longitude_bd09: null,
-    elevation: null,
+    elevation: p.elevation,
     time: p.time,
-    speed: null,
+    speed: p.speed,
   }))
 })
 
@@ -72,10 +74,13 @@ onMounted(async () => {
 
   // 添加离页提示
   window.addEventListener('beforeunload', handleBeforeUnload)
+  // 添加滚轮缩放监听
+  window.addEventListener('wheel', handleWheel, { passive: false })
 })
 
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
+  window.removeEventListener('wheel', handleWheel)
 })
 
 // 离页提示
@@ -83,6 +88,18 @@ function handleBeforeUnload(e: BeforeUnloadEvent) {
   if (geoEditorStore.hasUnsavedChanges) {
     e.preventDefault()
     e.returnValue = ''
+  }
+}
+
+// 滚轮缩放（需要按 Ctrl 或 Alt）
+function handleWheel(e: WheelEvent) {
+  if (e.ctrlKey || e.altKey) {
+    e.preventDefault()
+    if (e.deltaY < 0) {
+      chartRef.value?.zoomIn()
+    } else {
+      chartRef.value?.zoomOut()
+    }
   }
 }
 
@@ -155,6 +172,19 @@ async function handleSave() {
   } finally {
     isSaving.value = false
   }
+}
+
+// 缩放控制
+function handleZoomIn() {
+  chartRef.value?.zoomIn()
+}
+
+function handleZoomOut() {
+  chartRef.value?.zoomOut()
+}
+
+function handleResetZoom() {
+  chartRef.value?.resetZoom()
 }
 
 // 时间轴段落选择
@@ -239,47 +269,64 @@ function handleChartHighlight(dataIndex: number) {
           />
         </div>
 
-        <!-- 图表区域 -->
-        <div class="chart-section">
-          <div class="section-header">
-            <span class="section-title">▼ 图表</span>
-            <el-button size="small" @click="geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded">
-              {{ geoEditorStore.isChartExpanded ? '折叠' : '展开' }}
-            </el-button>
+        <!-- 图表和时间轴控制栏 -->
+        <div class="controls-bar">
+          <!-- 左侧：缩放控制 -->
+          <div class="controls-left">
+            <el-button-group>
+              <el-tooltip content="放大 (Ctrl+滚轮)" placement="top">
+                <el-button :icon="ZoomIn" @click="handleZoomIn" size="small" />
+              </el-tooltip>
+              <el-tooltip content="缩小 (Ctrl+滚轮)" placement="top">
+                <el-button :icon="ZoomOut" @click="handleZoomOut" size="small" />
+              </el-tooltip>
+              <el-tooltip content="重置" placement="top">
+                <el-button :icon="Refresh" @click="handleResetZoom" size="small" />
+              </el-tooltip>
+            </el-button-group>
           </div>
-          <div v-show="geoEditorStore.isChartExpanded" class="chart-content">
-            <GeoChartPanel
-              :points="geoEditorStore.points"
-              :time-scale-unit="geoEditorStore.timeScaleUnit"
-              :highlighted-range="highlightedSegment"
-              @highlight="handleChartHighlight"
-            />
-          </div>
-        </div>
 
-        <!-- 时间轴区域 -->
-        <div class="timeline-section">
-          <div class="section-header">
-            <span class="section-title">▼ 时间轴</span>
-            <el-select v-model="geoEditorStore.timeScaleUnit" size="small" style="width: 100px; margin-right: 8px;">
+          <!-- 中间：时间单位选择 -->
+          <div class="controls-center">
+            <el-select v-model="geoEditorStore.timeScaleUnit" size="small" style="width: 80px;">
               <el-option value="time" label="时间" />
               <el-option value="duration" label="时长" />
               <el-option value="index" label="索引" />
             </el-select>
+          </div>
+
+          <!-- 右侧：折叠按钮 -->
+          <div class="controls-right">
+            <el-button size="small" @click="geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded">
+              {{ geoEditorStore.isChartExpanded ? '▼' : '▲' }}
+            </el-button>
             <el-button size="small" @click="geoEditorStore.isTimelineExpanded = !geoEditorStore.isTimelineExpanded">
-              {{ geoEditorStore.isTimelineExpanded ? '折叠' : '展开' }}
+              {{ geoEditorStore.isTimelineExpanded ? '▼' : '▲' }}
             </el-button>
           </div>
-          <div v-show="geoEditorStore.isTimelineExpanded" class="timeline-content">
-            <TimelineTracks
-              :tracks="tracksData"
-              :selected-segment-id="geoEditorStore.selectedSegmentId"
-              :hovered-segment-id="geoEditorStore.hoveredSegmentId"
-              @select="handleSegmentSelect"
-              @hover="handleSegmentHover"
-              @save="handleSegmentSave"
-            />
-          </div>
+        </div>
+
+        <!-- 图表区域 -->
+        <div v-show="geoEditorStore.isChartExpanded" class="chart-section">
+          <GeoChartPanel
+            ref="chartRef"
+            :points="geoEditorStore.points"
+            :time-scale-unit="geoEditorStore.timeScaleUnit"
+            :highlighted-range="highlightedSegment"
+            @highlight="handleChartHighlight"
+          />
+        </div>
+
+        <!-- 时间轴区域 -->
+        <div v-show="geoEditorStore.isTimelineExpanded" class="timeline-section">
+          <TimelineTracks
+            :tracks="tracksData"
+            :selected-segment-id="geoEditorStore.selectedSegmentId"
+            :hovered-segment-id="geoEditorStore.hoveredSegmentId"
+            @select="handleSegmentSelect"
+            @hover="handleSegmentHover"
+            @save="handleSegmentSave"
+          />
         </div>
       </div>
     </el-main>
@@ -345,37 +392,37 @@ function handleChartHighlight(dataIndex: number) {
   overflow: hidden;
 }
 
-.chart-section,
-.timeline-section {
-  border-top: 1px solid var(--el-border-color);
-}
-
-.chart-section {
-  height: 160px;
-}
-
-.timeline-section {
-  height: 180px;
-}
-
-.section-header {
+.controls-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 6px 16px;
   background: var(--el-bg-color-page);
   border-bottom: 1px solid var(--el-border-color-lighter);
+  gap: 12px;
 }
 
-.section-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--el-text-color-secondary);
+.controls-left,
+.controls-center,
+.controls-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.chart-content,
-.timeline-content {
-  height: calc(100% - 36px);
+.controls-right {
+  margin-left: auto;
+}
+
+.chart-section {
+  height: 140px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.timeline-section {
+  flex: 1;
+  min-height: 150px;
+  max-height: 200px;
   overflow: hidden;
 }
 </style>
