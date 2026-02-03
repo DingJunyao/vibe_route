@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled, Undo, Redo, Check, WarningFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useGeoEditorStore, type TrackType } from '@/stores/geoEditor'
 import UniversalMap from '@/components/map/UniversalMap.vue'
@@ -196,13 +196,13 @@ function handleChartHighlight(dataIndex: number) {
       </div>
       <div class="header-right">
         <el-button
-          :icon="Undo"
+          :icon="RefreshLeft"
           :disabled="!geoEditorStore.canUndo"
           @click="handleUndo"
           circle
         />
         <el-button
-          :icon="Redo"
+          :icon="RefreshRight"
           :disabled="!geoEditorStore.canRedo"
           @click="handleRedo"
           circle
