@@ -16,7 +16,7 @@ import uuid
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -227,6 +227,7 @@ app.include_router(road_signs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(live_recordings.router, prefix=settings.API_V1_PREFIX)
 app.include_router(websocket.router, prefix=settings.API_V1_PREFIX)
+app.include_router(geo_editor.router, prefix=settings.API_V1_PREFIX)
 
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息

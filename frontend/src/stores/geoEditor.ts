@@ -1,0 +1,378 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+import { geoEditorApi, type GeoEditorData, type TrackPointGeoData, type GeoSegmentUpdate } from '@/api/geoEditor'
+
+// 轨道类型
+export type TrackType = 'province' | 'city' | 'district' | 'roadNumber' | 'roadName'
+
+// 段落接口
+export interface TrackSegment {
+  id: string
+  startIndex: number
+  endIndex: number
+  pointCount: number
+  value: string | null
+  valueEn: string | null
+  isEdited?: boolean
+}
+
+// 轨道接口
+export interface TrackTimeline {
+  type: TrackType
+  label: string
+  segments: TrackSegment[]
+  hasEnglish: boolean
+}
+
+// 历史记录接口
+export interface EditHistory {
+  id: string
+  timestamp: number
+  action: 'edit' | 'resize'
+  description: string
+  before: {
+    tracks: TrackTimeline[]
+    selectedSegmentId: string | null
+  }
+  after: {
+    tracks: TrackTimeline[]
+    selectedSegmentId: string | null
+  }
+}
+
+// 轨道定义
+const TRACK_DEFINITIONS: Record<TrackType, { label: string; hasEnglish: boolean; fieldCn: string; fieldEn: string | null }> = {
+  province: { label: '省级', hasEnglish: true, fieldCn: 'province', fieldEn: 'province_en' },
+  city: { label: '地级', hasEnglish: true, fieldCn: 'city', fieldEn: 'city_en' },
+  district: { label: '县级', hasEnglish: true, fieldCn: 'district', fieldEn: 'district_en' },
+  roadNumber: { label: '道路编号', hasEnglish: false, fieldCn: 'road_number', fieldEn: null },
+  roadName: { label: '道路名称', hasEnglish: true, fieldCn: 'road_name', fieldEn: 'road_name_en' },
+}
+
+// 生成唯一ID
+const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+
+export const useGeoEditorStore = defineStore('geoEditor', () => {
+  // State
+  const trackId = ref<number | null>(null)
+  const points = ref<TrackPointGeoData[]>([])
+  const tracks = ref<TrackTimeline[]>([])
+  const totalDuration = ref(0)
+
+  // 选择状态
+  const selectedSegmentId = ref<string | null>(null)
+  const hoveredSegmentId = ref<string | null>(null)
+
+  // 刻度显示
+  const timeScaleUnit = ref<'time' | 'duration' | 'index'>('time')
+
+  // 折叠状态
+  const isChartExpanded = ref(true)
+  const isTimelineExpanded = ref(true)
+
+  // 历史记录
+  const history = ref<EditHistory[]>([])
+  const historyIndex = ref(-1)
+
+  // 持久化
+  const hasUnsavedChanges = ref(false)
+  const lastSavedAt = ref<number | null>(null)
+
+  // 指针位置（0-1 表示在时间轴上的位置）
+  const pointerPosition = ref(0)
+  const isPointerDragging = ref(false)
+
+  // Getters
+  const canUndo = computed(() => historyIndex.value > 0)
+  const canRedo = computed(() => historyIndex.value < history.value.length - 1)
+
+  // 获取轨道定义
+  const getTrackDefinition = (type: TrackType) => TRACK_DEFINITIONS[type]
+
+  // 获取所有轨道类型
+  const getAllTrackTypes = (): TrackType[] => {
+    return ['province', 'city', 'district', 'roadNumber', 'roadName']
+  }
+
+  // Actions
+  async function loadEditorData(trackIdParam: number) {
+    const data = await geoEditorApi.getEditorData(trackIdParam)
+
+    trackId.value = data.track_id
+    points.value = data.points
+    totalDuration.value = data.total_duration
+
+    // 初始化轨道
+    initializeTracks()
+
+    // 尝试恢复历史记录
+    restoreSession(trackIdParam)
+  }
+
+  // 初始化轨道（自动分段）
+  function initializeTracks() {
+    const newTracks: TrackTimeline[] = []
+
+    for (const trackType of getAllTrackTypes()) {
+      const definition = getTrackDefinition(trackType)
+      const segments = autoSegmentByTrack(trackType)
+      newTracks.push({
+        type: trackType,
+        label: definition.label,
+        segments,
+        hasEnglish: definition.hasEnglish,
+      })
+    }
+
+    tracks.value = newTracks
+  }
+
+  // 自动分段算法
+  function autoSegmentByTrack(trackType: TrackType): TrackSegment[] {
+    const definition = getTrackDefinition(trackType)
+    const segments: TrackSegment[] = []
+    let currentSegment: Omit<TrackSegment, 'id'> | null = null
+
+    for (let index = 0; index < points.value.length; index++) {
+      const point = points.value[index]
+      const value = point[definition.fieldCn as keyof TrackPointGeoData] as string | null
+      const valueEn = definition.fieldEn
+        ? (point[definition.fieldEn as keyof TrackPointGeoData] as string | null)
+        : null
+
+      if (currentSegment && value === currentSegment.value && valueEn === currentSegment.valueEn) {
+        currentSegment.endIndex = index
+        currentSegment.pointCount++
+      } else {
+        if (currentSegment) {
+          segments.push({ ...currentSegment, id: generateId() })
+        }
+        currentSegment = {
+          startIndex: index,
+          endIndex: index,
+          pointCount: 1,
+          value,
+          valueEn,
+        }
+      }
+    }
+
+    if (currentSegment) {
+      segments.push({ ...currentSegment, id: generateId() })
+    }
+
+    return segments
+  }
+
+  // 记录历史
+  function recordHistory(action: EditHistory['action'], description: string) {
+    const before = history.value[historyIndex.value]?.after
+    if (!before) return
+
+    const historyItem: EditHistory = {
+      id: generateId(),
+      timestamp: Date.now(),
+      action,
+      description,
+      before: {
+        tracks: JSON.parse(JSON.stringify(before.tracks)),
+        selectedSegmentId: before.selectedSegmentId,
+      },
+      after: {
+        tracks: JSON.parse(JSON.stringify(tracks.value)),
+        selectedSegmentId: selectedSegmentId.value,
+      },
+    }
+
+    // 如果在历史中间进行了新操作，删除当前位置之后的所有记录
+    if (historyIndex.value < history.value.length - 1) {
+      history.value = history.value.slice(0, historyIndex.value + 1)
+    }
+
+    history.value.push(historyItem)
+    historyIndex.value = history.value.length - 1
+
+    // 限制历史数量
+    if (history.value.length > 50) {
+      history.value.shift()
+      historyIndex.value--
+    }
+
+    hasUnsavedChanges.value = true
+    persist()
+  }
+
+  // 撤销
+  function undo() {
+    if (!canUndo.value) return
+    historyIndex.value--
+    restoreState(history.value[historyIndex.value].before)
+  }
+
+  // 重做
+  function redo() {
+    if (!canRedo.value) return
+    historyIndex.value++
+    restoreState(history.value[historyIndex.value].after)
+  }
+
+  // 恢复状态
+  function restoreState(state: EditHistory['before'] | EditHistory['after']) {
+    tracks.value = JSON.parse(JSON.stringify(state.tracks))
+    selectedSegmentId.value = state.selectedSegmentId
+    hasUnsavedChanges.value = true
+  }
+
+  // 持久化到 LocalStorage
+  function persist() {
+    if (!trackId.value) return
+
+    const data = {
+      history: history.value,
+      historyIndex: historyIndex.value,
+      tracks: tracks.value,
+      savedAt: Date.now(),
+    }
+    localStorage.setItem(
+      `geo-editor-draft-${trackId.value}`,
+      JSON.stringify(data)
+    )
+  }
+
+  // 恢复会话
+  function restoreSession(trackIdParam: number) {
+    const key = `geo-editor-draft-${trackIdParam}`
+    const data = localStorage.getItem(key)
+    if (!data) return
+
+    try {
+      const parsed = JSON.parse(data)
+      history.value = parsed.history || []
+      historyIndex.value = parsed.historyIndex || -1
+      tracks.value = parsed.tracks || tracks.value
+
+      if (parsed.savedAt) {
+        lastSavedAt.value = parsed.savedAt
+        hasUnsavedChanges.value = true
+      }
+    } catch (e) {
+      console.error('Failed to restore session:', e)
+    }
+  }
+
+  // 清除草稿
+  function clearDraft() {
+    if (!trackId.value) return
+    localStorage.removeItem(`geo-editor-draft-${trackId.value}`)
+    hasUnsavedChanges.value = false
+  }
+
+  // 更新段落值
+  function updateSegmentValue(
+    trackType: TrackType,
+    segmentId: string,
+    value: string | null,
+    valueEn: string | null
+  ) {
+    const track = tracks.value.find(t => t.type === trackType)
+    if (!track) return
+
+    const segment = track.segments.find(s => s.id === segmentId)
+    if (!segment) return
+
+    // 记录历史（在修改前）
+    if (history.value.length === 0 || historyIndex.value === -1) {
+      // 初始化历史
+      history.value.push({
+        id: generateId(),
+        timestamp: Date.now(),
+        action: 'edit',
+        description: '初始化',
+        before: {
+          tracks: JSON.parse(JSON.stringify(tracks.value)),
+          selectedSegmentId: selectedSegmentId.value,
+        },
+        after: {
+          tracks: JSON.parse(JSON.stringify(tracks.value)),
+          selectedSegmentId: selectedSegmentId.value,
+        },
+      })
+      historyIndex.value = 0
+    }
+
+    segment.value = value
+    segment.valueEn = valueEn
+    segment.isEdited = true
+
+    recordHistory('edit', `编辑${TRACK_DEFINITIONS[trackType].label}`)
+  }
+
+  // 保存到服务器
+  async function saveToServer() {
+    if (!trackId.value) return
+
+    const segments: GeoSegmentUpdate[] = []
+
+    for (const track of tracks.value) {
+      const definition = getTrackDefinition(track.type)
+
+      for (const segment of track.segments) {
+        if (segment.isEdited) {
+          segments.push({
+            track_type: track.type === 'roadNumber' ? 'road_number' : 'road_name',
+            start_index: segment.startIndex,
+            end_index: segment.endIndex,
+            value: segment.value,
+            value_en: segment.valueEn,
+          })
+        }
+      }
+    }
+
+    if (segments.length === 0) return
+
+    await geoEditorApi.updateSegments(trackId.value, { segments })
+
+    // 清除草稿
+    clearDraft()
+
+    // 重新加载数据
+    await loadEditorData(trackId.value)
+  }
+
+  return {
+    // State
+    trackId,
+    points,
+    tracks,
+    totalDuration,
+    selectedSegmentId,
+    hoveredSegmentId,
+    timeScaleUnit,
+    isChartExpanded,
+    isTimelineExpanded,
+    history,
+    historyIndex,
+    hasUnsavedChanges,
+    lastSavedAt,
+    pointerPosition,
+    isPointerDragging,
+
+    // Getters
+    canUndo,
+    canRedo,
+
+    // Actions
+    loadEditorData,
+    initializeTracks,
+    undo,
+    redo,
+    persist,
+    restoreSession,
+    clearDraft,
+    updateSegmentValue,
+    saveToServer,
+    getTrackDefinition,
+    getAllTrackTypes,
+  }
+})

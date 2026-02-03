@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/tracks/:id/geo-editor',
+    name: 'GeoEditor',
+    component: () => import('@/views/GeoEditor.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/upload',
     name: 'TrackUpload',
     component: () => import('@/views/TrackUpload.vue'),
