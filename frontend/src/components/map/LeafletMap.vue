@@ -83,6 +83,7 @@ interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  highlightPointIndex?: number
   defaultLayerId?: string
   hideLayerSelector?: boolean
   mode?: 'home' | 'detail'
@@ -92,6 +93,7 @@ const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  highlightPointIndex: undefined,
   defaultLayerId: undefined,
   hideLayerSelector: false,
   mode: 'detail',
@@ -2109,6 +2111,29 @@ onUnmounted(() => {
   }
   // 清理全屏事件监听器
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
+})
+
+// 监听外部指定的高亮点索引（用于指针同步）
+watch(() => props.highlightPointIndex, (newIndex) => {
+  if (newIndex === undefined || newIndex === null || !props.tracks || props.tracks.length === 0) {
+    hideMarker()
+    return
+  }
+
+  const track = props.tracks[0]
+  if (!track || !track.points || newIndex >= track.points.length) {
+    hideMarker()
+    return
+  }
+
+  const point = track.points[newIndex]
+  if (!point) {
+    hideMarker()
+    return
+  }
+
+  // 直接调用已有的 highlightPoint 函数
+  highlightPoint(newIndex)
 })
 </script>
 
