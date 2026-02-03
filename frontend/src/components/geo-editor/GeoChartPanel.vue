@@ -98,7 +98,7 @@ function updateChart() {
 
   const option: EChartsOption = {
     grid: {
-      left: 65,
+      left: 10,
       right: 10,
       top: 5,
       bottom: 5,

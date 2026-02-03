@@ -10,7 +10,6 @@ interface Props {
   hoveredSegmentId: string | null
   zoomStart: number
   zoomEnd: number
-  pointerPosition: number
 }
 
 const props = defineProps<Props>()
@@ -74,12 +73,6 @@ const visibleSegments = computed(() => {
   }
 
   return result
-})
-
-// 计算指针位置（相对于可见区域）
-const pointerVisiblePosition = computed(() => {
-  if (props.pointerPosition < props.zoomStart || props.pointerPosition > props.zoomEnd) return null
-  return ((props.pointerPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart)) * 100
 })
 
 // 双击编辑
@@ -181,13 +174,6 @@ const segmentsByTrack = computed(() => {
             {{ item.segment.value || '(空)' }}
           </span>
         </div>
-
-        <!-- 指针线 -->
-        <div
-          v-if="pointerVisiblePosition !== null"
-          class="track-pointer"
-          :style="{ left: `${pointerVisiblePosition}%` }"
-        ></div>
       </div>
     </div>
 
@@ -299,15 +285,5 @@ const segmentsByTrack = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
-}
-
-.track-pointer {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: #f56c6c;
-  pointer-events: none;
-  z-index: 20;
 }
 </style>

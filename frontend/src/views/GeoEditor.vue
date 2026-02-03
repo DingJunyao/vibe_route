@@ -58,6 +58,69 @@ const mapPoints = computed(() => {
 // 轨道数据（用于时间轴显示）
 const tracksData = computed(() => geoEditorStore.tracks)
 
+// 计算指针在可见区域的位置
+const isPointerVisible = computed(() => {
+  return geoEditorStore.pointerPosition >= geoEditorStore.zoomStart &&
+         geoEditorStore.pointerPosition <= geoEditorStore.zoomEnd
+})
+
+const playheadXPosition = computed(() => {
+  if (!isPointerVisible.value) return 0
+  return ((geoEditorStore.pointerPosition - geoEditorStore.zoomStart) /
+          (geoEditorStore.zoomEnd - geoEditorStore.zoomStart)) * 100
+})
+
+// 指针时间文本
+const pointerTimeText = computed(() => {
+  if (geoEditorStore.points.length === 0) return '--:--:--'
+  const startTime = geoEditorStore.points[0]?.time ? new Date(geoEditorStore.points[0].time).getTime() : 0
+  const endTime = geoEditorStore.points[geoEditorStore.points.length - 1]?.time
+    ? new Date(geoEditorStore.points[geoEditorStore.points.length - 1].time).getTime()
+    : startTime + 3600000
+  const totalDuration = endTime - startTime || 3600000
+
+  const pointerTimeMs = startTime + totalDuration * geoEditorStore.pointerPosition
+  const date = new Date(pointerTimeMs)
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+  return `${hours}:${minutes}:${seconds}`
+})
+
+// 拖动指针
+const isDraggingPlayhead = ref(false)
+
+function handlePlayheadMouseDown(e: MouseEvent) {
+  e.preventDefault()
+  isDraggingPlayhead.value = true
+  geoEditorStore.startPointerDrag()
+
+  const handleMouseMove = (e: MouseEvent) => {
+    if (!isDraggingPlayhead.value) return
+    const container = (e.currentTarget as HTMLElement).parentElement
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const styles = window.getComputedStyle(container)
+    const paddingLeft = parseFloat(styles.paddingLeft) || 0
+
+    // 计算相对于内容区域的 x 坐标（排除左边距）
+    const contentWidth = rect.width - paddingLeft
+    const x = Math.max(0, Math.min(contentWidth, e.clientX - rect.left - paddingLeft))
+    const position = geoEditorStore.zoomStart + (x / contentWidth) * (geoEditorStore.zoomEnd - geoEditorStore.zoomStart)
+    geoEditorStore.setPointerPosition(position)
+  }
+
+  const handleMouseUp = () => {
+    isDraggingPlayhead.value = false
+    geoEditorStore.stopPointerDrag()
+    window.removeEventListener('mousemove', handleMouseMove)
+    window.removeEventListener('mouseup', handleMouseUp)
+  }
+
+  window.addEventListener('mousemove', handleMouseMove)
+  window.addEventListener('mouseup', handleMouseUp)
+}
+
 // 加载数据
 onMounted(async () => {
   try {
@@ -217,14 +280,6 @@ function handleChartHighlight(dataIndex: number) {
 function handlePointerChange(position: number) {
   geoEditorStore.setPointerPosition(position)
 }
-
-function handlePointerDragStart() {
-  geoEditorStore.startPointerDrag()
-}
-
-function handlePointerDragEnd() {
-  geoEditorStore.stopPointerDrag()
-}
 </script>
 
 <template>
@@ -315,45 +370,56 @@ function handlePointerDragEnd() {
             </div>
           </div>
 
-          <!-- 图表区域 -->
-          <div v-show="geoEditorStore.isChartExpanded" class="chart-section">
-            <GeoChartPanel
-              :points="geoEditorStore.points"
-              :time-scale-unit="geoEditorStore.timeScaleUnit"
-              :highlighted-range="highlightedSegment"
-              :zoom-start="geoEditorStore.zoomStart"
-              :zoom-end="geoEditorStore.zoomEnd"
-              :pointer-position="geoEditorStore.pointerPosition"
-              @highlight="handleChartHighlight"
-            />
-          </div>
+          <!-- 内容区域（图表+时间刻度+时间轴） -->
+          <div class="timeline-content">
+            <!-- 图表区域 -->
+            <div v-show="geoEditorStore.isChartExpanded" class="chart-section">
+              <GeoChartPanel
+                :points="geoEditorStore.points"
+                :time-scale-unit="geoEditorStore.timeScaleUnit"
+                :highlighted-range="highlightedSegment"
+                :zoom-start="geoEditorStore.zoomStart"
+                :zoom-end="geoEditorStore.zoomEnd"
+                :pointer-position="geoEditorStore.pointerPosition"
+                @highlight="handleChartHighlight"
+              />
+            </div>
 
-          <!-- 时间刻度 -->
-          <div v-show="geoEditorStore.isTimelineExpanded" class="scale-section">
-            <TimelineScale
-              :points="geoEditorStore.points"
-              :zoom-start="geoEditorStore.zoomStart"
-              :zoom-end="geoEditorStore.zoomEnd"
-              :pointer-position="geoEditorStore.pointerPosition"
-              @pointer-change="handlePointerChange"
-              @pointer-drag-start="handlePointerDragStart"
-              @pointer-drag-end="handlePointerDragEnd"
-            />
-          </div>
+            <!-- 时间刻度 -->
+            <div v-show="geoEditorStore.isTimelineExpanded" class="scale-section">
+              <TimelineScale
+                :points="geoEditorStore.points"
+                :zoom-start="geoEditorStore.zoomStart"
+                :zoom-end="geoEditorStore.zoomEnd"
+                @pointer-change="handlePointerChange"
+              />
+            </div>
 
-          <!-- 时间轴区域 -->
-          <div v-show="geoEditorStore.isTimelineExpanded" class="tracks-section">
-            <TimelineTracks
-              :tracks="tracksData"
-              :selected-segment-id="geoEditorStore.selectedSegmentId"
-              :hovered-segment-id="geoEditorStore.hoveredSegmentId"
-              :zoom-start="geoEditorStore.zoomStart"
-              :zoom-end="geoEditorStore.zoomEnd"
-              :pointer-position="geoEditorStore.pointerPosition"
-              @select="handleSegmentSelect"
-              @hover="handleSegmentHover"
-              @save="handleSegmentSave"
-            />
+            <!-- 时间轴区域 -->
+            <div v-show="geoEditorStore.isTimelineExpanded" class="tracks-section">
+              <TimelineTracks
+                :tracks="tracksData"
+                :selected-segment-id="geoEditorStore.selectedSegmentId"
+                :hovered-segment-id="geoEditorStore.hoveredSegmentId"
+                :zoom-start="geoEditorStore.zoomStart"
+                :zoom-end="geoEditorStore.zoomEnd"
+                @select="handleSegmentSelect"
+                @hover="handleSegmentHover"
+                @save="handleSegmentSave"
+              />
+            </div>
+
+            <!-- 全局指针线（贯穿图表和时间轴） -->
+            <div
+              v-if="isPointerVisible"
+              class="global-playhead"
+              :style="{ left: `${playheadXPosition}%` }"
+              @mousedown="handlePlayheadMouseDown"
+            >
+              <div class="playhead-top"></div>
+              <div class="playhead-time">{{ pointerTimeText }}</div>
+              <div class="playhead-bottom"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -448,12 +514,12 @@ function handlePointerDragEnd() {
 
 .chart-section {
   height: 120px;
-  padding-left: 65px;  /* 与时间轴标签对齐 */
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  position: relative;
 }
 
 .scale-section {
-  border-bottom: 1px solid var(--el-border-color-lighter);
+  height: 32px;
+  position: relative;
 }
 
 .tracks-section {
@@ -461,5 +527,64 @@ function handlePointerDragEnd() {
   min-height: 160px;
   max-height: 180px;
   overflow: hidden;
+  position: relative;
+}
+
+.timeline-content {
+  position: relative;
+  padding-left: 65px;  /* 统一左边距，确保标签对齐 */
+}
+
+.global-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 100;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+.global-playhead .playhead-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #f56c6c;
+  transform: translateX(-1px);
+}
+
+.global-playhead .playhead-top,
+.global-playhead .playhead-bottom {
+  position: absolute;
+  left: -5px;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+}
+
+.global-playhead .playhead-top {
+  top: -4px;
+  border-top: 8px solid #f56c6c;
+}
+
+.global-playhead .playhead-bottom {
+  bottom: -4px;
+  border-bottom: 8px solid #f56c6c;
+}
+
+.global-playhead .playhead-time {
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #f56c6c;
+  color: white;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 </style>
