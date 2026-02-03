@@ -14,6 +14,7 @@ from app.schemas.geo_editor import (
     GeoSegmentsUpdateRequest,
     GeoEditorDataResponse,
 )
+from app.gpxutil_wrapper.coord_transform import wgs84_to_gcj02
 
 logger = logging.getLogger(__name__)
 
@@ -66,31 +67,43 @@ class GeoEditorService:
             total_duration = int((track.end_time - track.start_time).total_seconds() * 1000)
 
         # 转换为响应格式
-        points_data = [
-            TrackPointGeoData(
-                point_index=p.point_index,
-                time=p.time,
-                created_at=p.created_at,
-                latitude=p.latitude_wgs84,
-                longitude=p.longitude_wgs84,
-                latitude_gcj02=p.latitude_gcj02,
-                longitude_gcj02=p.longitude_gcj02,
-                latitude_bd09=p.latitude_bd09,
-                longitude_bd09=p.longitude_bd09,
-                elevation=p.elevation,
-                speed=p.speed,
-                province=p.province,
-                city=p.city,
-                district=p.district,
-                province_en=p.province_en,
-                city_en=p.city_en,
-                district_en=p.district_en,
-                road_number=p.road_number,
-                road_name=p.road_name,
-                road_name_en=p.road_name_en,
+        points_data = []
+        for p in points:
+            # 如果 GCJ02 坐标为空，自动从 WGS84 转换
+            lat_gcj02 = p.latitude_gcj02
+            lon_gcj02 = p.longitude_gcj02
+            if lat_gcj02 is None or lon_gcj02 is None:
+                if p.latitude_wgs84 is not None and p.longitude_wgs84 is not None:
+                    lon_gcj02, lat_gcj02 = wgs84_to_gcj02(
+                        p.longitude_wgs84, p.latitude_wgs84
+                    )
+
+            points_data.append(
+                TrackPointGeoData(
+                    point_index=p.point_index,
+                    time=p.time,
+                    created_at=p.created_at,
+                    latitude=lat_gcj02 if lat_gcj02 is not None else p.latitude_wgs84,
+                    longitude=lon_gcj02 if lon_gcj02 is not None else p.longitude_wgs84,
+                    latitude_wgs84=p.latitude_wgs84,
+                    longitude_wgs84=p.longitude_wgs84,
+                    latitude_gcj02=lat_gcj02,
+                    longitude_gcj02=lon_gcj02,
+                    latitude_bd09=p.latitude_bd09,
+                    longitude_bd09=p.longitude_bd09,
+                    elevation=p.elevation,
+                    speed=p.speed,
+                    province=p.province,
+                    city=p.city,
+                    district=p.district,
+                    province_en=p.province_en,
+                    city_en=p.city_en,
+                    district_en=p.district_en,
+                    road_number=p.road_number,
+                    road_name=p.road_name,
+                    road_name_en=p.road_name_en,
+                )
             )
-            for p in points
-        ]
 
         return GeoEditorDataResponse(
             track_id=track.id,

@@ -22,6 +22,11 @@ const emit = defineEmits<{
 
 const geoEditorStore = useGeoEditorStore()
 
+// 移动端双击检测
+const lastTapTime = ref(0)
+const lastTapSegmentId = ref('')
+const DOUBLE_TAP_DELAY = 300  // 双击间隔（毫秒）
+
 // 轨道配置
 const TRACK_CONFIG = {
   province: { label: '省级', hasEnglish: true, placeholder: '如：北京市' },
@@ -82,6 +87,30 @@ function handleDoubleClick(trackType: TrackType, segment: TrackSegment) {
   editValue.value = segment.value || ''
   editValueEn.value = segment.valueEn || ''
   editDialogVisible.value = true
+}
+
+// 移动端触摸处理（模拟双击）
+function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: Event) {
+  const touchEvent = e as TouchEvent
+  if (touchEvent.touches.length !== 1) return
+
+  const now = Date.now()
+  const isDoubleTap =
+    now - lastTapTime.value < DOUBLE_TAP_DELAY &&
+    lastTapSegmentId.value === segment.id
+
+  if (isDoubleTap) {
+    // 双击：打开编辑对话框
+    e.preventDefault()
+    handleDoubleClick(trackType, segment)
+    // 重置状态
+    lastTapTime.value = 0
+    lastTapSegmentId.value = ''
+  } else {
+    // 单击：记录并等待可能的第二次点击
+    lastTapTime.value = now
+    lastTapSegmentId.value = segment.id
+  }
 }
 
 // 保存编辑
@@ -146,11 +175,12 @@ const segmentsByTrack = computed(() => {
       :key="track.type"
       class="track-row"
     >
+      <!-- 轨道标签（在padding区域内） -->
       <div class="track-label">
         {{ track.label }}
       </div>
+      <!-- 段落块容器 -->
       <div class="track-content">
-        <!-- 段落块 -->
         <div
           v-for="item in (segmentsByTrack[track.type] || [])"
           :key="item.segment.id"
@@ -167,6 +197,7 @@ const segmentsByTrack = computed(() => {
           }"
           @click="handleSelect(item.segment.id)"
           @dblclick="handleDoubleClick(track.type, item.segment)"
+          @touchstart="handleTouchStart(track.type, item.segment, $event)"
           @mouseenter="handleHover(item.segment.id)"
           @mouseleave="handleHover(null)"
         >
@@ -213,31 +244,55 @@ const segmentsByTrack = computed(() => {
 
 <style scoped>
 .timeline-tracks {
-  padding: 4px 0;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding-left: var(--geo-editor-padding-left);
+  padding-right: var(--geo-editor-padding-right);
+  box-sizing: border-box;
+  touch-action: none;
 }
 
 .track-row {
-  display: flex;
-  align-items: center;
-  height: 32px;
+  position: relative;
+  height: var(--geo-editor-track-row-height);
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
 
 .track-label {
-  width: 65px;
-  flex-shrink: 0;
-  padding-left: 12px;
-  font-size: 12px;
+  position: absolute;
+  left: calc(var(--geo-editor-label-width) * -1.6); /* -32px */
+  top: 0;
+  width: var(--geo-editor-label-width);
+  height: 100%;
+  padding-right: 4px;
+  text-align: right;
+  font-size: 11px;
   color: var(--el-text-color-secondary);
-  border-right: 1px solid var(--el-border-color-lighter);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  white-space: nowrap;
+  overflow: normal;
+}
+
+.track-label::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--el-border-color-lighter);
 }
 
 .track-content {
-  flex: 1;
   position: relative;
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
 }
 
+/* 段落块基础样式 */
 .segment-block {
   position: absolute;
   height: 22px;

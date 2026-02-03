@@ -98,8 +98,8 @@ function updateChart() {
 
   const option: EChartsOption = {
     grid: {
-      left: 50,
-      right: 10,
+      left: 50,   // 左侧Y轴名称和标签空间
+      right: 50,  // 右侧Y轴名称和标签空间
       top: 5,
       bottom: 5,
       containLabel: false,
@@ -108,6 +108,34 @@ function updateChart() {
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
+      },
+      formatter: (params: any) => {
+        if (!Array.isArray(params) || params.length === 0) return ''
+
+        const dataIndex = params[0].dataIndex
+        const actualIndex = chartData.value.startIndex + dataIndex
+        const point = props.points[actualIndex]
+
+        let result = `点 #${actualIndex}<br/>`
+        if (point?.time) {
+          result += `时间: ${formatTime(point.time)}<br/>`
+        }
+
+        for (const param of params) {
+          if (param.seriesName === '海拔') {
+            const value = param.value !== null && param.value !== undefined
+              ? param.value.toFixed(1)
+              : '-'
+            result += `${param.marker}${param.seriesName}: ${value} m<br/>`
+          } else if (param.seriesName === '速度') {
+            const value = param.value !== null && param.value !== undefined
+              ? param.value.toFixed(1)
+              : '-'
+            result += `${param.marker}${param.seriesName}: ${value} km/h<br/>`
+          }
+        }
+
+        return result
       },
     },
     xAxis: {
@@ -118,9 +146,14 @@ function updateChart() {
     yAxis: [
       {
         type: 'value',
-        name: '海拔',
+        name: '海拔 (m)',
         position: 'left',
-        offset: 0,
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+          fontSize: 10,
+          padding: [0, 0, 0, 0],
+        },
         axisLabel: {
           formatter: '{value}',
           fontSize: 10,
@@ -132,9 +165,14 @@ function updateChart() {
       },
       {
         type: 'value',
-        name: '速度',
-        position: 'left',
-        offset: 40,
+        name: '速度 (km/h)',
+        position: 'right',
+        nameLocation: 'middle',
+        nameGap: 32,
+        nameTextStyle: {
+          fontSize: 10,
+          padding: [0, 0, 0, 0],
+        },
         axisLabel: {
           formatter: '{value}',
           fontSize: 10,
@@ -273,6 +311,10 @@ defineExpose({ refresh: () => { nextTick(() => initChart()) } })
 .geo-chart-panel {
   width: 100%;
   height: 100%;
+  padding-left: var(--geo-editor-label-width);
+  padding-right: 0;
+  box-sizing: border-box;
+  touch-action: none;
 }
 
 .chart-empty {

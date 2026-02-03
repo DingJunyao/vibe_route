@@ -660,7 +660,7 @@
           />
         </el-form-item>
 
-        <el-divider content-position="left">更改坐标系</el-divider>
+        <!-- <el-divider content-position="left">更改坐标系</el-divider> -->
 
         <el-form-item label="原坐标系">
           <el-radio-group v-model="editForm.original_crs">
@@ -670,25 +670,30 @@
           </el-radio-group>
           <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
         </el-form-item>
-      </el-form>
-      <template #footer>
-        <div class="dialog-footer-content">
+      
+      <!-- <el-divider content-position="left"></el-divider> -->
+        <el-form-item label="地理信息">
           <el-button
-            type="primary"
-            :loading="fillingGeocoding"
-            @click="handleFillGeocoding"
-            class="fill-geo-btn"
-          >
-            <el-icon><LocationFilled /></el-icon>
-            {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充地理信息' : '填充地理信息' }}
+                type="primary"
+                :loading="fillingGeocoding"
+                @click="handleFillGeocoding"
+                class="fill-geo-btn"
+              >
+                <el-icon><LocationFilled /></el-icon>
+                {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充' : '填充' }}
           </el-button>
           <el-button
             @click="handleOpenGeoEditor"
             class="fill-geo-btn"
           >
             <el-icon><Edit /></el-icon>
-            在线编辑地理信息
+            编辑
           </el-button>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <div class="dialog-footer-content">
+          
           <div class="dialog-footer-right">
             <el-button @click="editDialogVisible = false">取消</el-button>
             <el-button type="primary" :loading="saving || changingCrs" @click="saveEdit">
@@ -3387,6 +3392,7 @@ onUnmounted(() => {
   color: var(--el-text-color-secondary);
   margin-top: 4px;
   line-height: 1.5;
+  padding-left: 24px;
 }
 
 /* 编辑对话框底部 */

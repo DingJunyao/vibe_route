@@ -10,6 +10,9 @@ import { initRemoteLog } from './utils/remoteLog'
 
 import 'leaflet/dist/leaflet.css'
 
+// 地理信息编辑器公共样式变量
+import './components/geo-editor/styles/common.css'
+
 // // 初始化远程日志
 // initRemoteLog()
 

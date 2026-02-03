@@ -1,0 +1,110 @@
+/* ========================================
+   地理信息编辑器 - 公共样式变量和工具类
+   ======================================== */
+
+/* 布局常量（通过 CSS 变量统一管理） */
+:root {
+  /* 左侧：轨道标签宽度 + Y轴宽度 */
+  --geo-editor-label-width: 20px;
+  --geo-editor-yaxis-width: 50px;
+  --geo-editor-padding-left: 70px; /* var(--geo-editor-label-width) + var(--geo-editor-yaxis-width) */
+  --geo-editor-padding-right: 50px;
+
+  /* 指针颜色 */
+  --geo-editor-pointer-color: #f56c6c;
+  --geo-editor-pointer-bg-hover: rgba(245, 108, 108, 0.15);
+  --geo-editor-pointer-bg-idle: rgba(245, 108, 108, 0.05);
+
+  /* 刻度线高度 */
+  --geo-editor-tick-minor-height: 6px;
+  --geo-editor-tick-major-height: 6px;
+
+  /* 轨道行高度 */
+  --geo-editor-track-row-height: 32px;
+}
+
+/* ========================================
+   通用工具类
+   ======================================== */
+
+/* 时间轴容器公共 padding */
+.geo-timeline-padding {
+  padding-left: var(--geo-editor-padding-left);
+  padding-right: var(--geo-editor-padding-right);
+  box-sizing: border-box;
+}
+
+/* 容器填充 */
+.geo-fill-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* 水平/垂直居中 */
+.geo-center-flex {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ========================================
+   刻度线基础样式
+   ======================================== */
+
+/* 刻度线通用 */
+.tick-mark {
+  position: absolute;
+  left: 0;
+  width: 1px;
+}
+
+/* 次刻度 - 上方 */
+.tick-minor-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: var(--geo-editor-tick-minor-height);
+  background: var(--el-border-color);
+}
+
+/* 次刻度 - 下方 */
+.tick-minor-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: var(--geo-editor-tick-minor-height);
+  background: var(--el-border-color);
+}
+
+/* 主刻度 - 上方 */
+.tick-major-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: var(--geo-editor-tick-major-height);
+  background: var(--el-text-color-primary);
+}
+
+/* 主刻度 - 下方 */
+.tick-major-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: var(--geo-editor-tick-major-height);
+  background: var(--el-text-color-primary);
+}
+
+/* 刻度标签 */
+.tick-label {
+  position: absolute;
+  top: 25%;
+  left: 0;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}

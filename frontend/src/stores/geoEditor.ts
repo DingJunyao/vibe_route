@@ -55,6 +55,7 @@ const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9
 export const useGeoEditorStore = defineStore('geoEditor', () => {
   // State
   const trackId = ref<number | null>(null)
+  const trackName = ref<string>('')
   const points = ref<TrackPointGeoData[]>([])
   const tracks = ref<TrackTimeline[]>([])
   const totalDuration = ref(0)
@@ -103,12 +104,15 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     const data = await geoEditorApi.getEditorData(trackIdParam)
 
     console.log('[GeoEditor] API response:', data)
+    console.log('[GeoEditor] Track name from API:', data.name)
     console.log('[GeoEditor] Points count:', data.points.length)
 
     trackId.value = data.track_id
+    trackName.value = data.name
     points.value = data.points
     totalDuration.value = data.total_duration
 
+    console.log('[GeoEditor] Store trackName after load:', trackName.value)
     console.log('[GeoEditor] Store points after load:', points.value.length)
 
     // 初始化轨道
@@ -376,6 +380,50 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     zoomEnd.value = Math.min(1, center + newRange / 2)
   }
 
+  // 以指定位置为中心缩放
+  // centerPosition: 缩放中心的全局位置 (0-1)
+  // factor: 缩放因子，>1 放大，<1 缩小
+  function zoomAround(centerPosition: number, factor: number) {
+    // 确保中心位置在 [0, 1] 范围内
+    const clampedCenter = Math.max(0, Math.min(1, centerPosition))
+
+    // 计算中心在可见范围内的相对位置（如果中心在可见范围外，则钳制到边界）
+    let centerRatio = 0.5
+    const range = zoomEnd.value - zoomStart.value
+    if (range > 0) {
+      const centerInRange = Math.max(zoomStart.value, Math.min(zoomEnd.value, clampedCenter))
+      centerRatio = (centerInRange - zoomStart.value) / range
+    }
+
+    let newRange: number
+
+    if (factor > 1) {
+      // 放大：范围变小
+      newRange = range / factor
+      newRange = Math.max(0.01, newRange) // 最小范围限制
+    } else {
+      // 缩小：范围变大
+      newRange = range * (1 / factor)
+      newRange = Math.min(1, newRange) // 最大范围限制
+    }
+
+    // 计算新的起点和终点，保持中心位置不变
+    let newStart = clampedCenter - newRange * centerRatio
+    let newEnd = clampedCenter + newRange * (1 - centerRatio)
+
+    // 边界处理
+    if (newStart < 0) {
+      newStart = 0
+      newEnd = Math.min(1, newRange)
+    } else if (newEnd > 1) {
+      newEnd = 1
+      newStart = Math.max(0, 1 - newRange)
+    }
+
+    zoomStart.value = newStart
+    zoomEnd.value = newEnd
+  }
+
   function resetZoom() {
     zoomStart.value = 0
     zoomEnd.value = 1
@@ -402,6 +450,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   return {
     // State
     trackId,
+    trackName,
     points,
     tracks,
     totalDuration,
@@ -439,6 +488,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     hoverSegment,
     zoomIn,
     zoomOut,
+    zoomAround,
     resetZoom,
     setZoom,
     setPointerPosition,
