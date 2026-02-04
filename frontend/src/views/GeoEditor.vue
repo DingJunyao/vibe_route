@@ -191,17 +191,39 @@ const playheadXPosition = computed(() => {
 
 // 指针时间文本
 const pointerTimeText = computed(() => {
-  if (geoEditorStore.points.length === 0) return '--:--:--'
+  if (geoEditorStore.points.length === 0) return '--'
 
   // 使用实际指针对应的点的时间（而非悬浮索引）
   const pointIndex = Math.round(geoEditorStore.pointerPosition * (geoEditorStore.points.length - 1))
   if (pointIndex < 0 || pointIndex >= geoEditorStore.points.length) {
-    return '--:--:--'
+    return '--'
   }
 
   const point = geoEditorStore.points[pointIndex]
-  if (!point?.time) return '--:--:--'
 
+  // 根据刻度单位显示不同格式
+  if (geoEditorStore.timeScaleUnit === 'index') {
+    // 索引模式：显示点索引
+    return String(pointIndex)
+  }
+
+  if (!point?.time) return '--'
+
+  if (geoEditorStore.timeScaleUnit === 'duration') {
+    // 时长模式：显示从起点开始的时长 HH:MM:SS
+    const startTime = geoEditorStore.points[0]?.time
+      ? new Date(geoEditorStore.points[0].time).getTime()
+      : 0
+    const pointTime = new Date(point.time).getTime()
+    const elapsedMs = pointTime - startTime
+    const totalSeconds = Math.floor(elapsedMs / 1000)
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+
+  // 时间模式：显示时间 HH:MM:SS
   const date = new Date(point.time)
   const hours = String(date.getHours()).padStart(2, '0')
   const minutes = String(date.getMinutes()).padStart(2, '0')
@@ -785,6 +807,16 @@ function handleResetZoom() {
   geoEditorStore.resetZoom()
 }
 
+// 缩放倍数显示
+const zoomLevelText = computed(() => {
+  const range = geoEditorStore.zoomEnd - geoEditorStore.zoomStart
+  const level = Math.round(1 / range)
+  if (level >= 1000) {
+    return `${(level / 1000).toFixed(1)}kx`
+  }
+  return `${level}x`
+})
+
 // 时间轴段落选择
 function handleSegmentSelect(segmentId: string) {
   geoEditorStore.selectSegment(segmentId)
@@ -925,6 +957,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
           <!-- 控制栏（始终显示，方便展开内容） -->
           <div class="controls-bar">
             <div class="controls-left">
+              <span class="zoom-level-text">{{ zoomLevelText }}</span>
               <el-button-group>
                 <el-tooltip content="放大 (Ctrl+滚轮)" placement="top">
                   <el-button :icon="ZoomIn" @click="handleZoomIn" size="small" />
@@ -1204,6 +1237,15 @@ h1 {
   margin-left: auto;
 }
 
+.zoom-level-text {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  font-family: 'Consolas', 'Monaco', monospace;
+  min-width: 50px;
+  text-align: right;
+  user-select: none;
+}
+
 /* 滚动条样式 */
 .timeline-scrollbar {
   height: 12px;
@@ -1327,8 +1369,9 @@ h1 {
 .global-playhead .playhead-time {
   position: absolute;
   top: -22px;
-  /* left: 50%; */
-  transform: translateX(-25%);
+  left: 50%;
+  margin-left: 14px;  /* 与 playhead-line 的偏移对齐 */
+  transform: translateX(-50%);
   background: var(--geo-editor-pointer-color);
   color: white;
   padding: 2px 6px;

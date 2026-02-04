@@ -8,6 +8,7 @@
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
       :highlight-point-index="highlightPointIndex"
+      :latest-point-index="latestPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -21,6 +22,7 @@
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
       :highlight-point-index="highlightPointIndex"
+      :latest-point-index="latestPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -34,6 +36,7 @@
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
       :highlight-point-index="highlightPointIndex"
+      :latest-point-index="latestPointIndex"
       :mode="mode"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -47,6 +50,7 @@
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
       :highlight-point-index="highlightPointIndex"
+      :latest-point-index="latestPointIndex"
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
       :mode="mode"
@@ -158,6 +162,7 @@ interface Props {
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
   highlightPointIndex?: number  // 新增：高亮指定索引的点
+  latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
   liveStatusText?: string  // 实时更新状态文字（已废弃，使用 liveUpdateTime）
@@ -169,6 +174,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   highlightSegment: null,
   highlightPointIndex: undefined,
+  latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
   liveStatusText: '',

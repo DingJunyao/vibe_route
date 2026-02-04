@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 用的是什么数据库，看后端的 .env。
 
+在调试的时候，会打开开发人员工具。可以使用 Chrome devtools MCP 获取其中的报错、网络分析、性能分析、DOM 结构等信息。
+
 ## Development Commands
 
 ### Backend
@@ -1253,3 +1255,86 @@ if province and not city and not area:
 - [`admin.py`](backend/app/api/admin.py) - API 端点
 - [`admin.ts`](frontend/src/api/admin.ts) - API 客户端
 - [`Admin.vue`](frontend/src/views/Admin.vue) - UI 和交互
+
+## 最新更改 (2026-02 地理信息编辑器)
+
+### 地理信息编辑器刻度条改进
+
+**问题背景**：地理信息编辑页面的时间刻度条存在多个问题：
+1. 缺少放大倍数显示
+2. 左侧边缘刻度缺失（放大时更明显）
+3. 刻度时间与实际点时间不匹配
+4. 主刻度标签重叠（1x 缩放时）
+5. 主刻度之间次刻度和三级刻度数量不正确
+
+**解决方案**：
+
+**1. 放大倍数显示** ([`GeoEditor.vue`](frontend/src/views/GeoEditor.vue))
+
+添加缩放倍数显示，位于缩放按钮左侧：
+
+```typescript
+const zoomLevelText = computed(() => {
+  const range = geoEditorStore.zoomEnd - geoEditorStore.zoomStart
+  const level = Math.round(1 / range)
+  if (level >= 1000) {
+    return `${(level / 1000).toFixed(1)}kx`
+  }
+  return `${level}x`
+})
+```
+
+**2. 刻度生成逻辑重构** ([`TimelineScale.vue`](frontend/src/components/geo-editor/TimelineScale.vue))
+
+- **边界扩展**：基于可视区域点的实际时间扩展边界，确保左侧有刻度
+- **点索引定位**：使用 `findPointIndexByTime` 函数进行基于点索引的定位，保证刻度时间与点时间一致
+- **级别去重**：实现基于级别的去重机制，不同级别使用不同最小间距
+  - 主刻度：5%
+  - 次刻度：1%
+  - 三级刻度：0.2%
+
+**3. 次刻度和三级刻度数量修复**
+
+改为按点索引生成刻度位置，而非按时间：
+
+```typescript
+// 计算对应的点索引间隔
+const pointsPerMillisecond = totalPoints / totalDuration
+const majorPointInterval = Math.round(majorInterval * pointsPerMillisecond)
+const halfMajorPointInterval = Math.round(majorPointInterval / 2)
+const tenthMajorPointInterval = Math.round(majorPointInterval / 10)
+
+// 按点索引生成刻度，与时间边界对齐
+const alignedTime = Math.floor(firstVisibleTime / majorInterval) * majorInterval
+const alignedStartIndex = findPointIndexByTime(alignedTime)
+```
+
+### Leaflet 地图坐标偏移修复
+
+**问题背景**：地理信息编辑页面中，天地图和 OSM 的轨迹有偏移，但轨迹详情页正常。其他地图（高德、百度、腾讯）都没有问题。
+
+**根本原因**：后端 `geo_editor` API 的 `TrackPointGeoData` schema 缺少 `latitude_wgs84` 和 `longitude_wgs84` 字段，且 service 代码中 `latitude` 和 `longitude` 使用的是 GCJ02 坐标（与文档注释不符）。
+
+**解决方案**：
+
+1. **Schema 修复** ([`geo_editor.py`](backend/app/schemas/geo_editor.py))：添加 `latitude_wgs84` 和 `longitude_wgs84` 字段
+
+2. **Service 修复** ([`geo_editor_service.py`](backend/app/services/geo_editor_service.py))：`latitude` 和 `longitude` 现在使用 WGS84 坐标（与文档一致）
+
+```python
+latitude=p.latitude_wgs84,  # WGS84
+longitude=p.longitude_wgs84,  # WGS84
+```
+
+3. **LeafletMap 坐标处理** ([`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue))：
+   - 天地图使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
+   - OSM 使用 WGS84 坐标
+   - 高德/腾讯使用 `latitude_gcj02`/`longitude_gcj02`
+   - 百度使用 `latitude_bd09`/`longitude_bd09`
+
+**涉及文件**：
+- [`frontend/src/views/GeoEditor.vue`](frontend/src/views/GeoEditor.vue) - 放大倍数显示
+- [`frontend/src/components/geo-editor/TimelineScale.vue`](frontend/src/components/geo-editor/TimelineScale.vue) - 刻度生成重构
+- [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - 坐标处理
+- [`backend/app/schemas/geo_editor.py`](backend/app/schemas/geo_editor.py) - Schema 字段添加
+- [`backend/app/services/geo_editor_service.py`](backend/app/services/geo_editor_service.py) - Service 坐标修复

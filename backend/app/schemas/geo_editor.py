@@ -13,6 +13,8 @@ class TrackPointGeoData(BaseModel):
     created_at: Optional[datetime]
     latitude: float  # WGS84 纬度
     longitude: float  # WGS84 经度
+    latitude_wgs84: float  # WGS84 纬度
+    longitude_wgs84: float  # WGS84 经度
     latitude_gcj02: Optional[float] = None  # GCJ02 纬度（高德、腾讯）
     longitude_gcj02: Optional[float] = None  # GCJ02 经度
     latitude_bd09: Optional[float] = None  # BD09 纬度（百度）

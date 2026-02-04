@@ -420,10 +420,12 @@ class LiveRecordingService:
             # 确保 point_time 不带时区（与数据库中的时间一致）
             point_time_naive = point_time.replace(tzinfo=None)
 
+            old_end_time = track.end_time
             if track.start_time is None or point_time_naive < track.start_time:
                 track.start_time = point_time_naive
             if track.end_time is None or point_time_naive > track.end_time:
                 track.end_time = point_time_naive
+                logger.info(f"Track {track.id}: updated end_time from {old_end_time} to {track.end_time} (point time: {point_time_naive})")
 
             # 更新时长
             if track.start_time and track.end_time:
@@ -503,12 +505,14 @@ class LiveRecordingService:
                 "district_en": point.district_en,
                 "road_name_en": point.road_name_en,
             }
-            # 准备统计信息
+            # 实时计算统计信息（从所有点重新计算，确保准确性）
+            # 注意：实时记录中 track.distance 等字段可能不准确（因为乱序点不累加距离）
+            calculated_stats = await self.calculate_track_stats_from_points(db, track.id)
             stats_data = {
-                "distance": track.distance,
-                "duration": track.duration,
-                "elevation_gain": track.elevation_gain,
-                "elevation_loss": track.elevation_loss,
+                "distance": calculated_stats["distance"],
+                "duration": calculated_stats["duration"],
+                "elevation_gain": calculated_stats["elevation_gain"],
+                "elevation_loss": calculated_stats["elevation_loss"],
             }
             # 异步通知（不阻塞当前请求）
             import asyncio
@@ -763,6 +767,18 @@ class LiveRecordingService:
             track.duration = total_duration
             track.elevation_gain = round(elevation_gain, 2)
             track.elevation_loss = round(elevation_loss, 2)
+
+            # 修复 start_time 和 end_time（按 GPS 时间）
+            first_point = points[0]
+            last_point = points[-1]
+            if first_point.time:
+                old_start_time = track.start_time
+                track.start_time = first_point.time.replace(tzinfo=None) if first_point.time.tzinfo else first_point.time
+                logger.info(f"Track {track_id}: start_time 从 {old_start_time} 更新为 {track.start_time}")
+            if last_point.time:
+                old_end_time = track.end_time
+                track.end_time = last_point.time.replace(tzinfo=None) if last_point.time.tzinfo else last_point.time
+                logger.info(f"Track {track_id}: end_time 从 {old_end_time} 更新为 {track.end_time}")
 
             logger.info(f"Track {track_id}: 距离从 {old_distance:.2f}m 更新为 {track.distance:.2f}m")
 

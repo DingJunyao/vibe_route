@@ -48,6 +48,7 @@ import type { MapLayerConfig, CRSType } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
+// import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
 
 // 类型定义
 interface Point {
@@ -84,6 +85,7 @@ interface Props {
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
   highlightPointIndex?: number
+  latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   hideLayerSelector?: boolean
   mode?: 'home' | 'detail'
@@ -94,6 +96,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   highlightSegment: null,
   highlightPointIndex: undefined,
+  latestPointIndex: null,
   defaultLayerId: undefined,
   hideLayerSelector: false,
   mode: 'detail',
@@ -124,6 +127,7 @@ const tracksData: Ref<Map<number, { points: Point[]; path: [number, number][]; t
 
 // 鼠标标记和 tooltip
 const mouseMarker = ref<L.Marker | null>(null)
+const latestPointMarker = ref<L.Marker | null>(null)  // 实时轨迹最新点标记（绿色）
 const customTooltip = ref<HTMLElement | null>(null)  // 自定义 tooltip 元素
 const lastHoverIndex = ref(-1)
 const currentHighlightPoint = ref<{ index: number; position: [number, number] } | null>(null)  // 当前高亮的点（detail 模式）
@@ -213,6 +217,7 @@ function initMap() {
 
   // 创建标记和提示框
   createMouseMarker()
+  createLatestPointMarker()
   createCustomTooltip()
 
   // 统一的鼠标处理函数
@@ -933,6 +938,7 @@ function recreateMap() {
 
   // 创建标记和提示框
   createMouseMarker()
+  createLatestPointMarker()
   createCustomTooltip()
 
   // 统一的鼠标处理函数
@@ -1442,38 +1448,41 @@ function handleFullscreenChange() {
 }
 
 // 根据坐标系获取经纬度字段
-// 注意：天地图使用 chinaProvider 时，瓦片数据已经是 GCJ02 偏移过的，所以应该传入 WGS84 坐标
+// 天地图使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
+// 高德/腾讯 (GCJ02) → latitude_gcj02/longitude_gcj02
+// OSM (WGS84) → latitude_wgs84/longitude_wgs84
+// 百度 (BD09) → latitude_bd09/longitude_bd09
 function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, number] | null {
-  if (crs === 'wgs84') {
-    const lat = point.latitude_wgs84 ?? point.latitude
-    const lng = point.longitude_wgs84 ?? point.longitude
-    if (lat !== undefined && lng !== undefined) {
-      return [lat, lng]
-    }
+  let lat: number | undefined
+  let lng: number | undefined
+
+  if (crs === 'wgs84' || mapId === 'tianditu' || mapId?.startsWith('tianditu')) {
+    // 天地图、OSM 都使用 WGS84 坐标（天地图的插件会自动处理转换）
+    lat = point.latitude_wgs84 ?? point.latitude
+    lng = point.longitude_wgs84 ?? point.longitude
   } else if (crs === 'gcj02') {
-    // 天地图使用 chinaProvider，瓦片数据已经是 GCJ02 的，所以传入 WGS84 坐标
-    if (mapId === 'tianditu') {
-      const lat = point.latitude_wgs84 ?? point.latitude
-      const lng = point.longitude_wgs84 ?? point.longitude
-      if (lat !== undefined && lng !== undefined) {
-        return [lat, lng]
-      }
-    } else {
-      // 其他 GCJ02 地图（如高德）使用 GCJ02 坐标
-      const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
-      const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
-      if (lat !== undefined && lng !== undefined) {
-        return [lat, lng]
-      }
+    lat = point.latitude_gcj02 ?? undefined
+    lng = point.longitude_gcj02 ?? undefined
+    // 如果 GCJ02 为空，回退到 WGS84
+    if (lat === undefined || lng === undefined) {
+      lat = point.latitude_wgs84 ?? point.latitude
+      lng = point.longitude_wgs84 ?? point.longitude
     }
   } else if (crs === 'bd09') {
-    const lat = point.latitude_bd09 ?? point.latitude_wgs84 ?? point.latitude
-    const lng = point.longitude_bd09 ?? point.longitude_wgs84 ?? point.longitude
-    if (lat !== undefined && lng !== undefined) {
-      return [lat, lng]
+    lat = point.latitude_bd09 ?? undefined
+    lng = point.longitude_bd09 ?? undefined
+    // 如果 BD09 为空，回退到 WGS84
+    if (lat === undefined || lng === undefined) {
+      lat = point.latitude_wgs84 ?? point.latitude
+      lng = point.longitude_wgs84 ?? point.longitude
     }
   }
-  return null
+
+  if (lat === undefined || lng === undefined || isNaN(lat) || isNaN(lng)) {
+    return null
+  }
+
+  return [lat, lng]
 }
 
 // 清理 SVG 字符串
@@ -1737,6 +1746,19 @@ function createMouseMarker() {
   mouseMarker.value = L.marker([0, 0], { icon, interactive: false })
 }
 
+// 创建最新点标记（绿色）
+function createLatestPointMarker() {
+  if (!map.value) return
+
+  const icon = L.divIcon({
+    className: 'leaflet-latest-point-marker',
+    iconSize: [12, 12],
+    iconAnchor: [6, 6],
+  })
+
+  latestPointMarker.value = L.marker([0, 0], { icon, interactive: false })
+}
+
 // 创建自定义 tooltip
 function createCustomTooltip() {
   if (!mapContainer.value) return
@@ -1898,6 +1920,17 @@ function drawTracks() {
   const crs = currentLayerConfig.value?.crs || 'wgs84'
   const mapId = currentLayerConfig.value?.id
 
+  // 调试：打印地图配置
+  console.log('[LeafletMap] drawTracks:', {
+    mapId,
+    crs,
+    layerConfig: currentLayerConfig.value,
+    firstPoint: props.tracks[0]?.points[0],
+  })
+
+  // 重置日志标志
+  ;(getCoordsByCRS as any).logged = false
+
   // 清除现有轨迹
   clearTracks()
 
@@ -1989,6 +2022,9 @@ function drawTracks() {
   if (bounds.isValid()) {
     map.value.fitBounds(bounds, { padding: [0, 0] })
   }
+
+  // 更新最新点标记
+  updateLatestPointMarker()
 }
 
 // 清除轨迹
@@ -2026,6 +2062,66 @@ watch(() => props.highlightTrackId, () => {
 
 watch(() => props.highlightSegment, () => {
   updateTracks()
+})
+
+// 更新实时轨迹最新点标记
+function updateLatestPointMarker() {
+  if (!latestPointMarker.value) return
+
+  if (props.latestPointIndex === null || props.latestPointIndex === undefined) {
+    try {
+      if (map.value?.hasLayer(latestPointMarker.value)) {
+        map.value.removeLayer(latestPointMarker.value)
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  // 如果还没绘制轨迹（trackPoints 为空），等待绘制完成
+  if (!trackPoints.value.length) {
+    nextTick(() => updateLatestPointMarker())
+    return
+  }
+
+  const index = props.latestPointIndex
+  if (index < 0 || index >= trackPoints.value.length) {
+    try {
+      if (map.value?.hasLayer(latestPointMarker.value)) {
+        map.value.removeLayer(latestPointMarker.value)
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  const point = trackPoints.value[index]
+  const position = trackPath.value[index]
+  if (!point || !position || !map.value) {
+    try {
+      if (map.value?.hasLayer(latestPointMarker.value)) {
+        map.value.removeLayer(latestPointMarker.value)
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  // trackPath 格式是 [lng, lat]，需要交换为 [lat, lng]
+  latestPointMarker.value.setLatLng([position[1], position[0]])
+  // 先移除再添加，避免重复
+  if (map.value.hasLayer(latestPointMarker.value)) {
+    map.value.removeLayer(latestPointMarker.value)
+  }
+  latestPointMarker.value.addTo(map.value)
+}
+
+// 监听最新点索引变化
+watch(() => props.latestPointIndex, () => {
+  updateLatestPointMarker()
 })
 
 // 监听 defaultLayerId 变化（从 UniversalMap 传入）
@@ -2198,12 +2294,24 @@ watch(() => props.highlightPointIndex, (newIndex) => {
   font-size: 10px;
 }
 
-/* 鼠标标记样式 */
+/* 鼠标标记样式（蓝色） */
 :deep(.leaflet-mouse-marker) {
-  background: #409eff;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+  width: 12px !important;
+  height: 12px !important;
+  background: #409eff !important;
+  border: 2px solid #fff !important;
+  border-radius: 50% !important;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* 最新点标记样式（绿色） */
+:deep(.leaflet-latest-point-marker) {
+  width: 12px !important;
+  height: 12px !important;
+  background: #67c23a !important;
+  border: 2px solid #fff !important;
+  border-radius: 50% !important;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.3) !important;
 }
 
 /* 道路标志 SVG 行内显示 */

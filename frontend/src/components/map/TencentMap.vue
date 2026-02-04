@@ -147,6 +147,7 @@ interface Props {
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
   highlightPointIndex?: number
+  latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -156,6 +157,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   highlightSegment: null,
   highlightPointIndex: undefined,
+  latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -170,6 +172,7 @@ let polylineLayer: any = null
 let highlightPolylineLayer: any = null  // 路径段高亮图层
 let mouseMarker: any = null  // 腾讯地图 Marker 实例
 let lastTooltipPosition: any = null  // 上次 tooltip 显示的位置
+let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
@@ -283,6 +286,48 @@ function createMouseMarker() {
     map: null,  // 初始不添加到地图
     styles: {
       'blue-dot': new TMap.MarkerStyle({
+        width: 16,
+        height: 16,
+        anchor: { x: 8, y: 8 },
+        src: dataUrl,
+      }),
+    },
+    geometries: [],
+  })
+}
+
+// 创建最新点标记（绿色）
+function createLatestPointMarker() {
+  if (!TMapInstance) return
+
+  const TMap = (window as any).TMap
+
+  // 使用 Canvas 绘制绿色圆点
+  const canvas = document.createElement('canvas')
+  canvas.width = 16
+  canvas.height = 16
+  const ctx = canvas.getContext('2d')!
+
+  // 绘制白色边框
+  ctx.fillStyle = '#ffffff'
+  ctx.beginPath()
+  ctx.arc(8, 8, 7, 0, Math.PI * 2)
+  ctx.fill()
+
+  // 绘制绿色圆点
+  ctx.fillStyle = '#67c23a'
+  ctx.beginPath()
+  ctx.arc(8, 8, 5, 0, Math.PI * 2)
+  ctx.fill()
+
+  // 转换为 data URL
+  const dataUrl = canvas.toDataURL()
+
+  // 创建标记样式
+  latestPointMarker = new TMap.MultiMarker({
+    map: null,  // 初始不添加到地图
+    styles: {
+      'green-dot': new TMap.MarkerStyle({
         width: 16,
         height: 16,
         anchor: { x: 8, y: 8 },
@@ -673,6 +718,7 @@ async function initMap() {
 
     // 创建标记
     createMouseMarker()
+    createLatestPointMarker()
 
     // 统一的鼠标处理函数
     const handleMouseMove = (lat: number, lng: number) => {
@@ -1277,6 +1323,9 @@ function drawTracks() {
       // ignore
     }
   }
+
+  // 更新最新点标记
+  updateLatestPointMarker()
 }
 
 // 更新轨迹
@@ -1381,6 +1430,48 @@ function fitBounds() {
     console.error('[TencentMap] fitBounds failed:', e)
   }
 }
+
+// 更新实时轨迹最新点标记
+function updateLatestPointMarker() {
+  if (!latestPointMarker) return
+
+  if (props.latestPointIndex === null || props.latestPointIndex === undefined) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  // 如果还没绘制轨迹（trackPoints 为空），等待绘制完成
+  if (!trackPoints.length) {
+    nextTick(() => updateLatestPointMarker())
+    return
+  }
+
+  const index = props.latestPointIndex
+  if (index < 0 || index >= trackPoints.length) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  const point = trackPoints[index]
+  const position = trackPath[index]
+  if (!point || !position || !TMapInstance) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  const TMap = (window as any).TMap
+  latestPointMarker.setGeometries([{
+    id: 'latest-point-marker',
+    styleId: 'green-dot',
+    position: position,
+  }])
+  latestPointMarker.setMap(TMapInstance)
+}
+
+// 监听最新点索引变化
+watch(() => props.latestPointIndex, () => {
+  updateLatestPointMarker()
+})
 
 // 监听外部指定的高亮点索引（用于指针同步）
 watch(() => props.highlightPointIndex, (newIndex) => {

@@ -145,6 +145,7 @@ interface Props {
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
   highlightPointIndex?: number
+  latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -154,6 +155,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   highlightSegment: null,
   highlightPointIndex: undefined,
+  latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -168,6 +170,7 @@ let highlightPolyline: any = null  // 路径段高亮图层
 let mouseMarker: any = null  // 鼠标位置标记
 let tooltip: any = null  // 信息提示框
 let documentMouseMoveHandler: ((e: MouseEvent) => void) | null = null  // document 鼠标移动处理函数
+let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
@@ -219,6 +222,27 @@ function createMouseMarker() {
     if (!isMobile && props.mode === 'home' && currentTooltipTrackId !== null) {
       emit('track-click', currentTooltipTrackId)
     }
+  })
+
+  // 创建绿色标记用于显示实时轨迹最新点
+  const latestMarkerContent = `
+    <div style="
+      width: 12px;
+      height: 12px;
+      background: #67c23a;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+      cursor: pointer;
+    "></div>
+  `
+
+  latestPointMarker = new AMap.Marker({
+    position: new AMap.LngLat(0, 0),
+    content: latestMarkerContent,
+    offset: new AMap.Pixel(-6, -6),
+    zIndex: 99,
+    map: null,  // 初始不添加到地图
   })
 }
 
@@ -1289,6 +1313,8 @@ function drawTracks() {
     }
   }
 
+  // 更新最新点标记
+  updateLatestPointMarker()
 }
 
 // 清除轨迹
@@ -1359,6 +1385,43 @@ watch(() => props.highlightPointIndex, (newIndex) => {
   ]
 
   updateMarker({ point, index: newIndex, position })
+})
+
+// 更新实时轨迹最新点标记
+function updateLatestPointMarker() {
+  if (!latestPointMarker) return
+
+  if (props.latestPointIndex === null || props.latestPointIndex === undefined) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  // 如果还没绘制轨迹（trackPoints 为空），等待绘制完成
+  if (!trackPoints.length) {
+    nextTick(() => updateLatestPointMarker())
+    return
+  }
+
+  const index = props.latestPointIndex
+  if (index < 0 || index >= trackPoints.length) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  const point = trackPoints[index]
+  const position = trackPath[index]
+  if (!point || !position || !AMapInstance) {
+    latestPointMarker.setMap(null)
+    return
+  }
+
+  latestPointMarker.setPosition(new AMap.LngLat(position.lng, position.lat))
+  latestPointMarker.setMap(AMapInstance)
+}
+
+// 监听最新点索引变化
+watch(() => props.latestPointIndex, () => {
+  updateLatestPointMarker()
 })
 
 // 生命周期

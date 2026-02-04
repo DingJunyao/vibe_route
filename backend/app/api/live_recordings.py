@@ -259,11 +259,15 @@ async def get_recording_status(
         )
         current_track = track_result.scalar_one_or_none()
         if current_track:
+            # 实时计算统计数据（从点重新计算，确保准确性）
+            calculated_stats = await live_recording_service.calculate_track_stats_from_points(
+                db, current_track.id
+            )
             related_tracks.append({
                 "id": current_track.id,
                 "name": current_track.name,
-                "distance": current_track.distance or 0,
-                "duration": current_track.duration or 0,
+                "distance": calculated_stats["distance"],
+                "duration": calculated_stats["duration"],
                 "created_at": current_track.created_at.isoformat() + "+00:00",
             })
 

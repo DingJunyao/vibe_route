@@ -83,8 +83,8 @@ class GeoEditorService:
                     point_index=p.point_index,
                     time=p.time,
                     created_at=p.created_at,
-                    latitude=lat_gcj02 if lat_gcj02 is not None else p.latitude_wgs84,
-                    longitude=lon_gcj02 if lon_gcj02 is not None else p.longitude_wgs84,
+                    latitude=p.latitude_wgs84,  # WGS84
+                    longitude=p.longitude_wgs84,  # WGS84
                     latitude_wgs84=p.latitude_wgs84,
                     longitude_wgs84=p.longitude_wgs84,
                     latitude_gcj02=lat_gcj02,

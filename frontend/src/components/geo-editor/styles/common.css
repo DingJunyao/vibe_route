@@ -16,8 +16,8 @@
   --geo-editor-pointer-bg-idle: rgba(245, 108, 108, 0.05);
 
   /* 刻度线高度 */
-  --geo-editor-tick-minor-height: 6px;
-  --geo-editor-tick-major-height: 6px;
+  --geo-editor-tick-minor-height: 5px;
+  --geo-editor-tick-major-height: 7px;
 
   /* 轨道行高度 */
   --geo-editor-track-row-height: 32px;

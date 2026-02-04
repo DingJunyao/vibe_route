@@ -191,6 +191,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :latest-point-index="latestPointIndex"
                     :live-update-time="track.last_point_created_at || track.last_upload_at"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
@@ -410,6 +411,7 @@
                     :tracks="[trackWithPoints]"
                     :highlight-track-id="track.id"
                     :highlight-segment="highlightedSegment"
+                    :latest-point-index="latestPointIndex"
                     :live-update-time="track.last_point_created_at || track.last_upload_at"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
@@ -958,6 +960,37 @@ const currentRecordingLastPointCreatedAt = ref<string | null>(null)
 
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
+
+// 实时轨迹最新点索引（用于显示绿色标记）
+const latestPointIndex = computed(() => {
+  // 只有实时记录时才显示最新点标记
+  if (!track.value?.is_live_recording || !points.value.length) {
+    return null
+  }
+
+  // 过滤出有有效坐标的点（与 trackWithPoints 逻辑一致）
+  const validPoints = points.value.filter(p =>
+    p.latitude_wgs84 != null &&
+    p.longitude_wgs84 != null &&
+    !isNaN(p.latitude_wgs84) &&
+    !isNaN(p.longitude_wgs84)
+  )
+
+  if (validPoints.length === 0) return null
+
+  // 找到 GPS 时间最新的点在 validPoints 中的索引
+  let latestIndex = -1
+  let latestTime: string | null = null
+
+  validPoints.forEach((point, index) => {
+    if (point.time && point.time > (latestTime || '')) {
+      latestTime = point.time
+      latestIndex = index
+    }
+  })
+
+  return latestIndex >= 0 ? latestIndex : null
+})
 
 // 导出相关
 const exportPointsDialogVisible = ref(false)
@@ -2258,14 +2291,19 @@ async function handleNewPointAdded(data: PointAddedData) {
     track.value.duration = stats.duration
     track.value.elevation_gain = stats.elevation_gain
     track.value.elevation_loss = stats.elevation_loss
-    // 更新结束时间为最新点的时间
-    track.value.end_time = point.time
+    // 只有当新点时间更晚时才更新结束时间（避免乱序点导致倒流）
+    if (point.time && (!track.value.end_time || point.time > track.value.end_time)) {
+      track.value.end_time = point.time
+    }
     // 更新最后轨迹点时间（用于记录配置对话框显示 GPS 时间）
     track.value.last_point_time = point.time
     // 更新最后轨迹点服务器接收时间（用于地图显示）
     track.value.last_point_created_at = point.created_at || point.time
     // 如果开始时间为空（第一个点），设置为当前点的时间
     if (!track.value.start_time && point.time) {
+      track.value.start_time = point.time
+    } else if (point.time && (!track.value.start_time || point.time < track.value.start_time)) {
+      // 同样处理开始时间：只有当新点时间更早时才更新
       track.value.start_time = point.time
     }
   }

@@ -146,6 +146,7 @@ interface Props {
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
   highlightPointIndex?: number
+  latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
 }
@@ -155,6 +156,7 @@ const props = withDefaults(defineProps<Props>(), {
   highlightTrackId: undefined,
   highlightSegment: null,
   highlightPointIndex: undefined,
+  latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
 })
@@ -171,6 +173,8 @@ let customTooltip: HTMLElement | null = null  // 自定义 tooltip 元素
 let currentHighlightPoint: { index: number; position: { lng: number; lat: number }; point: Point } | null = null
 let trackPoints: Point[] = []
 let trackPath: { lng: number; lat: number }[] = []
+let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
+let latestPointMarkerAdded = false  // 标记是否已添加到地图
 let lastHoverIndex = -1
 // home 模式：按轨迹分开存储
 const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
@@ -328,6 +332,80 @@ function createMouseMarkerOverlay() {
   return MouseMarkerOverlay
 }
 
+// 创建绿色自定义覆盖物类（用于实时轨迹最新点）
+function createLatestPointMarkerOverlay() {
+  const BMapGL = (window as any).BMapGL
+
+  class LatestPointMarkerOverlay extends BMapGL.Overlay {
+    private point: any = null
+    private element: HTMLElement | null = null
+    private map: any = null
+    private _mapMoveHandler: any = null
+
+    constructor(point: any) {
+      super()
+      this.point = point
+    }
+
+    initialize(map: any): HTMLElement {
+      this.map = map
+
+      this.element = document.createElement('div')
+      this.element.style.cssText = `
+        width: 12px;
+        height: 12px;
+        background: #67c23a;
+        border: 2px solid #fff;
+        border-radius: 50%;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+        position: absolute;
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+      `
+
+      map.getPanes().floatPane.appendChild(this.element)
+
+      this._mapMoveHandler = () => this.draw()
+      map.addEventListener('moveend', this._mapMoveHandler)
+      map.addEventListener('zoomend', this._mapMoveHandler)
+
+      return this.element
+    }
+
+    draw() {
+      if (!this.element || !this.point || !this.map) return
+
+      const position = this.map.pointToOverlayPixel(this.point)
+      if (position) {
+        this.element.style.left = position.x + 'px'
+        this.element.style.top = position.y + 'px'
+      }
+    }
+
+    setPosition(point: any) {
+      this.point = point
+      this.draw()
+    }
+
+    remove() {
+      if (this.element && this.element.parentNode) {
+        this.element.parentNode.removeChild(this.element)
+      }
+
+      if (this.map && this._mapMoveHandler) {
+        this.map.removeEventListener('moveend', this._mapMoveHandler)
+        this.map.removeEventListener('zoomend', this._mapMoveHandler)
+      }
+
+      this.element = null
+      this.map = null
+      this._mapMoveHandler = null
+    }
+  }
+
+  return LatestPointMarkerOverlay
+}
+
 // 创建鼠标位置标记
 function createMouseMarker() {
   if (!BMapInstance) return
@@ -336,6 +414,16 @@ function createMouseMarker() {
   const MouseMarkerOverlay = createMouseMarkerOverlay()
 
   mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(0, 0))
+}
+
+// 创建最新点标记
+function createLatestPointMarker() {
+  if (!BMapInstance) return
+
+  const BMapGL = (window as any).BMapGL
+  const LatestPointMarkerOverlay = createLatestPointMarkerOverlay()
+
+  latestPointMarker = new LatestPointMarkerOverlay(new BMapGL.Point(0, 0))
 }
 
 // 创建自定义 tooltip 元素
@@ -558,6 +646,7 @@ async function initMap() {
 
     // 创建标记和自定义 tooltip
     createMouseMarker()
+    createLatestPointMarker()
     createCustomTooltip()
 
     // 监听地图移动事件，在地图平移时更新 tooltip 位置
@@ -1139,6 +1228,9 @@ function drawTracks() {
       }
     }
   }
+
+  // 更新最新点标记
+  updateLatestPointMarker()
 }
 
 // 清除轨迹
@@ -1235,6 +1327,70 @@ function fitBounds() {
     console.error('[BMap] fitBounds failed:', e)
   }
 }
+
+// 更新实时轨迹最新点标记
+function updateLatestPointMarker() {
+  if (!latestPointMarker) return
+
+  if (props.latestPointIndex === null || props.latestPointIndex === undefined) {
+    try {
+      if (latestPointMarkerAdded) {
+        BMapInstance.removeOverlay(latestPointMarker)
+        latestPointMarkerAdded = false
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  // 如果还没绘制轨迹（trackPoints 为空），等待绘制完成
+  if (!trackPoints.length) {
+    nextTick(() => updateLatestPointMarker())
+    return
+  }
+
+  const index = props.latestPointIndex
+  if (index < 0 || index >= trackPoints.length) {
+    try {
+      if (latestPointMarkerAdded) {
+        BMapInstance.removeOverlay(latestPointMarker)
+        latestPointMarkerAdded = false
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  const point = trackPoints[index]
+  const position = trackPath[index]
+  if (!point || !position || !BMapInstance) {
+    try {
+      if (latestPointMarkerAdded) {
+        BMapInstance.removeOverlay(latestPointMarker)
+        latestPointMarkerAdded = false
+      }
+    } catch (e) {
+      // ignore
+    }
+    return
+  }
+
+  const BMapGL = (window as any).BMapGL
+  latestPointMarker.setPosition(new BMapGL.Point(position.lng, position.lat))
+
+  // 如果还没添加到地图，先添加
+  if (!latestPointMarkerAdded) {
+    BMapInstance.addOverlay(latestPointMarker)
+    latestPointMarkerAdded = true
+  }
+}
+
+// 监听最新点索引变化
+watch(() => props.latestPointIndex, () => {
+  updateLatestPointMarker()
+})
 
 // 监听外部指定的高亮点索引（用于指针同步）
 watch(() => props.highlightPointIndex, (newIndex) => {
