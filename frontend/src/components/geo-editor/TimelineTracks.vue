@@ -343,6 +343,7 @@ const segmentsByTrack = computed(() => {
   overflow: hidden;
   cursor: pointer;
   transition: all 0.15s;
+  user-select: none;
 }
 
 .segment-block.is-hovered {
