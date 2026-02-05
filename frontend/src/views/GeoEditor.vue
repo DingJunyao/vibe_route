@@ -842,11 +842,6 @@ const zoomLevelText = computed(() => {
   return `${level}x`
 })
 
-// 时间轴段落选择
-function handleSegmentSelect(segmentId: string) {
-  geoEditorStore.selectSegment(segmentId)
-}
-
 function handleSegmentHover(segmentId: string | null) {
   geoEditorStore.hoverSegment(segmentId)
 }
