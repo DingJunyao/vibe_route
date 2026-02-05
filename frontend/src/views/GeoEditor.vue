@@ -1097,13 +1097,6 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                   </el-button-group>
                 </div>
               </transition>
-
-              <!-- 时间刻度单位选择器 -->
-              <el-select v-model="geoEditorStore.timeScaleUnit" size="small" style="width: 70px;">
-                <el-option value="time" label="时间" />
-                <el-option value="duration" label="时长" />
-                <el-option value="index" label="索引" />
-              </el-select>
             </div>
             <div class="controls-right">
               <el-button-group>
@@ -1168,6 +1161,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                 @pointer-change="handlePointerChange"
                 @scale-hover="handleScaleHover"
                 @pan="handleScalePan"
+                @update:time-scale-unit="geoEditorStore.timeScaleUnit = $event"
               />
             </div>
 

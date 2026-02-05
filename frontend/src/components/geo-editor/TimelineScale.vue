@@ -19,6 +19,7 @@ const emit = defineEmits<{
   'pointer-change': [position: number]
   'scale-hover': [pointIndex: number | null]  // 悬浮时的点索引
   'pan': [deltaX: number]  // 触摸滑动时的水平位移（像素）
+  'update:timeScaleUnit': [value: 'time' | 'duration' | 'index']  // 单位选择变更
 }>()
 
 const scaleRef = ref<HTMLElement>()
@@ -501,6 +502,14 @@ function handleTouchEnd() {
 
 <template>
   <div class="timeline-scale" ref="scaleRef">
+    <!-- 左侧单位选择器 -->
+    <div class="scale-unit-selector">
+      <el-select :modelValue="props.timeScaleUnit" @update:modelValue="emit('update:timeScaleUnit', $event)" size="small" placement="bottom-start">
+        <el-option value="time" label="时间" />
+        <el-option value="duration" label="时长" />
+        <el-option value="index" label="索引" />
+      </el-select>
+    </div>
     <div class="scale-content">
       <div
         class="scale-content-area"
@@ -660,5 +669,18 @@ function handleTouchEnd() {
   opacity: 0.6;
   pointer-events: none;
   transform: translateX(-50%);
+}
+
+/* 左侧单位选择器 */
+.scale-unit-selector {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+}
+
+.scale-unit-selector .el-select {
+  width: 60px;
 }
 </style>
