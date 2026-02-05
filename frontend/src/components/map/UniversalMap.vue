@@ -160,7 +160,7 @@ interface Track {
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
-  highlightSegment?: { start: number; end: number } | null
+  highlightSegments?: Array<{ start: number; end: number }> | null
   highlightPointIndex?: number  // 新增：高亮指定索引的点
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
@@ -172,7 +172,7 @@ interface Props {
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
-  highlightSegment: null,
+  highlightSegments: null,
   highlightPointIndex: undefined,
   latestPointIndex: null,
   defaultLayerId: undefined,
@@ -206,6 +206,18 @@ const formattedLiveUpdateTime = computed(() => {
   void timeRefreshKey.value
   if (!props.liveUpdateTime) return ''
   return formatTimeShort(props.liveUpdateTime)
+})
+
+// 合并多段高亮为一个区域（兼容现有实现）
+const highlightSegment = computed(() => {
+  const segments = props.highlightSegments
+  if (!segments || segments.length === 0) return null
+
+  // 找到最小起始和最大结束
+  const minStart = Math.min(...segments.map(s => s.start))
+  const maxEnd = Math.max(...segments.map(s => s.end))
+
+  return { start: minStart, end: maxEnd }
 })
 
 // 当前选择的地图层 ID

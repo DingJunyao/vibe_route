@@ -31,22 +31,43 @@ const timelineContentRef = ref<HTMLElement | null>(null)
 // 地图区域引用（用于滚轮缩放检测）
 const mapSectionRef = ref<HTMLElement | null>(null)
 
-// 高亮区域（基于选中的段落）
-const highlightedSegment = computed(() => {
-  const ids = geoEditorStore.selectedSegmentIds
-  const id = ids.size > 0 ? Array.from(ids)[0] : geoEditorStore.hoveredSegmentId
-  if (!id) return null
+// 高亮区域（支持多段）
+const highlightedSegments = computed(() => {
+  const segments: Array<{ start: number; end: number }> = []
 
-  for (const track of geoEditorStore.tracks) {
-    const segment = track.segments.find(s => s.id === id)
-    if (segment) {
-      return {
-        start: segment.startIndex,
-        end: segment.endIndex,
+  // 添加悬停的段落
+  if (geoEditorStore.hoveredSegmentId) {
+    for (const track of geoEditorStore.tracks) {
+      const segment = track.segments.find(s => s.id === geoEditorStore.hoveredSegmentId)
+      if (segment) {
+        segments.push({ start: segment.startIndex, end: segment.endIndex })
+        break
       }
     }
   }
-  return null
+
+  // 添加选中的段落
+  for (const track of geoEditorStore.tracks) {
+    for (const segment of track.segments) {
+      if (geoEditorStore.selectedSegmentIds.has(segment.id)) {
+        segments.push({ start: segment.startIndex, end: segment.endIndex })
+      }
+    }
+  }
+
+  return segments.length > 0 ? segments : null
+})
+
+// 高亮区域（单个范围，用于图表组件）
+const highlightedSegment = computed(() => {
+  const segments = highlightedSegments.value
+  if (!segments || segments.length === 0) return null
+
+  // 返回合并后的范围
+  const minStart = Math.min(...segments.map(s => s.start))
+  const maxEnd = Math.max(...segments.map(s => s.end))
+
+  return { start: minStart, end: maxEnd }
 })
 
 // 转换点数据为 UniversalMap 格式（tracks 数组）
@@ -994,7 +1015,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
         <div ref="mapSectionRef" class="map-section">
           <UniversalMap
             :tracks="mapTracks"
-            :highlight-segment="highlightedSegment"
+            :highlight-segments="highlightedSegments"
             :highlight-point-index="highlightPointIndex"
             mode="detail"
             @point-hover="handleMapPointHover"
