@@ -19,9 +19,14 @@ const emit = defineEmits<{
   hover: [segmentId: string | null]
   save: [data: { trackType: TrackType; segmentId: string; value: string; valueEn: string | null }]
   'multi-select-change': [isActive: boolean]
+  resize: [data: { trackType: TrackType; segmentId: string; newStartIndex: number; newEndIndex: number }]
+  move: [data: { trackType: TrackType; segmentId: string; targetStartIndex: number }]
 }>()
 
 const geoEditorStore = useGeoEditorStore()
+
+// 移动端检测
+const isMobile = computed(() => window.innerWidth <= 1366)
 
 // 修饰键状态（用于多选）
 const isCtrlPressed = ref(false)
@@ -60,6 +65,26 @@ const longPressTimer = ref<number | null>(null)
 const LONG_PRESS_DURATION = 500  // 长按触发时长（毫秒）
 const longPressElement = ref<HTMLElement | null>(null)
 
+// 移动端编辑模式（长按选中块进入）
+const isEditMode = ref(false)
+const editModeSegmentId = ref<string | null>(null)
+
+// 桌面端拖动状态
+const isDragging = ref(false)
+const dragType = ref<'resize-left' | 'resize-right' | 'move' | null>(null)
+const dragTrackType = ref<TrackType | null>(null)  // 拖动所在的轨道类型
+const dragSegmentId = ref<string | null>(null)
+const dragStartX = ref(0)
+const dragOriginalSegment = ref<{ startIndex: number; endIndex: number; pointCount: number } | null>(null)
+const dragCurrentIndex = ref(0)  // 当前拖动到的索引
+const previewLeft = ref(0)  // 预览框位置（百分比）
+const previewWidth = ref(0)  // 预览框宽度（百分比）
+
+// 移动端拖动状态
+const isMobileDragging = ref(false)
+const mobileDragStartX = ref(0)
+const mobileDragStartIndex = ref(0)
+
 // 长按开始
 function handleLongPressStart(segmentId: string, e: TouchEvent) {
   // 清除之前的定时器
@@ -71,13 +96,27 @@ function handleLongPressStart(segmentId: string, e: TouchEvent) {
   longPressElement.value = e.target as HTMLElement
 
   longPressTimer.value = window.setTimeout(() => {
-    // 长按触发：进入多选模式并选中当前块
-    isMultiSelectMode.value = true
-    emit('select', segmentId, true)  // addToSelection = true
+    // 检查是否是已选中的块
+    const isAlreadySelected = props.selectedSegmentIds.has(segmentId)
 
-    // 触觉反馈（如果支持）
-    if ('vibrate' in navigator) {
-      navigator.vibrate(50)
+    if (isAlreadySelected) {
+      // 已选中的块：进入编辑模式
+      isEditMode.value = true
+      editModeSegmentId.value = segmentId
+
+      // 触觉反馈（三次短震动表示编辑模式）
+      if ('vibrate' in navigator) {
+        navigator.vibrate([50, 50, 50])
+      }
+    } else {
+      // 未选中的块：进入多选模式
+      isMultiSelectMode.value = true
+      emit('select', segmentId, true)  // addToSelection = true
+
+      // 触觉反馈
+      if ('vibrate' in navigator) {
+        navigator.vibrate(50)
+      }
     }
   }, LONG_PRESS_DURATION)
 }
@@ -115,6 +154,10 @@ function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: TouchE
     lastTapTime.value = 0
     lastTapSegmentId.value = ''
     handleLongPressCancel()
+  } else if (isEditMode.value && editModeSegmentId.value === segment.id) {
+    // 编辑模式：开始拖动
+    e.preventDefault()
+    handleMobileDragStart(trackType, segment, e)
   } else if (isMultiSelectMode.value) {
     // 多选模式：切换选中状态
     e.preventDefault()
@@ -132,12 +175,15 @@ function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: TouchE
 
 // 触摸移动，取消长按
 function handleTouchMove(e: TouchEvent) {
-  handleLongPressCancel()
+  // 如果在拖动中，不取消
+  if (!isMobileDragging.value) {
+    handleLongPressCancel()
+  }
 }
 
 function handleTouchEnd(e: TouchEvent) {
-  // 如果长按已触发（进入多选模式），不做处理
-  if (isMultiSelectMode.value) {
+  // 如果长按已触发（进入多选模式或编辑模式），不做处理
+  if (isMultiSelectMode.value || isEditMode.value) {
     handleLongPressCancel()
     return
   }
@@ -164,6 +210,323 @@ function handleTouchEnd(e: TouchEvent) {
       }
     }, DOUBLE_TAP_DELAY)
   }
+}
+
+// ==================== 拖动相关函数 ====================
+
+// 将像素位置转换为点索引
+function positionToIndex(xPercent: number): number {
+  // xPercent 是相对于可见区域的位置 (0-100)
+  // 需要转换为相对于整个轨迹的位置
+  const globalPosition = (props.zoomStart + xPercent / 100 * (props.zoomEnd - props.zoomStart))
+  return Math.round(globalPosition * totalPoints.value)
+}
+
+// 将点索引转换为可见区域内的百分比位置（左边缘）
+function indexToVisiblePercent(index: number): number {
+  const globalPosition = index / totalPoints.value
+  return ((globalPosition - props.zoomStart) / (props.zoomEnd - props.zoomStart)) * 100
+}
+
+// 计算段落在可见区域内的宽度和位置
+function getSegmentBounds(startIndex: number, endIndex: number): { left: number; width: number } {
+  // 左边界：startIndex 的位置
+  const left = indexToVisiblePercent(startIndex)
+
+  // 右边界：(endIndex + 1) 的位置，但不能超过总点数
+  const rightIndex = Math.min(endIndex + 1, totalPoints.value)
+  const right = indexToVisiblePercent(rightIndex)
+
+  return {
+    left,
+    width: Math.max(0, right - left)
+  }
+}
+
+// 桌面端：检测鼠标在段落上的位置（左侧手柄、右侧手柄、中心区域）
+function getMouseArea(e: MouseEvent, element: HTMLElement): 'left' | 'right' | 'center' {
+  const rect = element.getBoundingClientRect()
+  const x = e.clientX - rect.left
+  const width = rect.width
+  const HANDLE_WIDTH = 6  // 手柄宽度
+
+  if (x <= HANDLE_WIDTH) return 'left'
+  if (x >= width - HANDLE_WIDTH) return 'right'
+  return 'center'
+}
+
+// 桌面端：开始拖动
+function handleDragStart(trackType: TrackType, segment: TrackSegment, e: MouseEvent) {
+  const element = e.currentTarget as HTMLElement
+  const area = getMouseArea(e, element)
+
+  if (area === 'center') {
+    // 移动模式
+    dragType.value = 'move'
+  } else {
+    // 调整大小模式
+    dragType.value = area === 'left' ? 'resize-left' : 'resize-right'
+  }
+
+  isDragging.value = true
+  dragTrackType.value = trackType
+  dragSegmentId.value = segment.id
+  dragStartX.value = e.clientX
+  dragOriginalSegment.value = {
+    startIndex: segment.startIndex,
+    endIndex: segment.endIndex,
+    pointCount: segment.pointCount
+  }
+  dragCurrentIndex.value = segment.startIndex
+
+  // 记录原始位置用于预览（使用 getSegmentBounds 确保宽度正确）
+  const bounds = getSegmentBounds(segment.startIndex, segment.endIndex)
+  previewLeft.value = bounds.left
+  previewWidth.value = bounds.width
+
+  // 添加全局事件监听
+  document.addEventListener('mousemove', handleDragMove)
+  document.addEventListener('mouseup', handleDragEnd)
+
+  e.preventDefault()
+}
+
+// 桌面端：拖动中
+function handleDragMove(e: MouseEvent) {
+  if (!isDragging.value || !dragSegmentId.value || !dragOriginalSegment.value) return
+
+  const deltaX = e.clientX - dragStartX.value
+  const pointsPerPixel = (props.zoomEnd - props.zoomStart) * totalPoints.value / window.innerWidth
+
+  if (dragType.value === 'move') {
+    // 移动模式：计算新位置
+    const deltaIndex = Math.round(deltaX * pointsPerPixel)
+    const original = dragOriginalSegment.value
+    const newStartIndex = Math.max(0, Math.min(
+      totalPoints.value - original.pointCount,
+      original.startIndex + deltaIndex
+    ))
+    dragCurrentIndex.value = newStartIndex
+
+    // 更新预览位置（使用 getSegmentBounds）
+    const bounds = getSegmentBounds(newStartIndex, newStartIndex + original.pointCount - 1)
+    previewLeft.value = bounds.left
+    previewWidth.value = bounds.width
+  } else if (dragType.value === 'resize-left') {
+    // 调整左边界
+    const deltaIndex = Math.round(deltaX * pointsPerPixel)
+    const original = dragOriginalSegment.value
+    const newStartIndex = Math.max(0, Math.min(
+      original.endIndex - 2,  // 保持最小3个点的间距
+      original.startIndex + deltaIndex
+    ))
+    dragCurrentIndex.value = newStartIndex
+
+    // 更新预览（使用 getSegmentBounds）
+    const bounds = getSegmentBounds(newStartIndex, original.endIndex)
+    previewLeft.value = bounds.left
+    previewWidth.value = bounds.width
+  } else if (dragType.value === 'resize-right') {
+    // 调整右边界
+    const deltaIndex = Math.round(deltaX * pointsPerPixel)
+    const original = dragOriginalSegment.value
+    const newEndIndex = Math.max(
+      original.startIndex + 2,  // 保持最小3个点的间距
+      Math.min(totalPoints.value - 1, original.endIndex + deltaIndex)
+    )
+    dragCurrentIndex.value = newEndIndex
+
+    // 更新预览（使用 getSegmentBounds）
+    const bounds = getSegmentBounds(original.startIndex, newEndIndex)
+    previewLeft.value = bounds.left
+    previewWidth.value = bounds.width
+  }
+}
+
+// 桌面端：结束拖动
+function handleDragEnd(e: MouseEvent) {
+  if (!isDragging.value || !dragSegmentId.value || !dragOriginalSegment.value) return
+
+  document.removeEventListener('mousemove', handleDragMove)
+  document.removeEventListener('mouseup', handleDragEnd)
+
+  // 找到对应的轨道和段落
+  const track = props.tracks.find(t =>
+    t.segments.some(s => s.id === dragSegmentId.value)
+  )
+  if (!track) {
+    resetDragState()
+    return
+  }
+
+  const original = dragOriginalSegment.value
+
+  // 执行操作
+  if (dragType.value === 'move') {
+    const newStartIndex = dragCurrentIndex.value
+    // 只有位置真正改变时才发送事件
+    if (newStartIndex !== original.startIndex) {
+      emit('move', {
+        trackType: track.type,
+        segmentId: dragSegmentId.value,
+        targetStartIndex: newStartIndex
+      })
+    }
+  } else if (dragType.value === 'resize-left') {
+    const newStartIndex = dragCurrentIndex.value
+    if (newStartIndex !== original.startIndex) {
+      emit('resize', {
+        trackType: track.type,
+        segmentId: dragSegmentId.value,
+        newStartIndex,
+        newEndIndex: original.endIndex
+      })
+    }
+  } else if (dragType.value === 'resize-right') {
+    const newEndIndex = dragCurrentIndex.value
+    if (newEndIndex !== original.endIndex) {
+      emit('resize', {
+        trackType: track.type,
+        segmentId: dragSegmentId.value,
+        newStartIndex: original.startIndex,
+        newEndIndex
+      })
+    }
+  }
+
+  resetDragState()
+}
+
+// 重置拖动状态
+function resetDragState() {
+  isDragging.value = false
+  dragType.value = null
+  dragTrackType.value = null
+  dragSegmentId.value = null
+  dragStartX.value = 0
+  dragOriginalSegment.value = null
+  dragCurrentIndex.value = 0
+  previewLeft.value = 0
+  previewWidth.value = 0
+}
+
+// 移动端：进入编辑模式（长按已选中的块）
+function enterEditMode(trackType: TrackType, segment: TrackSegment) {
+  // 只有已选中的块才能进入编辑模式
+  if (!props.selectedSegmentIds.has(segment.id)) return
+
+  isEditMode.value = true
+  editModeSegmentId.value = segment.id
+
+  // 触觉反馈
+  if ('vibrate' in navigator) {
+    navigator.vibrate([50, 50, 50])  // 三次短震动
+  }
+}
+
+// 退出编辑模式
+function exitEditMode() {
+  isEditMode.value = false
+  editModeSegmentId.value = null
+}
+
+// 移动端：开始拖动（编辑模式下）
+function handleMobileDragStart(trackType: TrackType, segment: TrackSegment, e: TouchEvent) {
+  if (!isEditMode.value || editModeSegmentId.value !== segment.id) return
+
+  e.preventDefault()
+  isMobileDragging.value = true
+  mobileDragStartX.value = e.touches[0].clientX
+  mobileDragStartIndex.value = segment.startIndex
+
+  // 使用 getSegmentBounds 确保预览正确
+  const bounds = getSegmentBounds(segment.startIndex, segment.endIndex)
+  previewLeft.value = bounds.left
+  previewWidth.value = bounds.width
+
+  document.addEventListener('touchmove', handleMobileDragMove, { passive: false })
+  document.addEventListener('touchend', handleMobileDragEnd)
+}
+
+// 移动端：拖动中
+function handleMobileDragMove(e: TouchEvent) {
+  if (!isMobileDragging.value) return
+
+  e.preventDefault()
+  const touch = e.touches[0]
+  const deltaX = touch.clientX - mobileDragStartX.value
+
+  // 计算新位置（简化为移动模式）
+  const pointsPerPixel = (props.zoomEnd - props.zoomStart) * totalPoints.value / window.innerWidth
+  const deltaIndex = Math.round(deltaX * pointsPerPixel)
+  const newIndex = Math.max(0, mobileDragStartIndex.value + deltaIndex)
+
+  // 获取原始段落大小来计算新边界
+  const track = props.tracks.find(t => t.segments.some(s => s.id === editModeSegmentId.value))
+  if (track) {
+    const segment = track.segments.find(s => s.id === editModeSegmentId.value)
+    if (segment) {
+      dragCurrentIndex.value = newIndex
+      const pointCount = segment.endIndex - segment.startIndex + 1
+      const newEndIndex = newIndex + pointCount - 1
+      const bounds = getSegmentBounds(newIndex, newEndIndex)
+      previewLeft.value = bounds.left
+      previewWidth.value = bounds.width
+    }
+  }
+}
+
+// 移动端：结束拖动
+async function handleMobileDragEnd(e: TouchEvent) {
+  if (!isMobileDragging.value) return
+
+  document.removeEventListener('touchmove', handleMobileDragMove)
+  document.removeEventListener('touchend', handleMobileDragEnd)
+
+  isMobileDragging.value = false
+
+  // 显示确认对话框
+  await showMoveConfirmDialog()
+}
+
+// 显示移动确认对话框
+async function showMoveConfirmDialog() {
+  const track = props.tracks.find(t =>
+    t.segments.some(s => s.id === editModeSegmentId.value)
+  )
+  if (!track) return
+
+  const segment = track.segments.find(s => s.id === editModeSegmentId.value)
+  if (!segment) return
+
+  const oldStart = segment.startIndex
+  const newStart = dragCurrentIndex.value
+  const oldEnd = segment.endIndex
+  const newEnd = newStart + (oldEnd - oldStart)
+
+  try {
+    await ElMessageBox.confirm(
+      `起点: ${oldStart} → ${newStart}\n终点: ${oldEnd} → ${newEnd}`,
+      '确认移动段落',
+      {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'info',
+      }
+    )
+
+    // 用户确认，执行移动
+    emit('move', {
+      trackType: track.type,
+      segmentId: editModeSegmentId.value!,
+      targetStartIndex: newStart
+    })
+  } catch {
+    // 用户取消
+  }
+
+  exitEditMode()
+  resetDragState()
 }
 
 // 轨道配置
@@ -289,7 +652,8 @@ function exitMultiSelectMode() {
 
 // 暴露方法给父组件
 defineExpose({
-  exitMultiSelectMode
+  exitMultiSelectMode,
+  exitEditMode
 })
 
 // 按轨道类型分组可见段落
@@ -334,7 +698,9 @@ watch(isMultiSelectMode, (isActive) => {
             'is-hovered': item.segment.id === hoveredSegmentId,
             'is-edited': item.segment.isEdited,
             'is-empty': !item.segment.value,
-            'is-multi-select-mode': isMultiSelectMode
+            'is-multi-select-mode': isMultiSelectMode,
+            'is-edit-mode': isEditMode && editModeSegmentId === item.segment.id,
+            'is-dragging': isDragging && dragSegmentId === item.segment.id
           }"
           :style="{
             left: `${item.visibleStart}%`,
@@ -347,11 +713,29 @@ watch(isMultiSelectMode, (isActive) => {
           @touchend="handleTouchEnd"
           @mouseenter="handleHover(item.segment.id)"
           @mouseleave="handleHover(null)"
+          @mousedown="handleDragStart(track.type, item.segment, $event)"
         >
+          <!-- 桌面端手柄（悬停时显示） -->
+          <template v-if="!isMobile">
+            <div class="segment-handle segment-handle-left" />
+            <div class="segment-handle segment-handle-right" />
+          </template>
+
+          <!-- 段落文本 -->
           <span v-if="item.segment.value || (selectedSegmentIds.has(item.segment.id) || item.segment.id === hoveredSegmentId)" class="segment-text">
             {{ item.segment.value || '(空)' }}
           </span>
         </div>
+
+        <!-- 拖动预览框（只在当前拖动的轨道上显示） -->
+        <div
+          v-if="((isDragging && dragTrackType === track.type) || (isMobileDragging && editModeSegmentId)) && previewWidth > 0"
+          class="segment-preview"
+          :style="{
+            left: `${previewLeft}%`,
+            width: `${previewWidth}%`
+          }"
+        />
       </div>
     </div>
 
@@ -493,9 +877,21 @@ watch(isMultiSelectMode, (isActive) => {
 }
 
 .segment-block.is-empty {
-  background: var(--el-fill-color-light);
+  /* 空块默认显示虚线边框 */
+  background: transparent;
   border-color: var(--el-border-color);
   border-style: dashed;
+  opacity: 0.6;
+}
+
+/* 选中、悬停或编辑模式时强调空块 */
+.segment-block.is-empty.is-selected,
+.segment-block.is-empty.is-hovered,
+.segment-block.is-empty.is-edit-mode {
+  opacity: 1;
+  background: var(--el-fill-color-light);
+  border-color: var(--el-color-primary);
+  border-width: 2px;
 }
 
 .segment-text {
@@ -526,6 +922,74 @@ watch(isMultiSelectMode, (isActive) => {
   }
   50% {
     opacity: 0.7;
+  }
+}
+
+/* 手柄样式 */
+.segment-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  background: var(--el-color-primary);
+  opacity: 0;
+  transition: opacity 0.2s;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.segment-handle-left {
+  left: 0;
+}
+
+.segment-handle-right {
+  right: 0;
+}
+
+.segment-block:hover .segment-handle {
+  opacity: 0.5;
+}
+
+.segment-handle:hover {
+  opacity: 1 !important;
+}
+
+/* 拖动预览框 */
+.segment-preview {
+  position: absolute;
+  height: 22px;
+  border: 2px dashed var(--el-color-primary);
+  background: rgba(64, 158, 255, 0.1);
+  pointer-events: none;
+  z-index: 100;
+  border-radius: 3px;
+}
+
+/* 拖动中样式 */
+.segment-block.is-dragging {
+  opacity: 0.5;
+}
+
+/* 移动端编辑模式 */
+.segment-block.is-edit-mode {
+  border-width: 2px;
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+  animation: edit-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes edit-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(64, 158, 255, 0.5);
+  }
+}
+
+/* 移动端隐藏手柄 */
+@media (max-width: 1366px) {
+  .segment-handle {
+    display: none;
   }
 }
 </style>

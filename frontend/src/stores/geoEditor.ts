@@ -101,7 +101,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   }
 
   // Actions
-  async function loadEditorData(trackIdParam: number) {
+  async function loadEditorData(trackIdParam: number, skipRestoreSession: boolean = false) {
     const data = await geoEditorApi.getEditorData(trackIdParam)
 
     trackId.value = data.track_id
@@ -112,8 +112,10 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     // 初始化轨道
     initializeTracks()
 
-    // 尝试恢复历史记录
-    restoreSession(trackIdParam)
+    // 尝试恢复历史记录（除非跳过）
+    if (!skipRestoreSession) {
+      restoreSession(trackIdParam)
+    }
   }
 
   // 初始化轨道（自动分段）
@@ -289,6 +291,22 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   function clearDraft() {
     if (!trackId.value) return
     localStorage.removeItem(`geo-editor-draft-${trackId.value}`)
+    hasUnsavedChanges.value = false
+  }
+
+  // 清除历史记录
+  function clearHistory() {
+    history.value = []
+    historyIndex.value = -1
+  }
+
+  // 重置编辑状态（用于重新载入）
+  function resetEditorState() {
+    clearHistory()
+    selectedSegmentIds.value.clear()
+    hoveredSegmentId.value = null
+    resetZoom()
+    setPointerPosition(0)
     hasUnsavedChanges.value = false
   }
 
@@ -570,6 +588,688 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     }
   }
 
+  // 最小段落大小（点数）
+  const MIN_SEGMENT_SIZE = 3
+
+  // 检查段落是否与其他段落重叠
+  function checkNoOverlap(
+    track: TrackTimeline,
+    segmentId: string,
+    newStart: number,
+    newEnd: number
+  ): boolean {
+    for (const seg of track.segments) {
+      if (seg.id === segmentId) continue
+
+      // 跳过空块（空块不阻挡其他块的调整）
+      if (!seg.value) continue
+
+      // 检查是否有重叠：
+      // - 新段落完全在左边：newEnd < seg.startIndex（允许）
+      // - 新段落完全在右边：newStart > seg.endIndex（允许）
+      // - 其他情况都有重叠（不允许）
+      const isNewLeftOfOther = newEnd < seg.startIndex
+      const isNewRightOfOther = newStart > seg.endIndex
+
+      if (!isNewLeftOfOther && !isNewRightOfOther) {
+        // 有重叠
+        return false
+      }
+    }
+    return true
+  }
+
+  // 获取指定位置处的相邻段落
+  function getAdjacentSegments(
+    track: TrackTimeline,
+    segmentId: string,
+    newStart: number,
+    newEnd: number
+  ): { before: TrackSegment | null; after: TrackSegment | null } {
+    let before: TrackSegment | null = null
+    let after: TrackSegment | null = null
+
+    for (const seg of track.segments) {
+      if (seg.id === segmentId) continue
+      if (seg.endIndex === newStart - 1) before = seg
+      if (seg.startIndex === newEnd + 1) after = seg
+    }
+
+    return { before, after }
+  }
+
+  // 检查是否需要合并（与相邻同值段落）
+  // 空块不自动合并，保持各自的独立性
+  function shouldAutoMerge(
+    segment: TrackSegment,
+    adjacent: TrackSegment | null
+  ): boolean {
+    if (!adjacent) return false
+    // 空块不自动合并
+    if (!segment.value || !adjacent.value) return false
+    return segment.value === adjacent.value && segment.valueEn === adjacent.valueEn
+  }
+
+  // 处理与段落重叠的空块，并填补新空出来的区域
+  // 空块不自动合并，保持各自的独立性
+  function adjustOverlappingEmptyBlocks(
+    track: TrackTimeline,
+    segmentId: string,
+    oldStart: number,
+    oldEnd: number,
+    newStart: number,
+    newEnd: number
+  ): number {
+    const segment = track.segments.find(s => s.id === segmentId)
+    if (!segment) return 0
+
+    const isSegmentEmpty = !segment.value
+    const segmentsToRemove: Set<string> = new Set()
+    const segmentsToAdd: Omit<TrackSegment, 'id'>[] = []
+
+    // 保存所有空块的原始位置（用于后续判断）
+    const originalEmptyPositions = new Map<string, { start: number; end: number }>()
+    for (const s of track.segments) {
+      if (!s.value && s.id !== segmentId) {
+        originalEmptyPositions.set(s.id, { start: s.startIndex, end: s.endIndex })
+      }
+    }
+
+    // DEBUG: 打印初始状态
+    console.log('[adjustOverlappingEmptyBlocks] 初始状态:', {
+      segmentId,
+      isSegmentEmpty,
+      oldStart, oldEnd,
+      newStart, newEnd,
+      segmentsBefore: track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value })),
+      originalEmptyPositions: Array.from(originalEmptyPositions.entries())
+    })
+
+    // ========================================
+    // 第一步：处理原位置留下的空隙（先处理原位置！）
+    // ========================================
+
+    // 检测是否是 resize 操作（只有一边改变）
+    const isResize = oldStart === newStart || oldEnd === newEnd
+    const isLeftResize = oldEnd === newEnd && oldStart !== newStart  // 调整左边界
+    const isRightResize = oldStart === newStart && oldEnd !== newEnd  // 调整右边界
+
+    if (isSegmentEmpty && isResize) {
+      // ========================================
+      // 空块 resize：不扩展邻居，创建新空块填补空白
+      // ========================================
+      console.log('[adjustOverlappingEmptyBlocks] 第一步 - 空块resize操作', {
+        isLeftResize,
+        isRightResize,
+        oldStart, oldEnd,
+        newStart, newEnd
+      })
+
+      if (isLeftResize) {
+        // 调整左边界：右边空出来
+        if (newStart > oldStart) {
+          // 左边界右移，右边有空隙 (oldEnd+1 到 oldEnd 变成空隙? 不对)
+          // 空块原本是 (oldStart, oldEnd)，现在是 (newStart, newEnd=newEnd)
+          // 左边空出来的是 (oldStart, newStart-1)
+          const gapStart = oldStart
+          const gapEnd = newStart - 1
+          if (gapStart <= gapEnd) {
+            track.segments.push({
+              id: generateId(),
+              startIndex: gapStart,
+              endIndex: gapEnd,
+              pointCount: gapEnd - gapStart + 1,
+              value: null,
+              valueEn: null,
+              isEdited: false,
+            })
+            console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建左空隙:', { gapStart, gapEnd })
+          }
+        } else {
+          // 左边界左移，需要检查是否覆盖了其他块
+          // 这个情况由第二步处理
+        }
+      } else if (isRightResize) {
+        // 调整右边界：右边空出来
+        if (newEnd < oldEnd) {
+          // 右边界左移，右边有空隙 (newEnd+1, oldEnd)
+          const gapStart = newEnd + 1
+          const gapEnd = oldEnd
+          if (gapStart <= gapEnd) {
+            track.segments.push({
+              id: generateId(),
+              startIndex: gapStart,
+              endIndex: gapEnd,
+              pointCount: gapEnd - gapStart + 1,
+              value: null,
+              valueEn: null,
+              isEdited: false,
+            })
+            console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建右空隙:', { gapStart, gapEnd })
+          }
+        } else {
+          // 右边界右移，需要检查是否覆盖了其他块
+          // 这个情况由第二步处理
+        }
+      }
+    } else if (isSegmentEmpty) {
+      // ========================================
+      // 空块移动：找出原始位置的邻居并扩展
+      // ========================================
+      let originalLeftNeighbor: TrackSegment | null = null
+      let originalRightNeighbor: TrackSegment | null = null
+
+      for (const s of track.segments) {
+        if (s.id === segmentId) continue
+        const originalPos = originalEmptyPositions.get(s.id)
+        if (!originalPos) continue
+
+        // 基于原始位置判断邻居
+        if (originalPos.end < oldStart) {
+          // 左边邻居：找最右边的
+          if (!originalLeftNeighbor || originalPos.end > (originalEmptyPositions.get(originalLeftNeighbor.id)?.end ?? -1)) {
+            originalLeftNeighbor = s
+          }
+        }
+        if (originalPos.start > oldEnd) {
+          // 右边邻居：找最左边的
+          if (!originalRightNeighbor || originalPos.start < (originalEmptyPositions.get(originalRightNeighbor.id)?.start ?? Infinity)) {
+            originalRightNeighbor = s
+          }
+        }
+      }
+
+      console.log('[adjustOverlappingEmptyBlocks] 第一步 - 邻居:', {
+        originalLeftNeighbor: originalLeftNeighbor ? { id: originalLeftNeighbor.id, start: originalLeftNeighbor.startIndex, end: originalLeftNeighbor.endIndex } : null,
+        originalRightNeighbor: originalRightNeighbor ? { id: originalRightNeighbor.id, start: originalRightNeighbor.startIndex, end: originalRightNeighbor.endIndex } : null
+      })
+
+      // 先扩展邻居填补原位置（在移动之前）
+      if (originalLeftNeighbor) {
+        // 左邻居：扩展到包含原位置（暂时不考虑新位置重叠）
+        originalLeftNeighbor.endIndex = oldEnd
+        originalLeftNeighbor.pointCount = originalLeftNeighbor.endIndex - originalLeftNeighbor.startIndex + 1
+        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 扩展左邻居:', {
+          id: originalLeftNeighbor.id,
+          newEnd: originalLeftNeighbor.endIndex,
+          newCount: originalLeftNeighbor.pointCount
+        })
+      }
+
+      if (originalRightNeighbor && !originalLeftNeighbor) {
+        // 只有右邻居时才扩展右邻居
+        originalRightNeighbor.startIndex = oldStart
+        originalRightNeighbor.pointCount = originalRightNeighbor.endIndex - originalRightNeighbor.startIndex + 1
+        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 扩展右邻居:', {
+          id: originalRightNeighbor.id,
+          newStart: originalRightNeighbor.startIndex,
+          newCount: originalRightNeighbor.pointCount
+        })
+      }
+
+      // 如果都没有邻居，创建新空块
+      if (!originalLeftNeighbor && !originalRightNeighbor) {
+        track.segments.push({
+          id: generateId(),
+          startIndex: oldStart,
+          endIndex: oldEnd,
+          pointCount: oldEnd - oldStart + 1,
+          value: null,
+          valueEn: null,
+          isEdited: false,
+        })
+        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建新空块')
+      }
+    } else {
+      // 正常块移动：填补原位置的空隙
+      let currentPos = oldStart
+      const segmentsInRange = track.segments
+        .filter(s => s.id !== segmentId && s.startIndex <= oldEnd && s.endIndex >= oldStart)
+        .sort((a, b) => a.startIndex - b.startIndex)
+
+      for (const existing of segmentsInRange) {
+        if (currentPos < existing.startIndex) {
+          track.segments.push({
+            id: generateId(),
+            startIndex: currentPos,
+            endIndex: existing.startIndex - 1,
+            pointCount: existing.startIndex - currentPos,
+            value: null,
+            valueEn: null,
+            isEdited: false,
+          })
+        }
+        currentPos = Math.max(currentPos, existing.endIndex + 1)
+      }
+
+      if (currentPos <= oldEnd) {
+        track.segments.push({
+          id: generateId(),
+          startIndex: currentPos,
+          endIndex: oldEnd,
+          pointCount: oldEnd - currentPos + 1,
+          value: null,
+          valueEn: null,
+          isEdited: false,
+        })
+      }
+    }
+
+    // ========================================
+    // 第二步：处理被移动段落在新位置与其他段落的重叠
+    // ========================================
+    console.log('[adjustOverlappingEmptyBlocks] 第二步开始 - 当前段落:',
+      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
+    )
+
+    const allOtherSegments = track.segments.filter(s => s.id !== segmentId)
+
+    for (const other of allOtherSegments) {
+      // 使用严格的重叠检测：必须有真正的交集，相接不算重叠
+      const hasOverlap = newStart <= other.endIndex && newEnd >= other.startIndex
+
+      if (!hasOverlap) continue
+
+      console.log('[adjustOverlappingEmptyBlocks] 第二步 - 发现重叠:', {
+        other: { id: other.id, start: other.startIndex, end: other.endIndex, value: other.value },
+        movedSegment: { newStart, newEnd }
+      })
+
+      // 两个空块之间的重叠：调整另一个的边界
+      if (isSegmentEmpty && !other.value) {
+        // 判断相对位置：比较原始起始位置
+        const otherOriginalPos = originalEmptyPositions.get(other.id)
+        const otherOriginalStart = otherOriginalPos?.start ?? other.startIndex
+
+        console.log('[adjustOverlappingEmptyBlocks] 第二步 - 空块重叠处理:', {
+          otherId: other.id,
+          otherOriginalStart,
+          oldStart,
+          isLeft: otherOriginalStart < oldStart
+        })
+
+        if (otherOriginalStart < oldStart) {
+          // other 原本在左边，调整其结束位置（不能超过新位置起点）
+          const newOtherEnd = newStart - 1
+          if (newOtherEnd >= other.startIndex) {
+            other.endIndex = newOtherEnd
+            other.pointCount = other.endIndex - other.startIndex + 1
+            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 调整左邻居:', {
+              id: other.id,
+              newEnd: newOtherEnd,
+              newCount: other.pointCount
+            })
+          } else {
+            segmentsToRemove.add(other.id)
+            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 标记删除左邻居:', other.id)
+          }
+        } else {
+          // other 原本在右边，调整其起始位置（不能小于新位置终点）
+          const newOtherStart = newEnd + 1
+          if (newOtherStart <= other.endIndex) {
+            other.startIndex = newOtherStart
+            other.pointCount = other.endIndex - other.startIndex + 1
+            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 调整右邻居:', {
+              id: other.id,
+              newStart: newOtherStart,
+              newCount: other.pointCount
+            })
+          } else {
+            segmentsToRemove.add(other.id)
+            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 标记删除右邻居:', other.id)
+          }
+        }
+        continue
+      }
+
+      // 正常块与空块的重叠
+      if (!isSegmentEmpty && !other.value) {
+        // 情况1：空块完全被正常块包含 -> 删除空块
+        if (newStart <= other.startIndex && newEnd >= other.endIndex) {
+          segmentsToRemove.add(other.id)
+          continue
+        }
+
+        // 情况2：正常块完全在空块内部 -> 将空块分成两部分
+        if (other.startIndex < newStart && other.endIndex > newEnd) {
+          segmentsToRemove.add(other.id)
+
+          if (other.startIndex <= newStart - 1) {
+            segmentsToAdd.push({
+              startIndex: other.startIndex,
+              endIndex: newStart - 1,
+              pointCount: newStart - other.startIndex,
+              value: null,
+              valueEn: null,
+              isEdited: false,
+            })
+          }
+
+          if (other.endIndex >= newEnd + 1) {
+            segmentsToAdd.push({
+              startIndex: newEnd + 1,
+              endIndex: other.endIndex,
+              pointCount: other.endIndex - newEnd,
+              value: null,
+              valueEn: null,
+              isEdited: false,
+            })
+          }
+
+          continue
+        }
+
+        // 情况3：正常块与空块左侧重叠
+        if (newEnd >= other.startIndex && newStart <= other.startIndex) {
+          const newEmptyStart = newEnd + 1
+          if (newEmptyStart > other.endIndex) {
+            segmentsToRemove.add(other.id)
+          } else {
+            other.startIndex = newEmptyStart
+            other.pointCount = other.endIndex - other.startIndex + 1
+          }
+          continue
+        }
+
+        // 情况4：正常块与空块右侧重叠
+        if (newStart <= other.endIndex && newEnd >= other.endIndex) {
+          const newEmptyEnd = newStart - 1
+          if (newEmptyEnd < other.startIndex) {
+            segmentsToRemove.add(other.id)
+          } else {
+            other.endIndex = newEmptyEnd
+            other.pointCount = other.endIndex - other.startIndex + 1
+          }
+          continue
+        }
+      }
+    }
+
+    // 移除被标记删除的段落
+    if (segmentsToRemove.size > 0) {
+      console.log('[adjustOverlappingEmptyBlocks] 第二步 - 删除段落:', Array.from(segmentsToRemove))
+      track.segments = track.segments.filter(s => !segmentsToRemove.has(s.id))
+      segmentsToRemove.forEach(id => selectedSegmentIds.value.delete(id))
+    }
+
+    // 添加新分割的空块
+    for (const newSegment of segmentsToAdd) {
+      track.segments.push({
+        ...newSegment,
+        id: generateId(),
+      })
+    }
+
+    console.log('[adjustOverlappingEmptyBlocks] 第二步结束 - 当前段落:',
+      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
+    )
+
+    // ========================================
+    // 第二步补：对于空块移动，如果有右邻居，扩展它填补左侧的空白
+    // ========================================
+    if (isSegmentEmpty) {
+      // 找出原始位置的右邻居
+      let originalRightNeighbor: TrackSegment | null = null
+      for (const s of track.segments) {
+        if (s.id === segmentId) continue
+        const originalPos = originalEmptyPositions.get(s.id)
+        if (originalPos && originalPos.start > oldEnd) {
+          if (!originalRightNeighbor || originalPos.start < (originalEmptyPositions.get(originalRightNeighbor.id)?.start ?? Infinity)) {
+            originalRightNeighbor = s
+          }
+        }
+      }
+
+      console.log('[adjustOverlappingEmptyBlocks] 第二步补 - 右邻居:',
+        originalRightNeighbor ? { id: originalRightNeighbor.id, start: originalRightNeighbor.startIndex, end: originalRightNeighbor.endIndex } : null
+      )
+
+      // 如果有右邻居，检查它左侧是否有空白需要填补
+      if (originalRightNeighbor) {
+        // 计算被移动段落结束位置与右邻居开始位置之间的空白
+        const gapAfterMovedSegment = newEnd + 1
+        if (originalRightNeighbor.startIndex > gapAfterMovedSegment) {
+          // 有空白，扩展右邻居
+          originalRightNeighbor.startIndex = gapAfterMovedSegment
+          originalRightNeighbor.pointCount = originalRightNeighbor.endIndex - originalRightNeighbor.startIndex + 1
+          console.log('[adjustOverlappingEmptyBlocks] 第二步补 - 扩展右邻居:', {
+            id: originalRightNeighbor.id,
+            newStart: originalRightNeighbor.startIndex,
+            newCount: originalRightNeighbor.pointCount
+          })
+        }
+      }
+    }
+
+    console.log('[adjustOverlappingEmptyBlocks] 第二步补结束 - 当前段落:',
+      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
+    )
+
+    // ========================================
+    // 第三步：确保整个轨道被完全覆盖（无空白区域）
+    // ========================================
+    const totalPts = points.value.length
+
+    // 收集所有段落（包括刚添加的）的范围
+    const allRanges: Array<{ start: number; end: number }> = []
+    for (const seg of track.segments) {
+      allRanges.push({ start: seg.startIndex, end: seg.endIndex })
+    }
+
+    // 按起始位置排序
+    allRanges.sort((a, b) => a.start - b.start)
+
+    console.log('[adjustOverlappingEmptyBlocks] 第三步 - 当前范围:', allRanges)
+
+    // 找出所有空隙并填补
+    let currentPos = 0
+    for (const range of allRanges) {
+      if (currentPos < range.start) {
+        console.log('[adjustOverlappingEmptyBlocks] 第三步 - 发现空隙:', {
+          from: currentPos,
+          to: range.start - 1
+        })
+        track.segments.push({
+          id: generateId(),
+          startIndex: currentPos,
+          endIndex: range.start - 1,
+          pointCount: range.start - currentPos,
+          value: null,
+          valueEn: null,
+          isEdited: false,
+        })
+      }
+      currentPos = range.end + 1
+    }
+
+    // 处理末尾的空区域
+    if (currentPos < totalPts) {
+      console.log('[adjustOverlappingEmptyBlocks] 第三步 - 发现末尾空隙:', {
+        from: currentPos,
+        to: totalPts - 1
+      })
+      track.segments.push({
+        id: generateId(),
+        startIndex: currentPos,
+        endIndex: totalPts - 1,
+        pointCount: totalPts - currentPos,
+        value: null,
+        valueEn: null,
+        isEdited: false,
+      })
+    }
+
+    // 重新排序段落
+    track.segments.sort((a, b) => a.startIndex - b.startIndex)
+
+    console.log('[adjustOverlappingEmptyBlocks] 最终段落:',
+      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
+    )
+
+    return segmentsToRemove.size + segmentsToAdd.length
+  }
+
+  // 拖动调整段落大小
+  function resizeSegment(
+    trackType: TrackType,
+    segmentId: string,
+    newStartIndex: number,
+    newEndIndex: number
+  ): { success: boolean; message?: string; autoMerged?: boolean } {
+    const track = tracks.value.find(t => t.type === trackType)
+    if (!track) {
+      return { success: false, message: '轨道不存在' }
+    }
+
+    const segment = track.segments.find(s => s.id === segmentId)
+    if (!segment) {
+      return { success: false, message: '段落不存在' }
+    }
+
+    // 验证最小尺寸
+    if (newEndIndex - newStartIndex + 1 < MIN_SEGMENT_SIZE) {
+      return { success: false, message: `段落不能小于 ${MIN_SEGMENT_SIZE} 个点` }
+    }
+
+    // 验证不交叉
+    if (!checkNoOverlap(track, segmentId, newStartIndex, newEndIndex)) {
+      return { success: false, message: '段落位置与其他段落冲突' }
+    }
+
+    // 检查自动合并
+    const { before, after } = getAdjacentSegments(track, segmentId, newStartIndex, newEndIndex)
+    let autoMerged = false
+    let finalSegmentId = segmentId
+
+    // 更新段落位置
+    const oldStart = segment.startIndex
+    const oldEnd = segment.endIndex
+
+    segment.startIndex = newStartIndex
+    segment.endIndex = newEndIndex
+    segment.pointCount = newEndIndex - newStartIndex + 1
+    segment.isEdited = true
+
+    // 处理重叠的空块
+    adjustOverlappingEmptyBlocks(track, segmentId, oldStart, oldEnd, newStartIndex, newEndIndex)
+
+    // 检查并执行合并
+    const idsToMerge: string[] = []
+    if (shouldAutoMerge(segment, before)) idsToMerge.push(before!.id)
+    if (shouldAutoMerge(segment, after)) idsToMerge.push(after!.id)
+
+    if (idsToMerge.length > 0) {
+      // 合并逻辑：将所有同值段落合并为一个大段落
+      const allRelatedSegments = [segment, ...idsToMerge.map(id => track.segments.find(s => s.id === id)!)]
+        .filter(Boolean)
+        .sort((a, b) => a.startIndex - b.startIndex)
+
+      const mergedSegment = allRelatedSegments[0]
+      mergedSegment.startIndex = Math.min(...allRelatedSegments.map(s => s.startIndex))
+      mergedSegment.endIndex = Math.max(...allRelatedSegments.map(s => s.endIndex))
+      mergedSegment.pointCount = mergedSegment.endIndex - mergedSegment.startIndex + 1
+      mergedSegment.isEdited = true
+
+      // 移除被合并的段落
+      track.segments = track.segments.filter(s => !idsToMerge.includes(s.id))
+
+      // 更新选中状态
+      idsToMerge.forEach(id => selectedSegmentIds.value.delete(id))
+      selectedSegmentIds.value.add(mergedSegment.id)
+
+      finalSegmentId = mergedSegment.id
+      autoMerged = true
+    }
+
+    // 记录历史
+    const direction = newStartIndex < oldStart ? '左' : newStartIndex > oldStart ? '右' : '双向'
+    recordHistory('resize', `调整${TRACK_DEFINITIONS[trackType].label}段落${direction}边界`)
+
+    return { success: true, autoMerged }
+  }
+
+  // 拖动移动段落
+  function moveSegment(
+    trackType: TrackType,
+    segmentId: string,
+    targetStartIndex: number
+  ): { success: boolean; message?: string; autoMerged?: boolean } {
+    const track = tracks.value.find(t => t.type === trackType)
+    if (!track) {
+      return { success: false, message: '轨道不存在' }
+    }
+
+    const segment = track.segments.find(s => s.id === segmentId)
+    if (!segment) {
+      return { success: false, message: '段落不存在' }
+    }
+
+    const size = segment.pointCount
+    const targetEndIndex = targetStartIndex + size - 1
+
+    // 检查是否移动到了原位置
+    if (targetStartIndex === segment.startIndex) {
+      return { success: true, autoMerged: false }
+    }
+
+    // 验证边界
+    if (targetStartIndex < 0 || targetEndIndex >= points.value.length) {
+      return { success: false, message: '超出轨迹范围' }
+    }
+
+    // 验证不交叉
+    if (!checkNoOverlap(track, segmentId, targetStartIndex, targetEndIndex)) {
+      return { success: false, message: '目标位置与其他段落冲突' }
+    }
+
+    // 更新段落位置
+    const oldStart = segment.startIndex
+    const oldEnd = segment.endIndex
+
+    segment.startIndex = targetStartIndex
+    segment.endIndex = targetEndIndex
+    segment.isEdited = true
+
+    // 处理重叠的空块
+    adjustOverlappingEmptyBlocks(track, segmentId, oldStart, oldEnd, targetStartIndex, targetEndIndex)
+
+    // 检查自动合并
+    const { before, after } = getAdjacentSegments(track, segmentId, targetStartIndex, targetEndIndex)
+    let autoMerged = false
+    let finalSegmentId = segmentId
+
+    const idsToMerge: string[] = []
+    if (shouldAutoMerge(segment, before)) idsToMerge.push(before!.id)
+    if (shouldAutoMerge(segment, after)) idsToMerge.push(after!.id)
+
+    if (idsToMerge.length > 0) {
+      // 合并逻辑
+      const allRelatedSegments = [segment, ...idsToMerge.map(id => track.segments.find(s => s.id === id)!)]
+        .filter(Boolean)
+        .sort((a, b) => a.startIndex - b.startIndex)
+
+      const mergedSegment = allRelatedSegments[0]
+      mergedSegment.startIndex = Math.min(...allRelatedSegments.map(s => s.startIndex))
+      mergedSegment.endIndex = Math.max(...allRelatedSegments.map(s => s.endIndex))
+      mergedSegment.pointCount = mergedSegment.endIndex - mergedSegment.startIndex + 1
+      mergedSegment.isEdited = true
+
+      track.segments = track.segments.filter(s => !idsToMerge.includes(s.id))
+
+      idsToMerge.forEach(id => selectedSegmentIds.value.delete(id))
+      selectedSegmentIds.value.add(mergedSegment.id)
+
+      finalSegmentId = mergedSegment.id
+      autoMerged = true
+    }
+
+    // 记录历史
+    const moveDistance = targetStartIndex > oldStart ? `+${targetStartIndex - oldStart}` : `${targetStartIndex - oldStart}`
+    recordHistory('move', `移动${TRACK_DEFINITIONS[trackType].label}段落 ${moveDistance} 点`)
+
+    return { success: true, autoMerged }
+  }
+
   // 悬停段落
   function hoverSegment(segmentId: string | null) {
     hoveredSegmentId.value = segmentId
@@ -693,6 +1393,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     persist,
     restoreSession,
     clearDraft,
+    clearHistory,
+    resetEditorState,
     updateSegmentValue,
     saveToServer,
     getTrackDefinition,
@@ -704,6 +1406,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     mergeSelectedSegments,
     canSplitSelected,
     splitSelectedSegments,
+    resizeSegment,
+    moveSegment,
     getSelectedSegmentsByTrack,
     hoverSegment,
     zoomIn,

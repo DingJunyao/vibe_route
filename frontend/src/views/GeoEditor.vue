@@ -34,6 +34,9 @@ const timelineTracksRef = ref<{ exitMultiSelectMode?: () => void } | null>(null)
 // 地图区域引用（用于滚轮缩放检测）
 const mapSectionRef = ref<HTMLElement | null>(null)
 
+// 地图组件引用（用于 resize）
+const mapRef = ref<{ resize?: () => void } | null>(null)
+
 // 高亮区域（支持多段）
 const highlightedSegments = computed(() => {
   const segments: Array<{ start: number; end: number }> = []
@@ -820,6 +823,63 @@ async function handleSave() {
   }
 }
 
+// 重新载入
+async function handleReload() {
+  try {
+    await ElMessageBox.confirm(
+      '重新载入后，会清除全部的本地未保存更改。确认？',
+      '确认重新载入',
+      {
+        confirmButtonText: '确认',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+
+    // 用户确认，先清除本地状态再重新加载数据
+    isLoading.value = true
+    try {
+      // 先清除草稿和历史记录
+      geoEditorStore.clearDraft()
+      geoEditorStore.clearHistory()
+
+      // 重新加载数据（跳过恢复会话）
+      await geoEditorStore.loadEditorData(Number(route.params.id), true)
+
+      // 重置其他编辑状态
+      geoEditorStore.resetZoom()
+      geoEditorStore.setPointerPosition(0)
+      geoEditorStore.clearSelection()
+
+      ElMessage.success('重新载入成功')
+    } catch (error: any) {
+      ElMessage.error(error.response?.data?.detail || '重新载入失败')
+    } finally {
+      isLoading.value = false
+    }
+  } catch {
+    // 用户取消
+  }
+}
+
+// 切换图表展开/折叠（需要调整地图大小）
+function toggleChart() {
+  geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded
+  // 等待 DOM 更新后调整地图大小
+  nextTick(() => {
+    mapRef.value?.resize()
+  })
+}
+
+// 切换时间轴展开/折叠（需要调整地图大小）
+function toggleTimeline() {
+  geoEditorStore.isTimelineExpanded = !geoEditorStore.isTimelineExpanded
+  // 等待 DOM 更新后调整地图大小
+  nextTick(() => {
+    mapRef.value?.resize()
+  })
+}
+
 // 缩放控制
 function handleZoomIn() {
   // 以指针位置为中心放大
@@ -931,6 +991,26 @@ function handleSegmentSave(data: { trackType: TrackType; segmentId: string; valu
   geoEditorStore.updateSegmentValue(data.trackType, data.segmentId, data.value, data.valueEn)
 }
 
+// 时间轴段落拖动调整
+function handleSegmentResize(data: { trackType: TrackType; segmentId: string; newStartIndex: number; newEndIndex: number }) {
+  const result = geoEditorStore.resizeSegment(data.trackType, data.segmentId, data.newStartIndex, data.newEndIndex)
+  if (!result.success) {
+    ElMessage.warning(result.message || '调整失败')
+  } else if (result.autoMerged) {
+    ElMessage.success('已自动合并同值段落')
+  }
+}
+
+// 时间轴段落拖动移动
+function handleSegmentMove(data: { trackType: TrackType; segmentId: string; targetStartIndex: number }) {
+  const result = geoEditorStore.moveSegment(data.trackType, data.segmentId, data.targetStartIndex)
+  if (!result.success) {
+    ElMessage.warning(result.message || '移动失败')
+  } else if (result.autoMerged) {
+    ElMessage.success('已自动合并同值段落')
+  }
+}
+
 // 图表高亮
 function handleChartHighlight(dataIndex: number) {
   for (const track of geoEditorStore.tracks) {
@@ -1032,6 +1112,14 @@ function handleMapPointHover(_point: any, pointIndex: number) {
           >
             保存
           </el-button>
+          <el-button
+            :icon="Refresh"
+            :loading="isLoading"
+            @click="handleReload"
+            class="nav-btn"
+          >
+            重新载入
+          </el-button>
         </div>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
@@ -1073,6 +1161,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
         <!-- 地图区域 -->
         <div ref="mapSectionRef" class="map-section">
           <UniversalMap
+            ref="mapRef"
             :tracks="mapTracks"
             :highlight-segments="highlightedSegments"
             :highlight-point-index="highlightPointIndex"
@@ -1137,7 +1226,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                   <el-button
                     :type="geoEditorStore.isChartExpanded ? 'primary' : ''"
                     :icon="Histogram"
-                    @click="geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded"
+                    @click="toggleChart"
                     class="icon-button"
                   />
                 </el-tooltip>
@@ -1145,7 +1234,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                   <el-button
                     :type="geoEditorStore.isTimelineExpanded ? 'primary' : ''"
                     :icon="Clock"
-                    @click="geoEditorStore.isTimelineExpanded = !geoEditorStore.isTimelineExpanded"
+                    @click="toggleTimeline"
                     class="icon-button"
                   />
                 </el-tooltip>
@@ -1211,6 +1300,8 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                 @hover="handleSegmentHover"
                 @save="handleSegmentSave"
                 @multi-select-change="handleMultiSelectChange"
+                @resize="handleSegmentResize"
+                @move="handleSegmentMove"
               />
             </div>
 

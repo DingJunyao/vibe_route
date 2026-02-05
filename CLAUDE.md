@@ -1344,3 +1344,55 @@ longitude=p.longitude_wgs84,  # WGS84
 - [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - 坐标处理
 - [`backend/app/schemas/geo_editor.py`](backend/app/schemas/geo_editor.py) - Schema 字段添加
 - [`backend/app/services/geo_editor_service.py`](backend/app/services/geo_editor_service.py) - Service 坐标修复
+
+### 地理信息编辑器空块操作修复
+
+**问题背景**：
+
+1. 移动空块时，相邻空块被错误删除
+2. 调整空块大小时，新空块错误延伸到时间轴尾部
+
+**根本原因**：
+
+1. `shouldAutoMerge` 函数对空块返回 `true`（`null === null`），导致空块自动合并
+2. `adjustOverlappingEmptyBlocks` 函数未区分移动和调整大小操作，resize 时错误扩展邻居
+
+**解决方案**：
+
+**1. 空块不自动合并** ([`geoEditor.ts`](frontend/src/stores/geoEditor.ts))
+
+修改 `shouldAutoMerge` 函数，对空块返回 `false`：
+
+```typescript
+function shouldAutoMerge(
+  segment: TrackSegment,
+  adjacent: TrackSegment | null
+): boolean {
+  if (!adjacent) return false
+  // 空块不自动合并
+  if (!segment.value || !adjacent.value) return false
+  return segment.value === adjacent.value && segment.valueEn === adjacent.valueEn
+}
+```
+
+**2. 空块 resize 操作特殊处理** ([`geoEditor.ts`](frontend/src/stores/geoEditor.ts))
+
+在 `adjustOverlappingEmptyBlocks` 函数中添加操作类型检测：
+
+```typescript
+// 检测是否是 resize 操作（只有一边改变）
+const isResize = oldStart === newStart || oldEnd === newEnd
+const isLeftResize = oldEnd === newEnd && oldStart !== newStart  // 调整左边界
+const isRightResize = oldStart === newStart && oldEnd !== newEnd  // 调整右边界
+```
+
+**resize 时的处理**：
+
+- 不扩展邻居（这是移动操作的逻辑）
+- 创建新空块填补被缩小部分
+- 调整右边界缩小时：在 `(newEnd+1, oldEnd)` 创建新空块
+- 调整左边界缩小时：在 `(oldStart, newStart-1)` 创建新空块
+
+**涉及文件**：
+
+- [`frontend/src/stores/geoEditor.ts`](frontend/src/stores/geoEditor.ts) - `shouldAutoMerge` 和 `adjustOverlappingEmptyBlocks` 函数
