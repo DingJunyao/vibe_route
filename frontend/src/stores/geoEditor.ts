@@ -32,11 +32,11 @@ export interface EditHistory {
   description: string
   before: {
     tracks: TrackTimeline[]
-    selectedSegmentId: string | null
+    selectedSegmentIds: string[]
   }
   after: {
     tracks: TrackTimeline[]
-    selectedSegmentId: string | null
+    selectedSegmentIds: string[]
   }
 }
 
@@ -61,7 +61,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   const totalDuration = ref(0)
 
   // 选择状态
-  const selectedSegmentId = ref<string | null>(null)
+  const selectedSegmentIds = ref<Set<string>>(new Set())
   const hoveredSegmentId = ref<string | null>(null)
 
   // 刻度显示
@@ -90,6 +90,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   // Getters
   const canUndo = computed(() => historyIndex.value > 0)
   const canRedo = computed(() => historyIndex.value < history.value.length - 1)
+  const selectedCount = computed(() => selectedSegmentIds.value.size)
 
   // 获取轨道定义
   const getTrackDefinition = (type: TrackType) => TRACK_DEFINITIONS[type]
@@ -189,11 +190,11 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
       description,
       before: {
         tracks: JSON.parse(JSON.stringify(before.tracks)),
-        selectedSegmentId: before.selectedSegmentId,
+        selectedSegmentIds: Array.from(before.selectedSegmentIds),
       },
       after: {
         tracks: JSON.parse(JSON.stringify(tracks.value)),
-        selectedSegmentId: selectedSegmentId.value,
+        selectedSegmentIds: Array.from(selectedSegmentIds.value),
       },
     }
 
@@ -232,7 +233,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   // 恢复状态
   function restoreState(state: EditHistory['before'] | EditHistory['after']) {
     tracks.value = JSON.parse(JSON.stringify(state.tracks))
-    selectedSegmentId.value = state.selectedSegmentId
+    selectedSegmentIds.value = new Set(state.selectedSegmentIds || [])
     hasUnsavedChanges.value = true
   }
 
@@ -303,11 +304,11 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
         description: '初始化',
         before: {
           tracks: JSON.parse(JSON.stringify(tracks.value)),
-          selectedSegmentId: selectedSegmentId.value,
+          selectedSegmentIds: Array.from(selectedSegmentIds.value),
         },
         after: {
           tracks: JSON.parse(JSON.stringify(tracks.value)),
-          selectedSegmentId: selectedSegmentId.value,
+          selectedSegmentIds: Array.from(selectedSegmentIds.value),
         },
       })
       historyIndex.value = 0
@@ -353,9 +354,154 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     await loadEditorData(trackId.value)
   }
 
-  // 选择段落
-  function selectSegment(segmentId: string) {
-    selectedSegmentId.value = segmentId
+  // 选择段落（支持多选）
+  function selectSegment(segmentId: string | null, addToSelection: boolean = false) {
+    if (segmentId === null) {
+      selectedSegmentIds.value.clear()
+      return
+    }
+
+    if (addToSelection) {
+      // 切换选中状态
+      if (selectedSegmentIds.value.has(segmentId)) {
+        selectedSegmentIds.value.delete(segmentId)
+      } else {
+        selectedSegmentIds.value.add(segmentId)
+      }
+    } else {
+      // 单选：清除其他，只选中当前
+      selectedSegmentIds.value.clear()
+      selectedSegmentIds.value.add(segmentId)
+    }
+  }
+
+  // 清除所有选择
+  function clearSelection() {
+    selectedSegmentIds.value.clear()
+  }
+
+  // 批量清空选中的段落
+  function clearSelectedSegments() {
+    let clearedCount = 0
+    for (const track of tracks.value) {
+      for (const segment of track.segments) {
+        if (selectedSegmentIds.value.has(segment.id)) {
+          segment.value = null
+          segment.valueEn = null
+          segment.isEdited = true
+          clearedCount++
+        }
+      }
+    }
+
+    if (clearedCount > 0) {
+      recordHistory('edit', `批量清空 ${clearedCount} 个段落`)
+    }
+  }
+
+  // 检查是否可以合并（至少有两个连续选中的块）
+  function canMergeSelected(): boolean {
+    for (const track of tracks.value) {
+      const selectedSegments = track.segments
+        .filter(s => selectedSegmentIds.value.has(s.id))
+        .sort((a, b) => a.startIndex - b.startIndex)
+
+      for (let i = 1; i < selectedSegments.length; i++) {
+        if (selectedSegments[i].startIndex === selectedSegments[i - 1].endIndex + 1) {
+          return true
+        }
+      }
+    }
+    return false
+  }
+
+  // 批量合并选中的段落
+  function mergeSelectedSegments() {
+    let mergedCount = 0
+    const idsToKeep = new Set<string>()
+
+    for (const track of tracks.value) {
+      // 获取该轨道选中的段落，按位置排序
+      const selectedSegments = track.segments
+        .filter(s => selectedSegmentIds.value.has(s.id))
+        .sort((a, b) => a.startIndex - b.startIndex)
+
+      if (selectedSegments.length < 2) continue
+
+      // 找出连续选中的段落组
+      const groups: TrackSegment[][] = []
+      let currentGroup: TrackSegment[] = [selectedSegments[0]]
+
+      for (let i = 1; i < selectedSegments.length; i++) {
+        const prev = selectedSegments[i - 1]
+        const curr = selectedSegments[i]
+
+        // 检查是否连续
+        const isConsecutive = curr.startIndex === prev.endIndex + 1
+
+        if (isConsecutive) {
+          currentGroup.push(curr)
+        } else {
+          groups.push([...currentGroup])
+          currentGroup = [curr]
+        }
+      }
+      groups.push(currentGroup)
+
+      // 合并每个连续组
+      for (const group of groups) {
+        if (group.length < 2) continue
+
+        // 找到第一个非空块的值
+        const firstNonEmpty = group.find(s => s.value !== null)
+        const mergeValue = firstNonEmpty?.value ?? null
+        const mergeValueEn = firstNonEmpty?.valueEn ?? null
+
+        // 合并：更新第一个块，标记要保留的 ID
+        const first = group[0]
+        const last = group[group.length - 1]
+
+        first.endIndex = last.endIndex
+        first.pointCount = last.endIndex - first.startIndex + 1
+        first.value = mergeValue
+        first.valueEn = mergeValueEn
+        first.isEdited = true
+
+        idsToKeep.add(first.id)
+
+        // 从轨道中移除其他块
+        const idsToRemove = new Set(group.slice(1).map(s => s.id))
+        track.segments = track.segments.filter(s => !idsToRemove.has(s.id))
+
+        mergedCount++
+      }
+    }
+
+    // 更新选择状态：只保留有效的 ID
+    selectedSegmentIds.value = idsToKeep
+
+    if (mergedCount > 0) {
+      recordHistory('edit', `合并 ${mergedCount} 组段落`)
+    }
+  }
+
+  // 按轨道获取选中的段落
+  function getSelectedSegmentsByTrack(): Record<TrackType, TrackSegment[]> {
+    const result: Record<TrackType, TrackSegment[]> = {
+      province: [],
+      city: [],
+      district: [],
+      roadNumber: [],
+      roadName: [],
+    }
+    for (const track of tracks.value) {
+      for (const segment of track.segments) {
+        if (selectedSegmentIds.value.has(segment.id)) {
+          result[track.type].push(segment)
+        }
+      }
+    }
+    return result
   }
 
   // 悬停段落
@@ -454,7 +600,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     points,
     tracks,
     totalDuration,
-    selectedSegmentId,
+    selectedSegmentIds,
+    selectedCount,
     hoveredSegmentId,
     timeScaleUnit,
     isChartExpanded,
@@ -485,6 +632,11 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     getTrackDefinition,
     getAllTrackTypes,
     selectSegment,
+    clearSelection,
+    clearSelectedSegments,
+    canMergeSelected,
+    mergeSelectedSegments,
+    getSelectedSegmentsByTrack,
     hoverSegment,
     zoomIn,
     zoomOut,

@@ -14,6 +14,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 在调试的时候，会打开开发人员工具。可以使用 Chrome devtools MCP 获取其中的报错、网络分析、性能分析、DOM 结构等信息。
 
+开发者使用的是 Edge。如果找不到，要求开发者运行以下命令以启用带远程调试功能的 Edge：
+
+```powershell
+Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -ArgumentList "--remote-debugging-port=9222"
+```
+
 ## Development Commands
 
 ### Backend
