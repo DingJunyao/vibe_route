@@ -958,6 +958,26 @@ function handleExitMultiSelect() {
 
 // 全局键盘事件
 function handleGlobalKeydown(e: KeyboardEvent) {
+  // Ctrl+Z 撤销 / Ctrl+Y 重做
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    if (e.key === 'z') {
+      e.preventDefault()
+      if (geoEditorStore.canUndo) {
+        geoEditorStore.undo()
+        ElMessage.success('已撤销')
+      }
+      return
+    }
+    if (e.key === 'y') {
+      e.preventDefault()
+      if (geoEditorStore.canRedo) {
+        geoEditorStore.redo()
+        ElMessage.success('已重做')
+      }
+      return
+    }
+  }
+
   // Esc 退出多选或取消选择
   if (e.key === 'Escape') {
     if (isMultiSelectMode.value) {
@@ -967,12 +987,16 @@ function handleGlobalKeydown(e: KeyboardEvent) {
       e.preventDefault()
       geoEditorStore.clearSelection()
     }
+    return
   }
+
   // Delete 快捷键清空
   if (e.key === 'Delete' && geoEditorStore.selectedCount > 0) {
     e.preventDefault()
     handleBatchClear()
+    return
   }
+
   // S 快捷键拆分（仅单字母，避免干扰输入）
   if (e.key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
     // 确保不是在输入框中

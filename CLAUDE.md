@@ -1396,3 +1396,86 @@ const isRightResize = oldStart === newStart && oldEnd !== newEnd  // 调整右�
 **涉及文件**：
 
 - [`frontend/src/stores/geoEditor.ts`](frontend/src/stores/geoEditor.ts) - `shouldAutoMerge` 和 `adjustOverlappingEmptyBlocks` 函数
+
+### 地理信息编辑器撤销/重做修复
+
+**问题背景**：
+
+1. 移动块、改变块大小无法撤销
+2. 缺少键盘快捷键（Ctrl+Z 撤销、Ctrl+Y 重做）
+
+**根本原因**：
+
+1. `EditHistory['action']` 类型定义不完整，缺少 `'move'` 类型
+2. 前端未绑定键盘快捷键
+
+**解决方案**：
+
+**1. 扩展历史记录操作类型** ([`geoEditor.ts`](frontend/src/stores/geoEditor.ts))
+
+```typescript
+export interface EditHistory {
+  // ...
+  action: 'edit' | 'resize' | 'move'  // 添加 'move' 类型
+  // ...
+}
+```
+
+**2. 添加键盘快捷键** ([`GeoEditor.vue`](frontend/src/views/GeoEditor.vue))
+
+在 `handleGlobalKeydown` 中添加：
+
+```typescript
+// Ctrl+Z 撤销 / Ctrl+Y 重做
+if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+  if (e.key === 'z') {
+    e.preventDefault()
+    if (geoEditorStore.canUndo) {
+      geoEditorStore.undo()
+      ElMessage.success('已撤销')
+    }
+    return
+  }
+  if (e.key === 'y') {
+    e.preventDefault()
+    if (geoEditorStore.canRedo) {
+      geoEditorStore.redo()
+      ElMessage.success('已重做')
+    }
+    return
+  }
+}
+```
+
+**3. 撤销/重做逻辑**
+
+```typescript
+// 撤销：historyIndex--，恢复到 history[historyIndex].after
+function undo() {
+  if (!canUndo.value) return
+  historyIndex.value--
+  restoreState(history.value[historyIndex.value].after)
+}
+
+// 重做：historyIndex++，恢复到 history[historyIndex].after
+function redo() {
+  if (!canRedo.value) return
+  historyIndex.value++
+  restoreState(history.value[historyIndex.value].after)
+}
+```
+
+#### 历史记录结构
+
+```text
+history[0]: 初始状态 (before = after = 初始状态)
+history[1]: resize 操作 (before = 初始状态, after = resize 后)
+history[2]: move 操作  (before = resize 后, after = move 后)
+```
+
+从 history[2] 撤销 → historyIndex = 1 → 恢复到 history[1].after（resize 后的状态）
+
+**涉及文件**：
+
+- [`frontend/src/stores/geoEditor.ts`](frontend/src/stores/geoEditor.ts) - 类型定义、undo/redo 函数
+- [`frontend/src/views/GeoEditor.vue`](frontend/src/views/GeoEditor.vue) - 键盘快捷键绑定

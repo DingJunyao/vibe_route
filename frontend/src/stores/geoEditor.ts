@@ -28,7 +28,7 @@ export interface TrackTimeline {
 export interface EditHistory {
   id: string
   timestamp: number
-  action: 'edit' | 'resize'
+  action: 'edit' | 'resize' | 'move'
   description: string
   before: {
     tracks: TrackTimeline[]
@@ -116,6 +116,23 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     if (!skipRestoreSession) {
       restoreSession(trackIdParam)
     }
+
+    // 如果历史记录为空或无效（historyIndex < 0），创建基准快照
+    if (history.value.length === 0 || historyIndex.value < 0) {
+      const initialSnapshot = {
+        tracks: JSON.parse(JSON.stringify(tracks.value)),
+        selectedSegmentIds: Array.from(selectedSegmentIds.value),
+      }
+      history.value = [{
+        id: generateId(),
+        timestamp: Date.now(),
+        action: 'initialize',
+        description: '初始状态',
+        before: initialSnapshot,
+        after: initialSnapshot,
+      }]
+      historyIndex.value = 0
+    }
   }
 
   // 初始化轨道（自动分段）
@@ -175,26 +192,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
   // 记录历史
   function recordHistory(action: EditHistory['action'], description: string) {
-    // 如果历史记录为空，先保存初始状态
-    if (history.value.length === 0) {
-      const initialState = {
-        tracks: JSON.parse(JSON.stringify(tracks.value)),
-        selectedSegmentIds: Array.from(selectedSegmentIds.value),
-      }
-      history.value.push({
-        id: generateId(),
-        timestamp: Date.now(),
-        action: 'edit',
-        description: '初始状态',
-        before: JSON.parse(JSON.stringify(initialState)),
-        after: JSON.parse(JSON.stringify(initialState)),
-      })
-      historyIndex.value = 0
-      return // 初始状态不需要再次记录
-    }
-
-    const before = history.value[historyIndex.value]?.after
-    if (!before) return
+    // 获取 before 状态（使用当前历史记录的 after）
+    const currentState = history.value[historyIndex.value].after
 
     const historyItem: EditHistory = {
       id: generateId(),
@@ -202,13 +201,25 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
       action,
       description,
       before: {
-        tracks: JSON.parse(JSON.stringify(before.tracks)),
-        selectedSegmentIds: Array.from(before.selectedSegmentIds),
+        tracks: JSON.parse(JSON.stringify(currentState.tracks)),
+        selectedSegmentIds: Array.from(currentState.selectedSegmentIds),
       },
       after: {
         tracks: JSON.parse(JSON.stringify(tracks.value)),
         selectedSegmentIds: Array.from(selectedSegmentIds.value),
       },
+    }
+
+    // 检查是否有实际变化
+    const beforeTracks = JSON.stringify(historyItem.before.tracks)
+    const afterTracks = JSON.stringify(historyItem.after.tracks)
+    const beforeSelected = JSON.stringify(historyItem.before.selectedSegmentIds)
+    const afterSelected = JSON.stringify(historyItem.after.selectedSegmentIds)
+    const hasNoChange = beforeTracks === afterTracks && beforeSelected === afterSelected
+
+    // 如果没有实际变化，不记录历史
+    if (hasNoChange) {
+      return
     }
 
     // 如果在历史中间进行了新操作，删除当前位置之后的所有记录
@@ -219,9 +230,9 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     history.value.push(historyItem)
     historyIndex.value = history.value.length - 1
 
-    // 限制历史数量
-    if (history.value.length > 50) {
-      history.value.shift()
+    // 限制历史数量（注意保留基准快照）
+    if (history.value.length > 51) {
+      history.value.splice(1, 1)  // 删除第二个元素，保留基准快照
       historyIndex.value--
     }
 
@@ -232,13 +243,15 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
   // 撤销
   function undo() {
     if (!canUndo.value) return
+
     historyIndex.value--
-    restoreState(history.value[historyIndex.value].before)
+    restoreState(history.value[historyIndex.value].after)
   }
 
   // 重做
   function redo() {
     if (!canRedo.value) return
+
     historyIndex.value++
     restoreState(history.value[historyIndex.value].after)
   }
@@ -275,7 +288,7 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     try {
       const parsed = JSON.parse(data)
       history.value = parsed.history || []
-      historyIndex.value = parsed.historyIndex || -1
+      historyIndex.value = parsed.historyIndex ?? -1
       tracks.value = parsed.tracks || tracks.value
 
       if (parsed.savedAt) {
@@ -675,16 +688,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
       }
     }
 
-    // DEBUG: 打印初始状态
-    console.log('[adjustOverlappingEmptyBlocks] 初始状态:', {
-      segmentId,
-      isSegmentEmpty,
-      oldStart, oldEnd,
-      newStart, newEnd,
-      segmentsBefore: track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value })),
-      originalEmptyPositions: Array.from(originalEmptyPositions.entries())
-    })
-
     // ========================================
     // 第一步：处理原位置留下的空隙（先处理原位置！）
     // ========================================
@@ -698,13 +701,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
       // ========================================
       // 空块 resize：不扩展邻居，创建新空块填补空白
       // ========================================
-      console.log('[adjustOverlappingEmptyBlocks] 第一步 - 空块resize操作', {
-        isLeftResize,
-        isRightResize,
-        oldStart, oldEnd,
-        newStart, newEnd
-      })
-
       if (isLeftResize) {
         // 调整左边界：右边空出来
         if (newStart > oldStart) {
@@ -723,7 +719,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
               valueEn: null,
               isEdited: false,
             })
-            console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建左空隙:', { gapStart, gapEnd })
           }
         } else {
           // 左边界左移，需要检查是否覆盖了其他块
@@ -745,7 +740,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
               valueEn: null,
               isEdited: false,
             })
-            console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建右空隙:', { gapStart, gapEnd })
           }
         } else {
           // 右边界右移，需要检查是否覆盖了其他块
@@ -779,32 +773,17 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
         }
       }
 
-      console.log('[adjustOverlappingEmptyBlocks] 第一步 - 邻居:', {
-        originalLeftNeighbor: originalLeftNeighbor ? { id: originalLeftNeighbor.id, start: originalLeftNeighbor.startIndex, end: originalLeftNeighbor.endIndex } : null,
-        originalRightNeighbor: originalRightNeighbor ? { id: originalRightNeighbor.id, start: originalRightNeighbor.startIndex, end: originalRightNeighbor.endIndex } : null
-      })
-
       // 先扩展邻居填补原位置（在移动之前）
       if (originalLeftNeighbor) {
         // 左邻居：扩展到包含原位置（暂时不考虑新位置重叠）
         originalLeftNeighbor.endIndex = oldEnd
         originalLeftNeighbor.pointCount = originalLeftNeighbor.endIndex - originalLeftNeighbor.startIndex + 1
-        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 扩展左邻居:', {
-          id: originalLeftNeighbor.id,
-          newEnd: originalLeftNeighbor.endIndex,
-          newCount: originalLeftNeighbor.pointCount
-        })
       }
 
       if (originalRightNeighbor && !originalLeftNeighbor) {
         // 只有右邻居时才扩展右邻居
         originalRightNeighbor.startIndex = oldStart
         originalRightNeighbor.pointCount = originalRightNeighbor.endIndex - originalRightNeighbor.startIndex + 1
-        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 扩展右邻居:', {
-          id: originalRightNeighbor.id,
-          newStart: originalRightNeighbor.startIndex,
-          newCount: originalRightNeighbor.pointCount
-        })
       }
 
       // 如果都没有邻居，创建新空块
@@ -818,7 +797,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
           valueEn: null,
           isEdited: false,
         })
-        console.log('[adjustOverlappingEmptyBlocks] 第一步 - 创建新空块')
       }
     } else {
       // 正常块移动：填补原位置的空隙
@@ -858,10 +836,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     // ========================================
     // 第二步：处理被移动段落在新位置与其他段落的重叠
     // ========================================
-    console.log('[adjustOverlappingEmptyBlocks] 第二步开始 - 当前段落:',
-      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
-    )
-
     const allOtherSegments = track.segments.filter(s => s.id !== segmentId)
 
     for (const other of allOtherSegments) {
@@ -870,23 +844,11 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
       if (!hasOverlap) continue
 
-      console.log('[adjustOverlappingEmptyBlocks] 第二步 - 发现重叠:', {
-        other: { id: other.id, start: other.startIndex, end: other.endIndex, value: other.value },
-        movedSegment: { newStart, newEnd }
-      })
-
       // 两个空块之间的重叠：调整另一个的边界
       if (isSegmentEmpty && !other.value) {
         // 判断相对位置：比较原始起始位置
         const otherOriginalPos = originalEmptyPositions.get(other.id)
         const otherOriginalStart = otherOriginalPos?.start ?? other.startIndex
-
-        console.log('[adjustOverlappingEmptyBlocks] 第二步 - 空块重叠处理:', {
-          otherId: other.id,
-          otherOriginalStart,
-          oldStart,
-          isLeft: otherOriginalStart < oldStart
-        })
 
         if (otherOriginalStart < oldStart) {
           // other 原本在左边，调整其结束位置（不能超过新位置起点）
@@ -894,14 +856,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
           if (newOtherEnd >= other.startIndex) {
             other.endIndex = newOtherEnd
             other.pointCount = other.endIndex - other.startIndex + 1
-            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 调整左邻居:', {
-              id: other.id,
-              newEnd: newOtherEnd,
-              newCount: other.pointCount
-            })
           } else {
             segmentsToRemove.add(other.id)
-            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 标记删除左邻居:', other.id)
           }
         } else {
           // other 原本在右边，调整其起始位置（不能小于新位置终点）
@@ -909,14 +865,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
           if (newOtherStart <= other.endIndex) {
             other.startIndex = newOtherStart
             other.pointCount = other.endIndex - other.startIndex + 1
-            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 调整右邻居:', {
-              id: other.id,
-              newStart: newOtherStart,
-              newCount: other.pointCount
-            })
           } else {
             segmentsToRemove.add(other.id)
-            console.log('[adjustOverlappingEmptyBlocks] 第二步 - 标记删除右邻居:', other.id)
           }
         }
         continue
@@ -987,7 +937,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
     // 移除被标记删除的段落
     if (segmentsToRemove.size > 0) {
-      console.log('[adjustOverlappingEmptyBlocks] 第二步 - 删除段落:', Array.from(segmentsToRemove))
       track.segments = track.segments.filter(s => !segmentsToRemove.has(s.id))
       segmentsToRemove.forEach(id => selectedSegmentIds.value.delete(id))
     }
@@ -999,10 +948,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
         id: generateId(),
       })
     }
-
-    console.log('[adjustOverlappingEmptyBlocks] 第二步结束 - 当前段落:',
-      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
-    )
 
     // ========================================
     // 第二步补：对于空块移动，如果有右邻居，扩展它填补左侧的空白
@@ -1020,10 +965,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
         }
       }
 
-      console.log('[adjustOverlappingEmptyBlocks] 第二步补 - 右邻居:',
-        originalRightNeighbor ? { id: originalRightNeighbor.id, start: originalRightNeighbor.startIndex, end: originalRightNeighbor.endIndex } : null
-      )
-
       // 如果有右邻居，检查它左侧是否有空白需要填补
       if (originalRightNeighbor) {
         // 计算被移动段落结束位置与右邻居开始位置之间的空白
@@ -1032,18 +973,9 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
           // 有空白，扩展右邻居
           originalRightNeighbor.startIndex = gapAfterMovedSegment
           originalRightNeighbor.pointCount = originalRightNeighbor.endIndex - originalRightNeighbor.startIndex + 1
-          console.log('[adjustOverlappingEmptyBlocks] 第二步补 - 扩展右邻居:', {
-            id: originalRightNeighbor.id,
-            newStart: originalRightNeighbor.startIndex,
-            newCount: originalRightNeighbor.pointCount
-          })
         }
       }
     }
-
-    console.log('[adjustOverlappingEmptyBlocks] 第二步补结束 - 当前段落:',
-      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
-    )
 
     // ========================================
     // 第三步：确保整个轨道被完全覆盖（无空白区域）
@@ -1059,16 +991,10 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     // 按起始位置排序
     allRanges.sort((a, b) => a.start - b.start)
 
-    console.log('[adjustOverlappingEmptyBlocks] 第三步 - 当前范围:', allRanges)
-
     // 找出所有空隙并填补
     let currentPos = 0
     for (const range of allRanges) {
       if (currentPos < range.start) {
-        console.log('[adjustOverlappingEmptyBlocks] 第三步 - 发现空隙:', {
-          from: currentPos,
-          to: range.start - 1
-        })
         track.segments.push({
           id: generateId(),
           startIndex: currentPos,
@@ -1084,10 +1010,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
     // 处理末尾的空区域
     if (currentPos < totalPts) {
-      console.log('[adjustOverlappingEmptyBlocks] 第三步 - 发现末尾空隙:', {
-        from: currentPos,
-        to: totalPts - 1
-      })
       track.segments.push({
         id: generateId(),
         startIndex: currentPos,
@@ -1101,10 +1023,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
     // 重新排序段落
     track.segments.sort((a, b) => a.startIndex - b.startIndex)
-
-    console.log('[adjustOverlappingEmptyBlocks] 最终段落:',
-      track.segments.map(s => ({ id: s.id, start: s.startIndex, end: s.endIndex, value: s.value }))
-    )
 
     return segmentsToRemove.size + segmentsToAdd.length
   }
