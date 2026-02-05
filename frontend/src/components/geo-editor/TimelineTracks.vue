@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { TrackTimeline, TrackSegment, TrackType } from '@/stores/geo_editor'
 import { ElMessageBox } from 'element-plus'
 import { useGeoEditorStore } from '@/stores/geoEditor'
@@ -18,6 +18,7 @@ const emit = defineEmits<{
   select: [segmentId: string | null, addToSelection: boolean]
   hover: [segmentId: string | null]
   save: [data: { trackType: TrackType; segmentId: string; value: string; valueEn: string | null }]
+  'multi-select-change': [isActive: boolean]
 }>()
 
 const geoEditorStore = useGeoEditorStore()
@@ -52,6 +53,84 @@ onUnmounted(() => {
 const lastTapTime = ref(0)
 const lastTapSegmentId = ref('')
 const DOUBLE_TAP_DELAY = 300  // 双击间隔（毫秒）
+
+// 移动端多选模式（长按进入）
+const isMultiSelectMode = ref(false)
+const longPressTimer = ref<number | null>(null)
+const LONG_PRESS_DURATION = 500  // 长按触发时长（毫秒）
+const longPressElement = ref<HTMLElement | null>(null)
+
+// 长按开始
+function handleLongPressStart(segmentId: string, e: TouchEvent) {
+  // 清除之前的定时器
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+  }
+
+  const touch = e.touches[0]
+  longPressElement.value = e.target as HTMLElement
+
+  longPressTimer.value = window.setTimeout(() => {
+    // 长按触发：进入多选模式并选中当前块
+    isMultiSelectMode.value = true
+    emit('select', segmentId, true)  // addToSelection = true
+
+    // 触觉反馈（如果支持）
+    if ('vibrate' in navigator) {
+      navigator.vibrate(50)
+    }
+  }, LONG_PRESS_DURATION)
+}
+
+// 长按取消（移动或松开）
+function handleLongPressCancel() {
+  if (longPressTimer.value) {
+    clearTimeout(longPressTimer.value)
+    longPressTimer.value = null
+  }
+  longPressElement.value = null
+}
+
+// 移动端触摸处理（双击编辑 + 长按多选）
+function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: TouchEvent) {
+  if (e.touches.length !== 1) return
+
+  const now = Date.now()
+  const isDoubleTap =
+    now - lastTapTime.value < DOUBLE_TAP_DELAY &&
+    lastTapSegmentId.value === segment.id
+
+  if (isDoubleTap) {
+    // 双击：打开编辑对话框
+    e.preventDefault()
+    handleDoubleClick(trackType, segment)
+    // 重置状态
+    lastTapTime.value = 0
+    lastTapSegmentId.value = ''
+    handleLongPressCancel()
+  } else if (isMultiSelectMode.value) {
+    // 多选模式：切换选中状态
+    e.preventDefault()
+    emit('select', segment.id, true)  // addToSelection = true
+    // 记录单击时间但不重置多选模式
+    lastTapTime.value = now
+    lastTapSegmentId.value = segment.id
+  } else {
+    // 普通模式：记录单击时间，启动长按检测
+    lastTapTime.value = now
+    lastTapSegmentId.value = segment.id
+    handleLongPressStart(segment.id, e)
+  }
+}
+
+// 触摸移动或结束，取消长按
+function handleTouchMove() {
+  handleLongPressCancel()
+}
+
+function handleTouchEnd() {
+  handleLongPressCancel()
+}
 
 // 轨道配置
 const TRACK_CONFIG = {
@@ -115,30 +194,6 @@ function handleDoubleClick(trackType: TrackType, segment: TrackSegment) {
   editDialogVisible.value = true
 }
 
-// 移动端触摸处理（模拟双击）
-function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: Event) {
-  const touchEvent = e as TouchEvent
-  if (touchEvent.touches.length !== 1) return
-
-  const now = Date.now()
-  const isDoubleTap =
-    now - lastTapTime.value < DOUBLE_TAP_DELAY &&
-    lastTapSegmentId.value === segment.id
-
-  if (isDoubleTap) {
-    // 双击：打开编辑对话框
-    e.preventDefault()
-    handleDoubleClick(trackType, segment)
-    // 重置状态
-    lastTapTime.value = 0
-    lastTapSegmentId.value = ''
-  } else {
-    // 单击：记录并等待可能的第二次点击
-    lastTapTime.value = now
-    lastTapSegmentId.value = segment.id
-  }
-}
-
 // 保存编辑
 async function handleSave() {
   const cleanedValue = editValue.value.trim()
@@ -172,11 +227,14 @@ function handleSelect(segmentId: string, e: MouseEvent) {
   emit('select', segmentId, addToSelection)
 }
 
-// 点击轨道行空白区域取消选择
+// 点击轨道行空白区域取消选择（普通模式）
 function handleTrackRowClick(e: MouseEvent) {
   // 只在直接点击轨道行时触发（通过段落块的事件冒泡会被阻止）
   if ((e.target as HTMLElement).classList.contains('track-row')) {
-    emit('select', null, false)
+    // 普通模式：取消所有选择
+    if (!isMultiSelectMode.value) {
+      emit('select', null, false)
+    }
   }
 }
 
@@ -190,6 +248,16 @@ function getTrackConfig(trackType: TrackType) {
   return TRACK_CONFIG[trackType]
 }
 
+// 退出多选模式（供父组件调用）
+function exitMultiSelectMode() {
+  isMultiSelectMode.value = false
+}
+
+// 暴露方法给父组件
+defineExpose({
+  exitMultiSelectMode
+})
+
 // 按轨道类型分组可见段落
 const segmentsByTrack = computed(() => {
   const grouped: Record<string, typeof visibleSegments.value> = {}
@@ -200,6 +268,11 @@ const segmentsByTrack = computed(() => {
   }
   return grouped
 })
+
+// 监听多选模式变化，通知父组件
+watch(isMultiSelectMode, (isActive) => {
+  emit('multi-select-change', isActive)
+})
 </script>
 
 <template>
@@ -209,6 +282,7 @@ const segmentsByTrack = computed(() => {
       v-for="track in tracks"
       :key="track.type"
       class="track-row"
+      :class="{ 'is-multi-select-mode': isMultiSelectMode }"
       @click="handleTrackRowClick"
     >
       <!-- 轨道标签（在padding区域内） -->
@@ -225,7 +299,8 @@ const segmentsByTrack = computed(() => {
             'is-selected': selectedSegmentIds.has(item.segment.id),
             'is-hovered': item.segment.id === hoveredSegmentId,
             'is-edited': item.segment.isEdited,
-            'is-empty': !item.segment.value
+            'is-empty': !item.segment.value,
+            'is-multi-select-mode': isMultiSelectMode
           }"
           :style="{
             left: `${item.visibleStart}%`,
@@ -234,6 +309,8 @@ const segmentsByTrack = computed(() => {
           @click="handleSelect(item.segment.id, $event)"
           @dblclick="handleDoubleClick(track.type, item.segment)"
           @touchstart="handleTouchStart(track.type, item.segment, $event)"
+          @touchmove="handleTouchMove"
+          @touchend="handleTouchEnd"
           @mouseenter="handleHover(item.segment.id)"
           @mouseleave="handleHover(null)"
         >
@@ -293,6 +370,8 @@ const segmentsByTrack = computed(() => {
   position: relative;
   height: var(--geo-editor-track-row-height);
   border-bottom: 1px solid var(--el-border-color-lighter);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .track-label {
@@ -389,5 +468,30 @@ const segmentsByTrack = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+}
+
+/* 多选模式样式 */
+.track-row.is-multi-select-mode {
+  background-color: var(--el-fill-color-lighter);
+}
+
+.segment-block.is-multi-select-mode {
+  border-style: dashed;
+  border-width: 2px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.segment-block.is-multi-select-mode.is-selected {
+  border-style: solid;
+  animation: none;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 </style>

@@ -18,6 +18,7 @@ const props = withDefaults(defineProps<Props>(), {
 const emit = defineEmits<{
   'pointer-change': [position: number]
   'scale-hover': [pointIndex: number | null]  // 悬浮时的点索引
+  'pan': [deltaX: number]  // 触摸滑动时的水平位移（像素）
 }>()
 
 const scaleRef = ref<HTMLElement>()
@@ -455,6 +456,47 @@ function handleScaleMouseLeave() {
   hoverIndicatorPosition.value = null
   emit('scale-hover', null)
 }
+
+// 触摸滑动平移时间轴
+const touchStartX = ref(0)
+const touchStartY = ref(0)
+const isTouchPanning = ref(false)
+
+function handleTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1) {
+    touchStartX.value = e.touches[0].clientX
+    touchStartY.value = e.touches[0].clientY
+    isTouchPanning.value = false
+  }
+}
+
+function handleTouchMove(e: TouchEvent) {
+  if (e.touches.length !== 1) return
+
+  const deltaX = e.touches[0].clientX - touchStartX.value
+  const deltaY = e.touches[0].clientY - touchStartY.value
+
+  // 判断是否是水平滑动（阈值：10px）
+  if (!isTouchPanning.value) {
+    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 10) {
+      isTouchPanning.value = true
+    } else if (Math.abs(deltaY) > 10) {
+      // 垂直滑动，不处理
+      return
+    }
+  }
+
+  if (isTouchPanning.value) {
+    e.preventDefault()  // 阻止页面滚动
+    emit('pan', deltaX)
+    // 更新起始位置，实现连续平移
+    touchStartX.value = e.touches[0].clientX
+  }
+}
+
+function handleTouchEnd() {
+  isTouchPanning.value = false
+}
 </script>
 
 <template>
@@ -466,6 +508,10 @@ function handleScaleMouseLeave() {
         @click="handleScaleClick"
         @mousemove="handleScaleMouseMove"
         @mouseleave="handleScaleMouseLeave"
+        @touchstart="handleTouchStart"
+        @touchmove="handleTouchMove"
+        @touchend="handleTouchEnd"
+        style="touch-action: none;"
       >
         <div
           v-for="(tick, index) in ticks"

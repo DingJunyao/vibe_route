@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, ZoomIn, ZoomOut, Refresh, User, ArrowDown, Setting, SwitchButton } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, ZoomIn, ZoomOut, Refresh, User, ArrowDown, Setting, SwitchButton, Delete, Close, Connection, Histogram, Clock } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useGeoEditorStore, type TrackType } from '@/stores/geoEditor'
 import { useAuthStore } from '@/stores/auth'
@@ -27,6 +27,9 @@ const isMobile = computed(() => window.innerWidth <= 1366)
 
 // 时间轴内容区引用（用于尺寸计算）
 const timelineContentRef = ref<HTMLElement | null>(null)
+
+// TimelineTracks 组件引用（用于退出多选模式）
+const timelineTracksRef = ref<{ exitMultiSelectMode?: () => void } | null>(null)
 
 // 地图区域引用（用于滚轮缩放检测）
 const mapSectionRef = ref<HTMLElement | null>(null)
@@ -875,11 +878,19 @@ async function handleBatchMerge() {
   ElMessage.success('合并完成')
 }
 
+// 退出多选模式
+function handleExitMultiSelect() {
+  timelineTracksRef.value?.exitMultiSelectMode?.()
+}
+
 // 全局键盘事件
 function handleGlobalKeydown(e: KeyboardEvent) {
-  // Esc 取消选择
+  // Esc 退出多选或取消选择
   if (e.key === 'Escape') {
-    if (geoEditorStore.selectedCount > 0) {
+    if (isMultiSelectMode.value) {
+      e.preventDefault()
+      handleExitMultiSelect()
+    } else if (geoEditorStore.selectedCount > 0) {
       e.preventDefault()
       geoEditorStore.clearSelection()
     }
@@ -917,11 +928,40 @@ function handlePointerChange(position: number) {
 // 刻度悬浮处理（同步到地图，不移动指针）
 const scaleHighlightIndex = ref<number | null>(null)
 
+// 多选模式状态（来自 TimelineTracks）
+const isMultiSelectMode = ref(false)
+
+function handleMultiSelectChange(isActive: boolean) {
+  isMultiSelectMode.value = isActive
+}
+
 function handleScaleHover(pointIndex: number | null) {
   // 拖动指针时不响应悬浮，避免闪烁
   if (isDraggingPlayhead.value) return
   scaleHighlightIndex.value = pointIndex
-  // 通过 highlightPointIndex 计算属性同步到地图
+}
+
+// 刻度区域触摸滑动平移时间轴
+function handleScalePan(deltaX: number) {
+  const currentRange = geoEditorStore.zoomEnd - geoEditorStore.zoomStart
+  // 滑动距离转换为范围变化（基于内容宽度）
+  const contentWidth = timelineContentRef.value?.clientWidth || 800
+  const deltaRange = (deltaX / contentWidth) * currentRange
+
+  // 计算新的起止点
+  let newStart = geoEditorStore.zoomStart - deltaRange
+  let newEnd = geoEditorStore.zoomEnd - deltaRange
+
+  // 边界处理
+  if (newStart < 0) {
+    newStart = 0
+    newEnd = currentRange
+  } else if (newEnd > 1) {
+    newEnd = 1
+    newStart = 1 - currentRange
+  }
+
+  geoEditorStore.setZoom(newStart, newEnd)
 }
 
 // 地图悬浮处理（同步到刻度，不移动指针）
@@ -1022,16 +1062,15 @@ function handleMapPointHover(_point: any, pointIndex: number) {
           <!-- 控制栏（始终显示，方便展开内容） -->
           <div class="controls-bar">
             <div class="controls-left">
-              <span class="zoom-level-text">{{ zoomLevelText }}</span>
               <el-button-group>
                 <el-tooltip content="放大 (Ctrl+滚轮)" placement="top">
-                  <el-button :icon="ZoomIn" @click="handleZoomIn" size="small" />
+                  <el-button :icon="ZoomIn" @click="handleZoomIn" class="icon-button" />
                 </el-tooltip>
                 <el-tooltip content="缩小 (Ctrl+滚轮)" placement="top">
-                  <el-button :icon="ZoomOut" @click="handleZoomOut" size="small" />
+                  <el-button :icon="ZoomOut" @click="handleZoomOut" class="icon-button" />
                 </el-tooltip>
                 <el-tooltip content="重置" placement="top">
-                  <el-button :icon="Refresh" @click="handleResetZoom" size="small" />
+                  <el-button :icon="Refresh" @click="handleResetZoom" class="icon-button" />
                 </el-tooltip>
               </el-button-group>
             </div>
@@ -1039,20 +1078,21 @@ function handleMapPointHover(_point: any, pointIndex: number) {
               <!-- 选中数量和批量操作 -->
               <transition name="el-fade-in">
                 <div v-if="geoEditorStore.selectedCount > 0" class="selection-controls">
-                  <span class="selection-info">
-                    已选择 <strong>{{ geoEditorStore.selectedCount }}</strong> 个块
-                  </span>
+                  <span class="selection-count-badge">{{ geoEditorStore.selectedCount }}</span>
                   <el-button-group size="small">
                     <el-tooltip content="清空选中 (Delete)" placement="top">
-                      <el-button @click="handleBatchClear">清空</el-button>
+                      <el-button :icon="Delete" @click="handleBatchClear" class="icon-button" />
                     </el-tooltip>
                     <el-tooltip content="合并选中" placement="top">
                       <el-button
+                        :icon="Connection"
                         @click="handleBatchMerge"
                         :disabled="!geoEditorStore.canMergeSelected()"
-                      >
-                        合并
-                      </el-button>
+                        class="icon-button"
+                      />
+                    </el-tooltip>
+                    <el-tooltip v-if="isMultiSelectMode" content="退出多选" placement="top">
+                      <el-button :icon="Close" @click="handleExitMultiSelect" type="warning" class="icon-button" />
                     </el-tooltip>
                   </el-button-group>
                 </div>
@@ -1066,12 +1106,24 @@ function handleMapPointHover(_point: any, pointIndex: number) {
               </el-select>
             </div>
             <div class="controls-right">
-              <el-button size="small" @click="geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded">
-                {{ geoEditorStore.isChartExpanded ? '图表▼' : '图表▲' }}
-              </el-button>
-              <el-button size="small" @click="geoEditorStore.isTimelineExpanded = !geoEditorStore.isTimelineExpanded">
-                {{ geoEditorStore.isTimelineExpanded ? '时间轴▼' : '时间轴▲' }}
-              </el-button>
+              <el-button-group>
+                <el-tooltip content="图表" placement="top">
+                  <el-button
+                    :type="geoEditorStore.isChartExpanded ? 'primary' : ''"
+                    :icon="Histogram"
+                    @click="geoEditorStore.isChartExpanded = !geoEditorStore.isChartExpanded"
+                    class="icon-button"
+                  />
+                </el-tooltip>
+                <el-tooltip content="时间轴" placement="top">
+                  <el-button
+                    :type="geoEditorStore.isTimelineExpanded ? 'primary' : ''"
+                    :icon="Clock"
+                    @click="geoEditorStore.isTimelineExpanded = !geoEditorStore.isTimelineExpanded"
+                    class="icon-button"
+                  />
+                </el-tooltip>
+              </el-button-group>
             </div>
           </div>
 
@@ -1115,12 +1167,14 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                 :highlight-index="scaleHighlightIndex"
                 @pointer-change="handlePointerChange"
                 @scale-hover="handleScaleHover"
+                @pan="handleScalePan"
               />
             </div>
 
             <!-- 时间轴区域 -->
             <div v-show="geoEditorStore.isTimelineExpanded" class="tracks-section">
               <TimelineTracks
+                ref="timelineTracksRef"
                 :tracks="tracksData"
                 :selected-segment-ids="geoEditorStore.selectedSegmentIds"
                 :hovered-segment-id="geoEditorStore.hoveredSegmentId"
@@ -1129,6 +1183,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                 @select="handleSegmentSelect"
                 @hover="handleSegmentHover"
                 @save="handleSegmentSave"
+                @multi-select-change="handleMultiSelectChange"
               />
             </div>
 
@@ -1325,26 +1380,38 @@ h1 {
   margin-left: auto;
 }
 
-.zoom-level-text {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  font-family: 'Consolas', 'Monaco', monospace;
-  min-width: 50px;
-  text-align: right;
-  user-select: none;
-}
-
 /* 选中控制和批量操作 */
 .selection-controls {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
-.selection-info {
+.selection-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--el-color-primary);
+  color: white;
   font-size: 12px;
-  color: var(--el-color-primary);
-  white-space: nowrap;
+  font-weight: bold;
+  border-radius: 12px;
+  line-height: 1;
+}
+
+/* 正方形图标按钮 */
+.icon-button {
+  padding: 0 !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+}
+
+.icon-button .el-icon {
+  font-size: 16px;
 }
 
 /* 滚动条样式 */
