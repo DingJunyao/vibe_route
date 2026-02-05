@@ -180,6 +180,24 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
   // 记录历史
   function recordHistory(action: EditHistory['action'], description: string) {
+    // 如果历史记录为空，先保存初始状态
+    if (history.value.length === 0) {
+      const initialState = {
+        tracks: JSON.parse(JSON.stringify(tracks.value)),
+        selectedSegmentIds: Array.from(selectedSegmentIds.value),
+      }
+      history.value.push({
+        id: generateId(),
+        timestamp: Date.now(),
+        action: 'edit',
+        description: '初始状态',
+        before: JSON.parse(JSON.stringify(initialState)),
+        after: JSON.parse(JSON.stringify(initialState)),
+      })
+      historyIndex.value = 0
+      return // 初始状态不需要再次记录
+    }
+
     const before = history.value[historyIndex.value]?.after
     if (!before) return
 
@@ -293,26 +311,6 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
 
     const segment = track.segments.find(s => s.id === segmentId)
     if (!segment) return
-
-    // 记录历史（在修改前）
-    if (history.value.length === 0 || historyIndex.value === -1) {
-      // 初始化历史
-      history.value.push({
-        id: generateId(),
-        timestamp: Date.now(),
-        action: 'edit',
-        description: '初始化',
-        before: {
-          tracks: JSON.parse(JSON.stringify(tracks.value)),
-          selectedSegmentIds: Array.from(selectedSegmentIds.value),
-        },
-        after: {
-          tracks: JSON.parse(JSON.stringify(tracks.value)),
-          selectedSegmentIds: Array.from(selectedSegmentIds.value),
-        },
-      })
-      historyIndex.value = 0
-    }
 
     segment.value = value
     segment.valueEn = valueEn
