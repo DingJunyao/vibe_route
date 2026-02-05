@@ -33,7 +33,8 @@ const mapSectionRef = ref<HTMLElement | null>(null)
 
 // 高亮区域（基于选中的段落）
 const highlightedSegment = computed(() => {
-  const id = geoEditorStore.selectedSegmentId || geoEditorStore.hoveredSegmentId
+  const ids = geoEditorStore.selectedSegmentIds
+  const id = ids.size > 0 ? Array.from(ids)[0] : geoEditorStore.hoveredSegmentId
   if (!id) return null
 
   for (const track of geoEditorStore.tracks) {
@@ -624,6 +625,8 @@ onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload)
   // 添加滚轮缩放监听
   window.addEventListener('wheel', handleWheel, { passive: false })
+  // 添加全局键盘事件
+  window.addEventListener('keydown', handleGlobalKeydown)
 
   // 等待 DOM 更新后添加移动端双指缩放监听
   nextTick(() => {
@@ -640,6 +643,7 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
   window.removeEventListener('wheel', handleWheel)
+  window.removeEventListener('keydown', handleGlobalKeydown)
 
   // 移除移动端双指缩放监听
   const container = timelineContainerRef.value
@@ -826,6 +830,51 @@ function handleSegmentHover(segmentId: string | null) {
   geoEditorStore.hoverSegment(segmentId)
 }
 
+// 处理轨道块选择（支持多选）
+function handleSegmentSelect(segmentId: string | null, addToSelection: boolean) {
+  if (segmentId === null) {
+    geoEditorStore.clearSelection()
+  } else {
+    geoEditorStore.selectSegment(segmentId, addToSelection)
+  }
+}
+
+// 批量清空选中的段落
+async function handleBatchClear() {
+  const count = geoEditorStore.selectedCount
+  if (count === 0) return
+
+  geoEditorStore.clearSelectedSegments()
+  ElMessage.success(`已清空 ${count} 个段落`)
+}
+
+// 批量合并选中的段落
+async function handleBatchMerge() {
+  if (!geoEditorStore.canMergeSelected()) {
+    ElMessage.warning('请选择连续的段落进行合并')
+    return
+  }
+
+  geoEditorStore.mergeSelectedSegments()
+  ElMessage.success('合并完成')
+}
+
+// 全局键盘事件
+function handleGlobalKeydown(e: KeyboardEvent) {
+  // Esc 取消选择
+  if (e.key === 'Escape') {
+    if (geoEditorStore.selectedCount > 0) {
+      e.preventDefault()
+      geoEditorStore.clearSelection()
+    }
+  }
+  // Delete 快捷键清空
+  if (e.key === 'Delete' && geoEditorStore.selectedCount > 0) {
+    e.preventDefault()
+    handleBatchClear()
+  }
+}
+
 // 时间轴段落保存
 function handleSegmentSave(data: { trackType: TrackType; segmentId: string; value: string; valueEn: string | null }) {
   geoEditorStore.updateSegmentValue(data.trackType, data.segmentId, data.value, data.valueEn)
@@ -836,7 +885,7 @@ function handleChartHighlight(dataIndex: number) {
   for (const track of geoEditorStore.tracks) {
     for (const segment of track.segments) {
       if (dataIndex >= segment.startIndex && dataIndex <= segment.endIndex) {
-        geoEditorStore.selectSegment(segment.id)
+        geoEditorStore.selectSegment(segment.id, false)
         // 不移动指针，只用于选择段落
         return
       }
@@ -971,6 +1020,29 @@ function handleMapPointHover(_point: any, pointIndex: number) {
               </el-button-group>
             </div>
             <div class="controls-center">
+              <!-- 选中数量和批量操作 -->
+              <transition name="el-fade-in">
+                <div v-if="geoEditorStore.selectedCount > 0" class="selection-controls">
+                  <span class="selection-info">
+                    已选择 <strong>{{ geoEditorStore.selectedCount }}</strong> 个块
+                  </span>
+                  <el-button-group size="small">
+                    <el-tooltip content="清空选中 (Delete)" placement="top">
+                      <el-button @click="handleBatchClear">清空</el-button>
+                    </el-tooltip>
+                    <el-tooltip content="合并选中" placement="top">
+                      <el-button
+                        @click="handleBatchMerge"
+                        :disabled="!geoEditorStore.canMergeSelected()"
+                      >
+                        合并
+                      </el-button>
+                    </el-tooltip>
+                  </el-button-group>
+                </div>
+              </transition>
+
+              <!-- 时间刻度单位选择器 -->
               <el-select v-model="geoEditorStore.timeScaleUnit" size="small" style="width: 70px;">
                 <el-option value="time" label="时间" />
                 <el-option value="duration" label="时长" />
@@ -1034,7 +1106,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
             <div v-show="geoEditorStore.isTimelineExpanded" class="tracks-section">
               <TimelineTracks
                 :tracks="tracksData"
-                :selected-segment-id="geoEditorStore.selectedSegmentId"
+                :selected-segment-ids="geoEditorStore.selectedSegmentIds"
                 :hovered-segment-id="geoEditorStore.hoveredSegmentId"
                 :zoom-start="geoEditorStore.zoomStart"
                 :zoom-end="geoEditorStore.zoomEnd"
@@ -1244,6 +1316,19 @@ h1 {
   min-width: 50px;
   text-align: right;
   user-select: none;
+}
+
+/* 选中控制和批量操作 */
+.selection-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.selection-info {
+  font-size: 12px;
+  color: var(--el-color-primary);
+  white-space: nowrap;
 }
 
 /* 滚动条样式 */
