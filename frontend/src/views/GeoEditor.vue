@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, ZoomIn, ZoomOut, Refresh, User, ArrowDown, Setting, SwitchButton, Delete, Close, Connection, Histogram, Clock } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, RefreshLeft, RefreshRight, Check, ZoomIn, ZoomOut, Refresh, User, ArrowDown, Setting, SwitchButton, Delete, Close, Connection, Histogram, Clock, Scissor } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useGeoEditorStore, type TrackType } from '@/stores/geoEditor'
 import { useAuthStore } from '@/stores/auth'
@@ -878,6 +878,19 @@ async function handleBatchMerge() {
   ElMessage.success('合并完成')
 }
 
+// 拆分选中的段落
+function handleSplit() {
+  if (!geoEditorStore.canSplitSelected()) return
+
+  const beforeCount = geoEditorStore.selectedCount
+  geoEditorStore.splitSelectedSegments()
+  const afterCount = geoEditorStore.selectedCount
+
+  if (afterCount > beforeCount) {
+    ElMessage.success(`已拆分，现选中有 ${afterCount} 个段落`)
+  }
+}
+
 // 退出多选模式
 function handleExitMultiSelect() {
   timelineTracksRef.value?.exitMultiSelectMode?.()
@@ -899,6 +912,17 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   if (e.key === 'Delete' && geoEditorStore.selectedCount > 0) {
     e.preventDefault()
     handleBatchClear()
+  }
+  // S 快捷键拆分（仅单字母，避免干扰输入）
+  if (e.key === 's' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    // 确保不是在输入框中
+    const target = e.target as HTMLElement
+    if (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA' && !target.isContentEditable) {
+      if (geoEditorStore.canSplitSelected()) {
+        e.preventDefault()
+        handleSplit()
+      }
+    }
   }
 }
 
@@ -1091,6 +1115,15 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                         class="icon-button"
                       />
                     </el-tooltip>
+                    <transition name="el-fade-in">
+                      <el-tooltip v-if="geoEditorStore.canSplitSelected()" content="拆分 (S)" placement="top">
+                        <el-button
+                          :icon="Scissor"
+                          @click="handleSplit"
+                          class="icon-button"
+                        />
+                      </el-tooltip>
+                    </transition>
                     <el-tooltip v-if="isMultiSelectMode" content="退出多选" placement="top">
                       <el-button :icon="Close" @click="handleExitMultiSelect" type="warning" class="icon-button" />
                     </el-tooltip>

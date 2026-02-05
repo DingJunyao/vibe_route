@@ -91,14 +91,21 @@ function handleLongPressCancel() {
   longPressElement.value = null
 }
 
-// 移动端触摸处理（双击编辑 + 长按多选）
+// 记录触摸开始位置，用于判断是否是点击（而非拖动）
+const touchStartPos = ref({ x: 0, y: 0 })
+
+// 移动端触摸处理（单击选中 + 双击编辑 + 长按多选）
 function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: TouchEvent) {
   if (e.touches.length !== 1) return
 
   const now = Date.now()
+  const touch = e.touches[0]
   const isDoubleTap =
     now - lastTapTime.value < DOUBLE_TAP_DELAY &&
     lastTapSegmentId.value === segment.id
+
+  // 记录触摸开始位置
+  touchStartPos.value = { x: touch.clientX, y: touch.clientY }
 
   if (isDoubleTap) {
     // 双击：打开编辑对话框
@@ -116,20 +123,47 @@ function handleTouchStart(trackType: TrackType, segment: TrackSegment, e: TouchE
     lastTapTime.value = now
     lastTapSegmentId.value = segment.id
   } else {
-    // 普通模式：记录单击时间，启动长按检测
+    // 普通模式：记录单击时间和块ID，启动长按检测
     lastTapTime.value = now
     lastTapSegmentId.value = segment.id
     handleLongPressStart(segment.id, e)
   }
 }
 
-// 触摸移动或结束，取消长按
-function handleTouchMove() {
+// 触摸移动，取消长按
+function handleTouchMove(e: TouchEvent) {
   handleLongPressCancel()
 }
 
-function handleTouchEnd() {
+function handleTouchEnd(e: TouchEvent) {
+  // 如果长按已触发（进入多选模式），不做处理
+  if (isMultiSelectMode.value) {
+    handleLongPressCancel()
+    return
+  }
+
+  // 取消长按定时器
+  const hadLongPress = longPressTimer.value !== null
   handleLongPressCancel()
+
+  // 如果已经触发了长按，不处理单击
+  if (hadLongPress) return
+
+  // 检查是否是轻微移动（算作点击）
+  const touch = e.changedTouches[0]
+  const deltaX = Math.abs(touch.clientX - touchStartPos.value.x)
+  const deltaY = Math.abs(touch.clientY - touchStartPos.value.y)
+  const isClick = deltaX < 10 && deltaY < 10
+
+  if (isClick && lastTapSegmentId.value) {
+    // 单击：选中该块（短暂延迟以检测双击）
+    setTimeout(() => {
+      // 检查是否仍然是单击（没有变成双击）
+      if (lastTapTime.value > 0 && lastTapSegmentId.value) {
+        emit('select', lastTapSegmentId.value, false)
+      }
+    }, DOUBLE_TAP_DELAY)
+  }
 }
 
 // 轨道配置

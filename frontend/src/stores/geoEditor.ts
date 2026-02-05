@@ -495,6 +495,81 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     return result
   }
 
+  // 检查是否可以拆分（有选中的块且指针位置在有效范围内）
+  function canSplitSelected(): boolean {
+    if (points.value.length === 0) return false
+    const splitIndex = Math.round(pointerPosition.value * (points.value.length - 1))
+
+    for (const track of tracks.value) {
+      for (const segment of track.segments) {
+        if (selectedSegmentIds.value.has(segment.id)) {
+          // 拆分点必须在块内部（不能在边界）
+          if (splitIndex > segment.startIndex && splitIndex < segment.endIndex) {
+            return true
+          }
+        }
+      }
+    }
+    return false
+  }
+
+  // 拆分选中的段落
+  function splitSelectedSegments() {
+    if (points.value.length === 0) return
+    const splitIndex = Math.round(pointerPosition.value * (points.value.length - 1))
+    const newSelectionIds = new Set<string>()
+    let splitCount = 0
+
+    for (const track of tracks.value) {
+      const newSegments: TrackSegment[] = []
+
+      for (const segment of track.segments) {
+        if (selectedSegmentIds.value.has(segment.id)) {
+          // 检查拆分点是否在块内部（不在边界上）
+          if (splitIndex > segment.startIndex && splitIndex < segment.endIndex) {
+            // 拆分为两个块
+            const leftSegment: TrackSegment = {
+              id: generateId(),
+              startIndex: segment.startIndex,
+              endIndex: splitIndex,
+              pointCount: splitIndex - segment.startIndex + 1,
+              value: segment.value,
+              valueEn: segment.valueEn,
+              isEdited: true,
+            }
+            const rightSegment: TrackSegment = {
+              id: generateId(),
+              startIndex: splitIndex + 1,
+              endIndex: segment.endIndex,
+              pointCount: segment.endIndex - splitIndex,
+              value: segment.value,
+              valueEn: segment.valueEn,
+              isEdited: true,
+            }
+            newSegments.push(leftSegment, rightSegment)
+            newSelectionIds.add(leftSegment.id)
+            newSelectionIds.add(rightSegment.id)
+            splitCount++
+          } else {
+            // 拆分点无效（在边界上），保留原块
+            newSegments.push(segment)
+          }
+        } else {
+          newSegments.push(segment)
+        }
+      }
+
+      track.segments = newSegments
+    }
+
+    // 更新选中状态为新生成的两个块
+    selectedSegmentIds.value = newSelectionIds
+
+    if (splitCount > 0) {
+      recordHistory('edit', `拆分 ${splitCount} 个段落`)
+    }
+  }
+
   // 悬停段落
   function hoverSegment(segmentId: string | null) {
     hoveredSegmentId.value = segmentId
@@ -627,6 +702,8 @@ export const useGeoEditorStore = defineStore('geoEditor', () => {
     clearSelectedSegments,
     canMergeSelected,
     mergeSelectedSegments,
+    canSplitSelected,
+    splitSelectedSegments,
     getSelectedSegmentsByTrack,
     hoverSegment,
     zoomIn,

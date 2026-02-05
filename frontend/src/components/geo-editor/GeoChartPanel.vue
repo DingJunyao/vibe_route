@@ -18,6 +18,9 @@ const emit = defineEmits<{
   highlight: [dataIndex: number]
 }>()
 
+// 移动端检测
+const isMobile = computed(() => window.innerWidth <= 1366)
+
 const chartRef = ref<HTMLElement>()
 let chart: echarts.ECharts | null = null
 
@@ -104,6 +107,7 @@ function updateChart() {
       containLabel: false,
     },
     tooltip: {
+      show: !isMobile.value,  // 移动端隐藏 tooltip
       trigger: 'axis',
       axisPointer: {
         type: 'cross',
@@ -253,9 +257,10 @@ watch(() => [chartData.value, props.timeScaleUnit, props.highlightedRange], () =
   updateChart()
 }, { deep: true })
 
-// 监听指针位置变化，同步显示 tooltip
+// 监听指针位置变化，同步显示 tooltip（移动端不显示）
 watch(() => props.pointerPosition, (newPosition) => {
   if (!chart || !chartData.value || chartData.value.xAxis.length === 0) return
+  if (isMobile.value) return  // 移动端不显示 tooltip
 
   // 计算指针对应的可见数据索引
   const totalPoints = props.points.length
@@ -276,6 +281,13 @@ watch(() => props.pointerPosition, (newPosition) => {
     seriesIndex: 0,
     dataIndex: clampedIndex,
   })
+})
+
+// 监听窗口大小变化（移动端切换）
+watch(isMobile, () => {
+  if (chart) {
+    updateChart()
+  }
 })
 
 // 窗口大小变化
