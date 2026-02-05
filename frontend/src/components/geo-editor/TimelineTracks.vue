@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import type { TrackTimeline, TrackSegment, TrackType } from '@/stores/geo_editor'
 import { ElMessageBox } from 'element-plus'
 import { useGeoEditorStore } from '@/stores/geoEditor'
 
 interface Props {
   tracks: TrackTimeline[]
-  selectedSegmentId: string | null
+  selectedSegmentIds: Set<string>
   hoveredSegmentId: string | null
   zoomStart: number
   zoomEnd: number
@@ -15,12 +15,38 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  select: [segmentId: string]
+  select: [segmentId: string | null, addToSelection: boolean]
   hover: [segmentId: string | null]
   save: [data: { trackType: TrackType; segmentId: string; value: string; valueEn: string | null }]
 }>()
 
 const geoEditorStore = useGeoEditorStore()
+
+// 修饰键状态（用于多选）
+const isCtrlPressed = ref(false)
+const isShiftPressed = ref(false)
+
+// 键盘事件处理
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Control') isCtrlPressed.value = true
+  if (e.key === 'Shift') isShiftPressed.value = true
+}
+
+function handleKeyUp(e: KeyboardEvent) {
+  if (e.key === 'Control') isCtrlPressed.value = false
+  if (e.key === 'Shift') isShiftPressed.value = false
+}
+
+// 生命周期钩子
+onMounted(() => {
+  window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('keyup', handleKeyUp)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('keyup', handleKeyUp)
+})
 
 // 移动端双击检测
 const lastTapTime = ref(0)
@@ -141,8 +167,17 @@ async function handleSave() {
 }
 
 // 点击选择
-function handleSelect(segmentId: string) {
-  emit('select', segmentId)
+function handleSelect(segmentId: string, e: MouseEvent) {
+  const addToSelection = e.ctrlKey || e.shiftKey
+  emit('select', segmentId, addToSelection)
+}
+
+// 点击轨道行空白区域取消选择
+function handleTrackRowClick(e: MouseEvent) {
+  // 只在直接点击轨道行时触发（通过段落块的事件冒泡会被阻止）
+  if ((e.target as HTMLElement).classList.contains('track-row')) {
+    emit('select', null, false)
+  }
 }
 
 // 悬停
@@ -174,6 +209,7 @@ const segmentsByTrack = computed(() => {
       v-for="track in tracks"
       :key="track.type"
       class="track-row"
+      @click="handleTrackRowClick"
     >
       <!-- 轨道标签（在padding区域内） -->
       <div class="track-label">
@@ -186,7 +222,7 @@ const segmentsByTrack = computed(() => {
           :key="item.segment.id"
           class="segment-block"
           :class="{
-            'is-selected': item.segment.id === selectedSegmentId,
+            'is-selected': selectedSegmentIds.has(item.segment.id),
             'is-hovered': item.segment.id === hoveredSegmentId,
             'is-edited': item.segment.isEdited,
             'is-empty': !item.segment.value
@@ -195,13 +231,13 @@ const segmentsByTrack = computed(() => {
             left: `${item.visibleStart}%`,
             width: `${item.visibleWidth}%`
           }"
-          @click="handleSelect(item.segment.id)"
+          @click="handleSelect(item.segment.id, $event)"
           @dblclick="handleDoubleClick(track.type, item.segment)"
           @touchstart="handleTouchStart(track.type, item.segment, $event)"
           @mouseenter="handleHover(item.segment.id)"
           @mouseleave="handleHover(null)"
         >
-          <span v-if="item.segment.value || (item.segment.id === selectedSegmentId || item.segment.id === hoveredSegmentId)" class="segment-text">
+          <span v-if="item.segment.value || (selectedSegmentIds.has(item.segment.id) || item.segment.id === hoveredSegmentId)" class="segment-text">
             {{ item.segment.value || '(空)' }}
           </span>
         </div>
@@ -318,6 +354,18 @@ const segmentsByTrack = computed(() => {
 .segment-block.is-selected {
   background: var(--el-color-primary);
   border-color: var(--el-color-primary-dark-2);
+}
+
+/* 选中角标 */
+.segment-block.is-selected::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: white;
+  opacity: 0.8;
 }
 
 .segment-block.is-edited {
