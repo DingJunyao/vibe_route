@@ -52,6 +52,10 @@
             <el-icon><Upload /></el-icon>
             导入数据
           </el-button>
+          <el-button type="primary" @click="posterDialogVisible = true" class="desktop-only">
+            <el-icon><Picture /></el-icon>
+            导出海报
+          </el-button>
         </div>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
@@ -79,6 +83,10 @@
               <el-dropdown-item command="import" v-if="isMobile">
                 <el-icon><Upload /></el-icon>
                 导入数据
+              </el-dropdown-item>
+              <el-dropdown-item command="poster" v-if="isMobile">
+                <el-icon><Picture /></el-icon>
+                导出海报
               </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
@@ -186,16 +194,18 @@
             <el-card class="map-card" shadow="never">
               <template v-if="trackWithPoints">
                 <div ref="mapWrapperRef" class="map-wrapper">
-                  <UniversalMap
-                    ref="mapRef"
-                    :tracks="[trackWithPoints]"
-                    :highlight-track-id="track.id"
-                    :highlight-segment="highlightedSegment"
-                    :latest-point-index="latestPointIndex"
-                    :live-update-time="track.last_point_created_at || track.last_upload_at"
-                    @point-hover="handleMapPointHover"
+                  <div ref="mapElementRef" class="map-content">
+                    <UniversalMap
+                      ref="mapRef"
+                      :tracks="[trackWithPoints]"
+                      :highlight-track-id="track.id"
+                      :highlight-segment="highlightedSegment"
+                      :latest-point-index="latestPointIndex"
+                      :live-update-time="track.last_point_created_at || track.last_upload_at"
+                      @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
+                  </div>
                 </div>
               </template>
               <template v-else>
@@ -416,6 +426,7 @@
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
+                  </div>
                 </div>
               </template>
               <template v-else>
@@ -832,6 +843,15 @@
       @fill-geocoding-changed="handleFillGeocodingChanged"
       @refresh="refreshRecordingStatus"
     />
+
+    <!-- 海报导出对话框 -->
+    <PosterExportDialog
+      v-model:visible="posterDialogVisible"
+      :track="track"
+      :points="points"
+      :regions="regionTree"
+      :map-element="mapElementRef"
+    />
   </div>
 </template>
 
@@ -861,6 +881,7 @@ import {
   Close,
   Loading,
   Link,
+  Picture,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode } from '@/api/track'
@@ -873,6 +894,7 @@ import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
 import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
+import PosterExportDialog from '@/components/PosterExportDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -906,6 +928,7 @@ const isMounted = ref(true)
 const containerRef = ref<HTMLElement>()
 const mapRef = ref()
 const mapWrapperRef = ref<HTMLElement>()
+const mapElementRef = ref<HTMLElement | null>(null)
 const chartRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
@@ -1001,6 +1024,9 @@ const exporting = ref(false)
 // 导入相关
 const importDialogVisible = ref(false)
 const importing = ref(false)
+
+// 海报导出相关
+const posterDialogVisible = ref(false)
 const importFile = ref<File | null>(null)
 const importMatchMode = ref<'index' | 'time'>('index')
 const importTimezone = ref<string>('UTC+8')
@@ -1079,6 +1105,8 @@ function handleCommand(command: string) {
     exportPointsDialogVisible.value = true
   } else if (command === 'import') {
     importDialogVisible.value = true
+  } else if (command === 'poster') {
+    posterDialogVisible.value = true
   }
 }
 
@@ -3132,6 +3160,11 @@ onUnmounted(() => {
     min-height: 200px;
   }
 
+  .map-content {
+    width: 100%;
+    height: 100%;
+  }
+
   .scrollable-right {
     width: 100%;
     overflow: visible;
@@ -3177,6 +3210,11 @@ onUnmounted(() => {
 .map-wrapper {
   height: 100%;
   position: relative;
+}
+
+.map-content {
+  width: 100%;
+  height: 100%;
 }
 
 .fixed-left .chart-card {
