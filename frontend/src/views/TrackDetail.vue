@@ -849,7 +849,7 @@
       :track="track"
       :points="points"
       :regions="regionTree"
-      :map-element="mapElementRef"
+      :map-ref="mapRef"
     />
   </div>
 </template>

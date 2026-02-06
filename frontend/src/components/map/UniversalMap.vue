@@ -420,6 +420,23 @@ defineExpose({
     }
     return null
   },
+  /**
+   * 捕获地图截图
+   * 优先使用地图 SDK 的截图 API，否则返回 null
+   */
+  async captureMap(): Promise<string | null> {
+    if (useAMapEngine.value && amapRef.value) {
+      return await (amapRef.value as any).captureMap?.() || null
+    }
+    if (useBMapEngine.value && bmapRef.value) {
+      return await (bmapRef.value as any).captureMap?.() || null
+    }
+    if (useTencentEngine.value && tencentRef.value) {
+      return await (tencentRef.value as any).captureMap?.() || null
+    }
+    // Leaflet 返回 null，需要使用 html2canvas
+    return null
+  },
 })
 </script>
 

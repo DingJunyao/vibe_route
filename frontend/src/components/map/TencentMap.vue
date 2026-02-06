@@ -1509,6 +1509,25 @@ defineExpose({
   resize,
   fitBounds,
   getMapElement: () => mapContainer.value || null,
+  /**
+   * 捕获地图截图
+   * 返回 Base64 格式的图片数据
+   */
+  async captureMap(): Promise<string | null> {
+    if (!TMapInstance || !mapContainer.value) return null
+
+    try {
+      // 查找地图 canvas 元素
+      const canvas = mapContainer.value.querySelector('canvas') as HTMLCanvasElement
+      if (!canvas) return null
+
+      // 尝试直接从 canvas 获取图片数据
+      return canvas.toDataURL('image/png')
+    } catch (error) {
+      console.error('[TencentMap] captureMap failed:', error)
+      return null
+    }
+  },
 })
 </script>
 

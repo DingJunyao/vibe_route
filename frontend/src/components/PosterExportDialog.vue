@@ -79,14 +79,14 @@ interface Props {
   track: Track | null
   points: TrackPoint[]
   regions?: RegionNode[]
-  mapElement: HTMLElement | null
+  mapRef?: any  // UniversalMap 组件引用
 }
 
 const props = withDefaults(defineProps<Props>(), {
   visible: false,
   points: () => [],
   regions: () => [],
-  mapElement: null,
+  mapRef: null,
 })
 
 // Emits
@@ -193,7 +193,7 @@ function preparePosterData() {
  * 预览海报
  */
 async function handlePreview(): Promise<void> {
-  if (!props.mapElement) {
+  if (!props.mapRef) {
     ElMessage.error('地图未加载完成')
     return
   }
@@ -201,23 +201,33 @@ async function handlePreview(): Promise<void> {
   isGenerating.value = true
   progress.value = { stage: 'idle', message: '', percent: 0 }
 
-  // 隐藏地图控件
-  const mapControls = props.mapElement.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
-  mapControls.forEach(el => (el as HTMLElement).style.display = 'none')
-
   try {
-    const generator = new PosterGenerator(config.value, (p) => {
-      progress.value = p
-    })
+    // 优先使用地图 SDK 的截图 API
+    let mapImage: string | null = null
+    if (props.mapRef?.captureMap) {
+      progress.value = { stage: 'capturing', '正在捕获地图', 10 }
+      mapImage = await props.mapRef.captureMap()
+    }
 
-    // 捕获地图（使用低 scale 预览）
-    const mapImage = await generator.captureMap(props.mapElement!, 1)
+    // 如果地图 SDK 没有返回截图，尝试使用 html2canvas
+    if (!mapImage && props.mapRef?.getMapElement) {
+      const mapElement = props.mapRef.getMapElement()
+      if (mapElement) {
+        const generator = new PosterGenerator(config.value, (p) => {
+          progress.value = p
+        })
+        mapImage = await generator.captureMap(mapElement, 1)
+      }
+    }
 
     // 准备数据
     const data = preparePosterData()
-    data.mapImage = mapImage
+    data.mapImage = mapImage || undefined
 
     // 生成海报
+    const generator = new PosterGenerator(config.value, (p) => {
+      progress.value = p
+    })
     const canvas = await generator.generate(data)
     previewUrl.value = canvas.toDataURL('image/png')
 
@@ -227,8 +237,6 @@ async function handlePreview(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '预览生成失败')
     progress.value = { stage: 'error', message: '预览生成失败', percent: 0 }
   } finally {
-    // 恢复地图控件显示
-    mapControls.forEach(el => (el as HTMLElement).style.display = '')
     isGenerating.value = false
   }
 }
@@ -237,7 +245,7 @@ async function handlePreview(): Promise<void> {
  * 导出海报
  */
 async function handleExport(): Promise<void> {
-  if (!props.mapElement) {
+  if (!props.mapRef) {
     ElMessage.error('地图未加载完成')
     return
   }
@@ -251,26 +259,34 @@ async function handleExport(): Promise<void> {
   progress.value = { stage: 'idle', message: '', percent: 0 }
   previewUrl.value = ''
 
-  // 隐藏地图控件
-  const mapControls = props.mapElement.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
-  mapControls.forEach(el => (el as HTMLElement).style.display = 'none')
-
   try {
-    const generator = new PosterGenerator(config.value, (p) => {
-      progress.value = p
-    })
+    // 优先使用地图 SDK 的截图 API
+    let mapImage: string | null = null
+    if (props.mapRef?.captureMap) {
+      progress.value = { stage: 'capturing', '正在捕获地图', 10 }
+      mapImage = await props.mapRef.captureMap()
+    }
 
-    // 获取 scale
-    const scale = config.value.sizePreset.includes('4k') ? 4 : 2
-
-    // 捕获地图
-    const mapImage = await generator.captureMap(props.mapElement, scale)
+    // 如果地图 SDK 没有返回截图，尝试使用 html2canvas
+    if (!mapImage && props.mapRef?.getMapElement) {
+      const mapElement = props.mapRef.getMapElement()
+      if (mapElement) {
+        const scale = config.value.sizePreset.includes('4k') ? 4 : 2
+        const generator = new PosterGenerator(config.value, (p) => {
+          progress.value = p
+        })
+        mapImage = await generator.captureMap(mapElement, scale)
+      }
+    }
 
     // 准备数据
     const data = preparePosterData()
-    data.mapImage = mapImage
+    data.mapImage = mapImage || undefined
 
     // 生成海报
+    const generator = new PosterGenerator(config.value, (p) => {
+      progress.value = p
+    })
     const canvas = await generator.generate(data)
 
     // 下载
@@ -282,8 +298,6 @@ async function handleExport(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '海报导出失败')
     progress.value = { stage: 'error', message: '导出失败', percent: 0 }
   } finally {
-    // 恢复地图控件显示
-    mapControls.forEach(el => (el as HTMLElement).style.display = '')
     isGenerating.value = false
   }
 }

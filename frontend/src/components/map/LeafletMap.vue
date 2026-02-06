@@ -2179,6 +2179,14 @@ defineExpose({
   resize,
   fitBounds,
   getMapElement: () => mapContainer.value || null,
+  /**
+   * 捕获地图截图
+   * 对于 Leaflet，返回 null 需要使用 html2canvas 处理
+   */
+  async captureMap(): Promise<string | null> {
+    // Leaflet 使用图片瓦片，需要用 html2canvas 处理
+    return null
+  },
 })
 
 // 生命周期
