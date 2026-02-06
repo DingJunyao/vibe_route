@@ -100,7 +100,7 @@ const dialogVisible = ref(props.visible)
 // 配置
 const config = ref<PosterConfig>({
   template: 'simple',
-  sizePreset: 'portrait_1080',
+  sizePreset: 'landscape_1080',  // 默认横版
   showWatermark: true,
   infoLevel: 'basic',
 })
@@ -201,6 +201,10 @@ async function handlePreview(): Promise<void> {
   isGenerating.value = true
   progress.value = { stage: 'idle', message: '', percent: 0 }
 
+  // 隐藏地图控件
+  const mapControls = props.mapElement.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
+  mapControls.forEach(el => (el as HTMLElement).style.display = 'none')
+
   try {
     const generator = new PosterGenerator(config.value, (p) => {
       progress.value = p
@@ -223,6 +227,8 @@ async function handlePreview(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '预览生成失败')
     progress.value = { stage: 'error', message: '预览生成失败', percent: 0 }
   } finally {
+    // 恢复地图控件显示
+    mapControls.forEach(el => (el as HTMLElement).style.display = '')
     isGenerating.value = false
   }
 }
@@ -244,6 +250,10 @@ async function handleExport(): Promise<void> {
   isGenerating.value = true
   progress.value = { stage: 'idle', message: '', percent: 0 }
   previewUrl.value = ''
+
+  // 隐藏地图控件
+  const mapControls = props.mapElement.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
+  mapControls.forEach(el => (el as HTMLElement).style.display = 'none')
 
   try {
     const generator = new PosterGenerator(config.value, (p) => {
@@ -272,6 +282,8 @@ async function handleExport(): Promise<void> {
     ElMessage.error(error instanceof Error ? error.message : '海报导出失败')
     progress.value = { stage: 'error', message: '导出失败', percent: 0 }
   } finally {
+    // 恢复地图控件显示
+    mapControls.forEach(el => (el as HTMLElement).style.display = '')
     isGenerating.value = false
   }
 }

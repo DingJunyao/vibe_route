@@ -62,6 +62,7 @@ declare module 'vue' {
     GeoChartPanel: typeof import('./components/geo-editor/GeoChartPanel.vue')['default']
     LeafletMap: typeof import('./components/map/LeafletMap.vue')['default']
     LiveRecordingDialog: typeof import('./components/LiveRecordingDialog.vue')['default']
+    PosterExportDialog: typeof import('./components/PosterExportDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     TencentMap: typeof import('./components/map/TencentMap.vue')['default']

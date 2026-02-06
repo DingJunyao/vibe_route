@@ -82,13 +82,39 @@ export class PosterGenerator {
         reject(new Error(`捕获超时 (${timeoutMs}ms)`))
       }, timeoutMs)
 
-      html2canvas(mapElement, {
+      // 检测地图类型
+      const hasWebGL = Array.from(mapElement.querySelectorAll('canvas')).some(canvas =>
+        (canvas as HTMLCanvasElement).getContext('webgl') ||
+        (canvas as HTMLCanvasElement).getContext('webgl2')
+      )
+
+      const hasLeaflet = mapElement.querySelector('.leaflet-container') !== null
+
+      // html2canvas 配置
+      const options: any = {
         scale,
         useCORS: true,
-        allowTaint: false,
-        backgroundColor: null,
+        allowTaint: true,
+        backgroundColor: '#f5f7fa',
         logging: false,
-      })
+        imageTimeout: 15000,
+        // 尝试捕获 Canvas 内容
+        onclone: (clonedDoc: Document) => {
+          // 在克隆的文档中隐藏控件
+          const clonedContainer = clonedDoc.querySelector('.universal-map-container') as HTMLElement
+          if (clonedContainer) {
+            const controls = clonedContainer.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
+            controls.forEach(el => (el as HTMLElement).style.display = 'none')
+          }
+        },
+      }
+
+      // 对于非 WebGL 地图（如 Leaflet），尝试使用 foreignObject 处理 Canvas
+      if (!hasWebGL || hasLeaflet) {
+        options.foreignObjectRendering = false
+      }
+
+      html2canvas(mapElement, options)
         .then(canvas => {
           clearTimeout(timer)
           resolve(canvas)
