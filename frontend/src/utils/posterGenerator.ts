@@ -30,7 +30,7 @@ export class PosterGenerator {
    * @returns Base64 格式的图片数据
    */
   async captureMap(mapElement: HTMLElement, scale: number = 2): Promise<string> {
-    this.updateProgress('capturing', `正在捕获地图 (scale=${scale})`, 10)
+    this.updateProgress('capturing', `正在捕获地图`, 10)
 
     // 对于 4K 分辨率，先尝试降级到 2K 以避免内存问题
     const actualScale = scale === 4 ? 2 : scale
@@ -45,6 +45,11 @@ export class PosterGenerator {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error)
         console.warn(`地图捕获失败 (尝试 ${attempt}/3):`, errorMsg)
+
+        // 如果是不支持 WebGL 的错误，直接抛出
+        if (errorMsg.includes('不支持截图') || errorMsg.includes('当前地图类型不支持')) {
+          throw new Error('当前使用的是 WebGL 地图，不支持截图。请切换到 Leaflet 地图（天地图/OSM）后再试。')
+        }
 
         // 如果是内存错误或者超时，且当前是 scale=2，尝试降级到 scale=1
         if ((errorMsg.includes('RangeError') || errorMsg.includes('timeout') || errorMsg.includes('memory')) && actualScale === 2 && attempt === 2) {
@@ -83,35 +88,59 @@ export class PosterGenerator {
       }, timeoutMs)
 
       // 检测地图类型
-      const hasWebGL = Array.from(mapElement.querySelectorAll('canvas')).some(canvas =>
+      const canvasElements = Array.from(mapElement.querySelectorAll('canvas'))
+      const hasWebGL = canvasElements.some(canvas =>
         (canvas as HTMLCanvasElement).getContext('webgl') ||
         (canvas as HTMLCanvasElement).getContext('webgl2')
       )
 
       const hasLeaflet = mapElement.querySelector('.leaflet-container') !== null
 
+      // 对于 WebGL 地图（高德、百度、腾讯），html2canvas 无法捕获
+      if (hasWebGL && !hasLeaflet) {
+        clearTimeout(timer)
+        reject(new Error('当前地图类型不支持截图，请使用 Leaflet 地图（天地图/OSM）'))
+        return
+      }
+
+      // 获取容器的实际尺寸
+      const rect = mapElement.getBoundingClientRect()
+      const width = rect.width || 800
+      const height = rect.height || 600
+
       // html2canvas 配置
       const options: any = {
         scale,
         useCORS: true,
         allowTaint: true,
-        backgroundColor: '#f5f7fa',
+        backgroundColor: '#e8e8e8',  // 地图背景色
         logging: false,
         imageTimeout: 15000,
-        // 尝试捕获 Canvas 内容
+        width: width,
+        height: height,
+        // 在克隆的文档中隐藏控件
         onclone: (clonedDoc: Document) => {
-          // 在克隆的文档中隐藏控件
-          const clonedContainer = clonedDoc.querySelector('.universal-map-container') as HTMLElement
-          if (clonedContainer) {
-            const controls = clonedContainer.querySelectorAll('.map-controls, .desktop-layer-selector, .mobile-layer-selector, .live-update-time-btn, .clear-highlight-btn')
-            controls.forEach(el => (el as HTMLElement).style.display = 'none')
-          }
+          // 隐藏所有地图控件
+          const selectors = [
+            '.map-controls',
+            '.desktop-layer-selector',
+            '.mobile-layer-selector',
+            '.live-update-time-btn',
+            '.clear-highlight-btn',
+            // Leaflet 控件
+            '.leaflet-control-zoom',
+            '.leaflet-control-scale',
+            '.leaflet-control-attribution',
+            '.leaflet-bottom.leaflet-right',
+          ]
+          selectors.forEach(selector => {
+            const elements = clonedDoc.querySelectorAll(selector)
+            elements.forEach(el => {
+              (el as HTMLElement).style.display = 'none'
+              (el as HTMLElement).style.visibility = 'hidden'
+            })
+          })
         },
-      }
-
-      // 对于非 WebGL 地图（如 Leaflet），尝试使用 foreignObject 处理 Canvas
-      if (!hasWebGL || hasLeaflet) {
-        options.foreignObjectRendering = false
       }
 
       html2canvas(mapElement, options)

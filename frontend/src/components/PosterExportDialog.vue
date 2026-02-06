@@ -175,35 +175,31 @@ async function handlePreview(): Promise<void> {
   progress.value = { stage: 'idle', message: '', percent: 0 }
 
   try {
-    let mapImage: string | null = null
-    if (props.mapRef?.captureMap) {
-      progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
-      mapImage = await props.mapRef.captureMap()
+    const mapElement = props.mapRef.getMapElement()
+    if (!mapElement) {
+      ElMessage.error('无法获取地图元素')
+      return
     }
-
-    if (!mapImage && props.mapRef?.getMapElement) {
-      const mapElement = props.mapRef.getMapElement()
-      if (mapElement) {
-        const generator = new PosterGenerator(config.value, (p) => {
-          progress.value = p
-        })
-        mapImage = await generator.captureMap(mapElement, 1)
-      }
-    }
-
-    const data = preparePosterData()
-    data.mapImage = mapImage || undefined
 
     const generator = new PosterGenerator(config.value, (p) => {
       progress.value = p
     })
+
+    progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
+    const mapImage = await generator.captureMap(mapElement, 1)
+
+    const data = preparePosterData()
+    data.mapImage = mapImage
+
+    progress.value = { stage: 'drawing', message: '正在绘制海报', percent: 60 }
     const canvas = await generator.generate(data)
     previewUrl.value = canvas.toDataURL('image/png')
 
     progress.value = { stage: 'done', message: '预览生成完成', percent: 100 }
   } catch (error) {
     console.error('预览生成失败:', error)
-    ElMessage.error(error instanceof Error ? error.message : '预览生成失败')
+    const errorMsg = error instanceof Error ? error.message : '预览生成失败'
+    ElMessage.error(errorMsg)
     progress.value = { stage: 'error', message: '预览生成失败', percent: 0 }
   } finally {
     isGenerating.value = false
@@ -226,37 +222,34 @@ async function handleExport(): Promise<void> {
   previewUrl.value = ''
 
   try {
-    let mapImage: string | null = null
-    if (props.mapRef?.captureMap) {
-      progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
-      mapImage = await props.mapRef.captureMap()
+    const mapElement = props.mapRef.getMapElement()
+    if (!mapElement) {
+      ElMessage.error('无法获取地图元素')
+      return
     }
 
-    if (!mapImage && props.mapRef?.getMapElement) {
-      const mapElement = props.mapRef.getMapElement()
-      if (mapElement) {
-        const scale = config.value.sizePreset.includes('4k') ? 4 : 2
-        const generator = new PosterGenerator(config.value, (p) => {
-          progress.value = p
-        })
-        mapImage = await generator.captureMap(mapElement, scale)
-      }
-    }
-
-    const data = preparePosterData()
-    data.mapImage = mapImage || undefined
-
+    const scale = config.value.sizePreset.includes('4k') ? 4 : 2
     const generator = new PosterGenerator(config.value, (p) => {
       progress.value = p
     })
+
+    progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
+    const mapImage = await generator.captureMap(mapElement, scale)
+
+    const data = preparePosterData()
+    data.mapImage = mapImage
+
+    progress.value = { stage: 'drawing', message: '正在绘制海报', percent: 60 }
     const canvas = await generator.generate(data)
 
     generator.downloadPoster(canvas, props.track.name)
 
     ElMessage.success('海报导出成功')
+    progress.value = { stage: 'done', message: '导出完成', percent: 100 }
   } catch (error) {
     console.error('海报导出失败:', error)
-    ElMessage.error(error instanceof Error ? error.message : '海报导出失败')
+    const errorMsg = error instanceof Error ? error.message : '海报导出失败'
+    ElMessage.error(errorMsg)
     progress.value = { stage: 'error', message: '导出失败', percent: 0 }
   } finally {
     isGenerating.value = false
