@@ -32,22 +32,33 @@ export class PosterGenerator {
   async captureMap(mapElement: HTMLElement, scale: number = 2): Promise<string> {
     this.updateProgress('capturing', `正在捕获地图 (scale=${scale})`, 10)
 
+    // 对于 4K 分辨率，先尝试降级到 2K 以避免内存问题
+    const actualScale = scale === 4 ? 2 : scale
+
     // 尝试最多 3 次
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        const canvas = await html2canvas(mapElement, {
-          scale,
-          useCORS: true,
-          allowTaint: false,
-          backgroundColor: null,
-          logging: false,
-        })
+        const canvas = await this.captureWithTimeout(mapElement, actualScale, 30000)
 
         this.updateProgress('capturing', '地图捕获成功', 30)
         return canvas.toDataURL('image/png')
       } catch (error) {
-        console.warn(`地图捕获失败 (尝试 ${attempt}/3):`, error)
+        const errorMsg = error instanceof Error ? error.message : String(error)
+        console.warn(`地图捕获失败 (尝试 ${attempt}/3):`, errorMsg)
+
+        // 如果是内存错误或者超时，且当前是 scale=2，尝试降级到 scale=1
+        if ((errorMsg.includes('RangeError') || errorMsg.includes('timeout') || errorMsg.includes('memory')) && actualScale === 2 && attempt === 2) {
+          console.log('降级到低分辨率模式 (scale=1)')
+          this.updateProgress('capturing', '降级到低分辨率', 15)
+          return this.captureMap(mapElement, 1)
+        }
+
         if (attempt === 3) {
+          // 最后尝试使用 scale=1
+          if (actualScale > 1) {
+            this.updateProgress('capturing', '降级到低分辨率', 15)
+            return this.captureMap(mapElement, 1)
+          }
           throw new Error('地图捕获失败，请重试')
         }
         // 等待 1 秒后重试
@@ -56,6 +67,37 @@ export class PosterGenerator {
     }
 
     throw new Error('地图捕获失败')
+  }
+
+  /**
+   * 带超时的捕获地图
+   */
+  private captureWithTimeout(
+    mapElement: HTMLElement,
+    scale: number,
+    timeoutMs: number
+  ): Promise<HTMLCanvasElement> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`捕获超时 (${timeoutMs}ms)`))
+      }, timeoutMs)
+
+      html2canvas(mapElement, {
+        scale,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: null,
+        logging: false,
+      })
+        .then(canvas => {
+          clearTimeout(timer)
+          resolve(canvas)
+        })
+        .catch(error => {
+          clearTimeout(timer)
+          reject(error)
+        })
+    })
   }
 
   /**
@@ -391,12 +433,15 @@ export class PosterGenerator {
     fontWeight: 'normal' | 'bold',
     align: 'left' | 'center' | 'right'
   ): void {
+    // 如果文本为空，显示占位符
+    const displayText = text || '--'
+
     ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
     ctx.fillStyle = color
     ctx.textAlign = align
 
     const textX = align === 'center' ? x + maxWidth / 2 : align === 'right' ? x + maxWidth : x
-    ctx.fillText(text, textX, y + fontSize)
+    ctx.fillText(displayText, textX, y + fontSize)
   }
 
   /**
