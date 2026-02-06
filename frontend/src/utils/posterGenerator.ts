@@ -26,31 +26,71 @@ export class PosterGenerator {
   async captureMap(mapElement: HTMLElement, scale: number = 2): Promise<string> {
     this.updateProgress('capturing', '正在捕获地图', 10)
 
-    // 检测地图类型
-    const hasLeaflet = mapElement.querySelector('.leaflet-container') !== null
+    // 直接尝试使用 html2canvas 捕获
+    // 对于所有地图类型都尝试统一处理
+    try {
+      return await this.captureWithHtml2Canvas(mapElement, scale)
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      console.error('html2canvas 捕获失败:', errorMsg)
+      throw new Error('地图捕获失败：' + errorMsg)
+    }
+  }
 
-    // 对于 Leaflet 地图，使用 html2canvas
-    if (hasLeaflet) {
-      return this.captureLeafletMap(mapElement, scale)
+  /**
+   * 使用 html2canvas 捕获地图
+   */
+  private async captureWithHtml2Canvas(mapElement: HTMLElement, scale: number): Promise<string> {
+    // 先隐藏所有控件
+    const controls = mapElement.querySelectorAll(
+      '.map-controls, .desktop-layer-selector, .mobile-layer-selector, ' +
+      '.leaflet-control-zoom, .leaflet-control-scale, .leaflet-control-attribution, ' +
+      '.live-update-time-btn, .clear-highlight-btn'
+    )
+    const originalDisplay: string[] = []
+    for (let i = 0; i < controls.length; i++) {
+      const el = controls[i] as HTMLElement
+      originalDisplay[i] = el.style.display
+      el.style.display = 'none'
     }
 
-    // 对于其他地图，尝试直接从 canvas 获取
-    const canvasElements = mapElement.querySelectorAll('canvas')
-    for (const canvas of Array.from(canvasElements)) {
-      const htmlCanvas = canvas as HTMLCanvasElement
-      try {
-        const dataUrl = htmlCanvas.toDataURL('image/png')
-        // 检查是否是有效的图片（不是空白）
-        if (dataUrl && dataUrl.length > 1000) {
-          this.updateProgress('capturing', '地图捕获成功', 30)
-          return dataUrl
-        }
-      } catch {
-        // 继续尝试下一个 canvas
+    try {
+      // 获取容器尺寸
+      const rect = mapElement.getBoundingClientRect()
+      const width = rect.width || 800
+      const height = rect.height || 600
+
+      // 配置 html2canvas
+      const options: any = {
+        scale,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#e8e8e8',
+        logging: false,
+        imageTimeout: 20000,
+        width,
+        height,
+        windowWidth: width,
+        windowHeight: height,
+      }
+
+      const canvas = await html2canvas(mapElement, options)
+      this.updateProgress('capturing', '地图捕获成功', 30)
+      return canvas.toDataURL('image/png')
+    } finally {
+      // 恢复控件显示
+      for (let i = 0; i < controls.length; i++) {
+        const el = controls[i] as HTMLElement
+        el.style.display = originalDisplay[i] || ''
       }
     }
+  }
 
-    throw new Error('无法捕获地图，请切换到 Leaflet 地图（天地图/OSM）')
+  /**
+   * 捕获 Leaflet 地图（已废弃，统一使用 captureWithHtml2Canvas）
+   */
+  private async captureLeafletMap(mapElement: HTMLElement, scale: number): Promise<string> {
+    return this.captureWithHtml2Canvas(mapElement, scale)
   }
 
   /**
