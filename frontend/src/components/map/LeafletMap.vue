@@ -2178,6 +2178,7 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  getMapElement: () => mapContainer.value || null,
 })
 
 // 生命周期

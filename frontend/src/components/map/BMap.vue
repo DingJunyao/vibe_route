@@ -1421,6 +1421,7 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  getMapElement: () => mapContainer.value || null,
 })
 </script>
 

@@ -405,6 +405,21 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  getMapElement: () => {
+    if (useAMapEngine.value && amapRef.value) {
+      return (amapRef.value as any).getMapElement?.() || null
+    }
+    if (useBMapEngine.value && bmapRef.value) {
+      return (bmapRef.value as any).getMapElement?.() || null
+    }
+    if (useTencentEngine.value && tencentRef.value) {
+      return (tencentRef.value as any).getMapElement?.() || null
+    }
+    if (leafletRef.value) {
+      return (leafletRef.value as any).getMapElement?.() || null
+    }
+    return null
+  },
 })
 </script>
 
