@@ -16,171 +16,111 @@ export class PosterGenerator {
     this.progressCallback = progressCallback
   }
 
-  /**
-   * 更新进度
-   */
   private updateProgress(stage: PosterProgress['stage'], message: string, percent: number): void {
     this.progressCallback?.({ stage, message, percent })
   }
 
   /**
    * 捕获地图截图
-   * @param mapElement 地图 DOM 元素
-   * @param scale 缩放倍数（2 或 4）
-   * @returns Base64 格式的图片数据
    */
   async captureMap(mapElement: HTMLElement, scale: number = 2): Promise<string> {
-    this.updateProgress('capturing', `正在捕获地图`, 10)
+    this.updateProgress('capturing', '正在捕获地图', 10)
 
-    // 对于 4K 分辨率，先尝试降级到 2K 以避免内存问题
-    const actualScale = scale === 4 ? 2 : scale
+    // 检测地图类型
+    const hasLeaflet = mapElement.querySelector('.leaflet-container') !== null
 
-    // 尝试最多 3 次
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    // 对于 Leaflet 地图，使用 html2canvas
+    if (hasLeaflet) {
+      return this.captureLeafletMap(mapElement, scale)
+    }
+
+    // 对于其他地图，尝试直接从 canvas 获取
+    const canvasElements = mapElement.querySelectorAll('canvas')
+    for (const canvas of Array.from(canvasElements)) {
+      const htmlCanvas = canvas as HTMLCanvasElement
       try {
-        const canvas = await this.captureWithTimeout(mapElement, actualScale, 30000)
-
-        this.updateProgress('capturing', '地图捕获成功', 30)
-        return canvas.toDataURL('image/png')
-      } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error)
-        console.warn(`地图捕获失败 (尝试 ${attempt}/3):`, errorMsg)
-
-        // 如果是不支持 WebGL 的错误，直接抛出
-        if (errorMsg.includes('不支持截图') || errorMsg.includes('当前地图类型不支持')) {
-          throw new Error('当前使用的是 WebGL 地图，不支持截图。请切换到 Leaflet 地图（天地图/OSM）后再试。')
+        const dataUrl = htmlCanvas.toDataURL('image/png')
+        // 检查是否是有效的图片（不是空白）
+        if (dataUrl && dataUrl.length > 1000) {
+          this.updateProgress('capturing', '地图捕获成功', 30)
+          return dataUrl
         }
-
-        // 如果是内存错误或者超时，且当前是 scale=2，尝试降级到 scale=1
-        if ((errorMsg.includes('RangeError') || errorMsg.includes('timeout') || errorMsg.includes('memory')) && actualScale === 2 && attempt === 2) {
-          console.log('降级到低分辨率模式 (scale=1)')
-          this.updateProgress('capturing', '降级到低分辨率', 15)
-          return this.captureMap(mapElement, 1)
-        }
-
-        if (attempt === 3) {
-          // 最后尝试使用 scale=1
-          if (actualScale > 1) {
-            this.updateProgress('capturing', '降级到低分辨率', 15)
-            return this.captureMap(mapElement, 1)
-          }
-          throw new Error('地图捕获失败，请重试')
-        }
-        // 等待 1 秒后重试
-        await new Promise(resolve => setTimeout(resolve, 1000))
+      } catch {
+        // 继续尝试下一个 canvas
       }
     }
 
-    throw new Error('地图捕获失败')
+    throw new Error('无法捕获地图，请切换到 Leaflet 地图（天地图/OSM）')
   }
 
   /**
-   * 带超时的捕获地图
+   * 捕获 Leaflet 地图
    */
-  private captureWithTimeout(
-    mapElement: HTMLElement,
-    scale: number,
-    timeoutMs: number
-  ): Promise<HTMLCanvasElement> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`捕获超时 (${timeoutMs}ms)`))
-      }, timeoutMs)
+  private async captureLeafletMap(mapElement: HTMLElement, scale: number): Promise<string> {
+    // 先隐藏所有控件
+    const controls = mapElement.querySelectorAll(
+      '.map-controls, .desktop-layer-selector, .mobile-layer-selector, ' +
+      '.leaflet-control-zoom, .leaflet-control-scale, .leaflet-control-attribution, ' +
+      '.live-update-time-btn, .clear-highlight-btn'
+    )
+    const originalDisplay: string[] = []
+    controls.forEach((el, i) => {
+      originalDisplay[i] = (el as HTMLElement).style.display
+      ;(el as HTMLElement).style.display = 'none'
+    })
 
-      // 检测地图类型
-      const canvasElements = Array.from(mapElement.querySelectorAll('canvas'))
-      const hasWebGL = canvasElements.some(canvas =>
-        (canvas as HTMLCanvasElement).getContext('webgl') ||
-        (canvas as HTMLCanvasElement).getContext('webgl2')
-      )
-
-      const hasLeaflet = mapElement.querySelector('.leaflet-container') !== null
-
-      // 对于 WebGL 地图（高德、百度、腾讯），html2canvas 无法捕获
-      if (hasWebGL && !hasLeaflet) {
-        clearTimeout(timer)
-        reject(new Error('当前地图类型不支持截图，请使用 Leaflet 地图（天地图/OSM）'))
-        return
-      }
-
-      // 获取容器的实际尺寸
+    try {
+      // 获取容器尺寸
       const rect = mapElement.getBoundingClientRect()
       const width = rect.width || 800
       const height = rect.height || 600
 
-      // html2canvas 配置
+      // 配置 html2canvas
       const options: any = {
         scale,
         useCORS: true,
         allowTaint: true,
-        backgroundColor: '#e8e8e8',  // 地图背景色
+        backgroundColor: '#e8e8e8',
         logging: false,
-        imageTimeout: 15000,
-        width: width,
-        height: height,
-        // 在克隆的文档中隐藏控件
-        onclone: (clonedDoc: Document) => {
-          // 隐藏所有地图控件
-          const selectors = [
-            '.map-controls',
-            '.desktop-layer-selector',
-            '.mobile-layer-selector',
-            '.live-update-time-btn',
-            '.clear-highlight-btn',
-            // Leaflet 控件
-            '.leaflet-control-zoom',
-            '.leaflet-control-scale',
-            '.leaflet-control-attribution',
-            '.leaflet-bottom.leaflet-right',
-          ]
-          selectors.forEach(selector => {
-            const elements = clonedDoc.querySelectorAll(selector)
-            elements.forEach(el => {
-              (el as HTMLElement).style.display = 'none'
-              (el as HTMLElement).style.visibility = 'hidden'
-            })
-          })
-        },
+        imageTimeout: 20000,
+        width,
+        height,
+        windowWidth: width,
+        windowHeight: height,
       }
 
-      html2canvas(mapElement, options)
-        .then(canvas => {
-          clearTimeout(timer)
-          resolve(canvas)
-        })
-        .catch(error => {
-          clearTimeout(timer)
-          reject(error)
-        })
-    })
+      const canvas = await html2canvas(mapElement, options)
+      this.updateProgress('capturing', '地图捕获成功', 30)
+      return canvas.toDataURL('image/png')
+    } finally {
+      // 恢复控件显示
+      controls.forEach((el, i) => {
+        ;(el as HTMLElement).style.display = originalDisplay[i] || ''
+      })
+    }
   }
 
   /**
    * 生成海报
-   * @param data 海报数据
-   * @returns HTMLCanvasElement
    */
   async generate(data: PosterData): Promise<HTMLCanvasElement> {
     this.updateProgress('drawing', '正在绘制海报', 40)
 
-    // 计算尺寸
-    const preset = POSTER_SIZE_PRESETS[this.config.sizePreset] || POSTER_SIZE_PRESETS.portrait_1080
+    const preset = POSTER_SIZE_PRESETS[this.config.sizePreset] || POSTER_SIZE_PRESETS.landscape_1080
     const width = this.config.customWidth || preset.width
     const height = this.config.customHeight || preset.height
-    const scale = preset.scale
+    const scaleFactor = preset.scale
 
-    // 创建 Canvas
     const canvas = document.createElement('canvas')
-    canvas.width = width * scale
-    canvas.height = height * scale
+    canvas.width = width * scaleFactor
+    canvas.height = height * scaleFactor
     const ctx = canvas.getContext('2d')
 
     if (!ctx) {
       throw new Error('无法创建 Canvas 上下文')
     }
 
-    // 缩放上下文以匹配 scale
-    ctx.scale(scale, scale)
+    ctx.scale(scaleFactor, scaleFactor)
 
     // 根据模板绘制
     switch (this.config.template) {
@@ -195,7 +135,6 @@ export class PosterGenerator {
         break
     }
 
-    // 绘制水印
     if (this.config.showWatermark) {
       this.drawWatermark(ctx, width, height)
     }
@@ -204,84 +143,63 @@ export class PosterGenerator {
     return canvas
   }
 
-  /**
-   * 绘制简洁模板
-   */
   private async drawSimpleTemplate(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
     width: number,
     height: number
   ): Promise<void> {
-    // 绘制背景
     this.drawBackground(ctx, width, height, '#f5f7fa')
 
-    // 地图区域（60%）
     const mapHeight = height * 0.6
     if (data.mapImage) {
       await this.drawImage(ctx, data.mapImage, 0, 0, width, mapHeight)
     }
 
-    // 信息卡片区域（40%）
     const cardY = mapHeight
     const cardHeight = height - mapHeight
     this.drawInfoCard(ctx, data, 20, cardY + 20, width - 40, cardHeight - 40, 'simple')
   }
 
-  /**
-   * 绘制丰富模板（横版布局）
-   */
   private async drawRichTemplate(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
     width: number,
     height: number
   ): Promise<void> {
-    // 绘制渐变背景
     const gradient = ctx.createLinearGradient(0, 0, width, height)
     gradient.addColorStop(0, '#667eea')
     gradient.addColorStop(1, '#764ba2')
     this.drawBackground(ctx, width, height, gradient)
 
-    // 左侧地图（50%）
     const mapWidth = width * 0.5
     if (data.mapImage) {
       await this.drawImage(ctx, data.mapImage, 20, 20, mapWidth - 40, height - 40)
     }
 
-    // 右侧信息面板（50%）
     const infoX = mapWidth
     const infoWidth = width - mapWidth
     this.drawInfoCard(ctx, data, infoX + 20, 20, infoWidth - 40, height - 40, 'rich')
   }
 
-  /**
-   * 绘制地理模板
-   */
   private async drawGeoTemplate(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
     width: number,
     height: number
   ): Promise<void> {
-    // 绘制背景
     this.drawBackground(ctx, width, height, '#f5f7fa')
 
-    // 地图区域（60%）
     const mapHeight = height * 0.6
     if (data.mapImage) {
       await this.drawImage(ctx, data.mapImage, 0, 0, width, mapHeight)
     }
 
-    // 信息卡片区域（40%）
     const cardY = mapHeight
     const cardHeight = height - mapHeight
     this.drawInfoCard(ctx, data, 20, cardY + 20, width - 40, cardHeight - 40, 'geo')
   }
 
-  /**
-   * 绘制背景
-   */
   private drawBackground(
     ctx: CanvasRenderingContext2D,
     width: number,
@@ -292,9 +210,6 @@ export class PosterGenerator {
     ctx.fillRect(0, 0, width, height)
   }
 
-  /**
-   * 绘制图片
-   */
   private async drawImage(
     ctx: CanvasRenderingContext2D,
     src: string,
@@ -305,6 +220,7 @@ export class PosterGenerator {
   ): Promise<void> {
     return new Promise((resolve, reject) => {
       const img = new Image()
+      img.crossOrigin = 'anonymous'
       img.onload = () => {
         ctx.drawImage(img, x, y, width, height)
         resolve()
@@ -314,9 +230,6 @@ export class PosterGenerator {
     })
   }
 
-  /**
-   * 绘制信息卡片
-   */
   private drawInfoCard(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
@@ -326,7 +239,6 @@ export class PosterGenerator {
     height: number,
     template: 'simple' | 'rich' | 'geo'
   ): void {
-    // 绘制卡片背景（白色带阴影）
     ctx.shadowColor = 'rgba(0, 0, 0, 0.1)'
     ctx.shadowBlur = 20
     ctx.shadowOffsetX = 0
@@ -337,19 +249,14 @@ export class PosterGenerator {
     ctx.fill()
     ctx.shadowColor = 'transparent'
 
-    // 卡片内边距
     const padding = 24
     const contentX = x + padding
     const contentY = y + padding
     const contentWidth = width - padding * 2
 
-    // 绘制标题
     this.drawText(ctx, data.name, contentX, contentY, contentWidth, 32, '#1f2937', 'bold', 'left')
-
-    // 绘制日期
     this.drawText(ctx, data.date, contentX, contentY + 44, contentWidth, 16, '#6b7280', 'normal', 'left')
 
-    // 根据模板绘制不同内容
     if (template === 'simple') {
       this.drawSimpleStats(ctx, data, contentX, contentY + 80, contentWidth)
     } else if (template === 'rich') {
@@ -359,9 +266,6 @@ export class PosterGenerator {
     }
   }
 
-  /**
-   * 绘制圆角矩形
-   */
   private roundRect(
     ctx: CanvasRenderingContext2D,
     x: number,
@@ -382,9 +286,6 @@ export class PosterGenerator {
     ctx.closePath()
   }
 
-  /**
-   * 绘制简洁统计信息
-   */
   private drawSimpleStats(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
@@ -393,16 +294,10 @@ export class PosterGenerator {
     width: number
   ): void {
     const itemWidth = width / 2 - 12
-
-    // 里程
     this.drawStatItem(ctx, '里程', this.formatDistance(data.distance), x, y, itemWidth)
-    // 时长
     this.drawStatItem(ctx, '时长', this.formatDuration(data.duration), x + itemWidth + 24, y, itemWidth)
   }
 
-  /**
-   * 绘制丰富统计信息
-   */
   private drawRichStats(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
@@ -413,11 +308,9 @@ export class PosterGenerator {
     const itemWidth = width / 2 - 12
     const itemHeight = 80
 
-    // 第一行
     this.drawStatItem(ctx, '里程', this.formatDistance(data.distance), x, y, itemWidth)
     this.drawStatItem(ctx, '时长', this.formatDuration(data.duration), x + itemWidth + 24, y, itemWidth)
 
-    // 第二行
     if (data.avgSpeed !== undefined) {
       this.drawStatItem(ctx, '平均速度', this.formatSpeed(data.avgSpeed), x, y + itemHeight, itemWidth)
     }
@@ -425,14 +318,10 @@ export class PosterGenerator {
       this.drawStatItem(ctx, '最高速度', this.formatSpeed(data.maxSpeed), x + itemWidth + 24, y + itemHeight, itemWidth)
     }
 
-    // 第三行
     this.drawStatItem(ctx, '爬升', `${Math.round(data.elevationGain)} m`, x, y + itemHeight * 2, itemWidth)
     this.drawStatItem(ctx, '下降', `${Math.round(data.elevationLoss)} m`, x + itemWidth + 24, y + itemHeight * 2, itemWidth)
   }
 
-  /**
-   * 绘制地理统计信息
-   */
   private drawGeoStats(
     ctx: CanvasRenderingContext2D,
     data: PosterData,
@@ -441,25 +330,18 @@ export class PosterGenerator {
     width: number
   ): void {
     const itemWidth = width / 2 - 12
-
-    // 里程和时长
     this.drawStatItem(ctx, '里程', this.formatDistance(data.distance), x, y, itemWidth)
     this.drawStatItem(ctx, '时长', this.formatDuration(data.duration), x + itemWidth + 24, y, itemWidth)
 
-    // 经过区域
     if (data.regions && data.regions.length > 0) {
       const regionY = y + 80
       this.drawText(ctx, '经过区域', x, regionY, width, 14, '#6b7280', 'normal', 'left')
-
       const displayRegions = data.regions.slice(0, 5)
       const regionText = displayRegions.join(' · ') + (data.regions.length > 5 ? ' ...' : '')
       this.drawText(ctx, regionText, x, regionY + 24, width, 16, '#374151', 'normal', 'left')
     }
   }
 
-  /**
-   * 绘制统计项
-   */
   private drawStatItem(
     ctx: CanvasRenderingContext2D,
     label: string,
@@ -468,15 +350,10 @@ export class PosterGenerator {
     y: number,
     width: number
   ): void {
-    // 标签
     this.drawText(ctx, label, x, y, width, 14, '#6b7280', 'normal', 'left')
-    // 数值
     this.drawText(ctx, value, x, y + 24, width, 24, '#1f2937', 'bold', 'left')
   }
 
-  /**
-   * 绘制文本
-   */
   private drawText(
     ctx: CanvasRenderingContext2D,
     text: string,
@@ -488,20 +365,14 @@ export class PosterGenerator {
     fontWeight: 'normal' | 'bold',
     align: 'left' | 'center' | 'right'
   ): void {
-    // 如果文本为空，显示占位符
     const displayText = text || '--'
-
-    ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`
+    ctx.font = `${fontWeight} ${fontSize}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
     ctx.fillStyle = color
     ctx.textAlign = align
-
     const textX = align === 'center' ? x + maxWidth / 2 : align === 'right' ? x + maxWidth : x
     ctx.fillText(displayText, textX, y + fontSize)
   }
 
-  /**
-   * 绘制水印
-   */
   private drawWatermark(ctx: CanvasRenderingContext2D, width: number, height: number): void {
     ctx.save()
     ctx.translate(width / 2, height - 30)
@@ -512,9 +383,6 @@ export class PosterGenerator {
     ctx.restore()
   }
 
-  /**
-   * 格式化距离
-   */
   private formatDistance(meters: number): string {
     if (meters < 1000) {
       return `${Math.round(meters)} m`
@@ -523,30 +391,20 @@ export class PosterGenerator {
     return km.endsWith('.00') ? `${km.slice(0, -3)} km` : `${km} km`
   }
 
-  /**
-   * 格式化时长
-   */
   private formatDuration(seconds: number): string {
     const hours = Math.floor(seconds / 3600)
     const minutes = Math.floor((seconds % 3600) / 60)
-
     if (hours > 0) {
       return `${hours}h ${minutes}min`
     }
     return `${minutes}min`
   }
 
-  /**
-   * 格式化速度
-   */
   private formatSpeed(speedMps: number): string {
     const kmh = speedMps * 3.6
     return `${kmh.toFixed(1)} km/h`
   }
 
-  /**
-   * 下载海报
-   */
   downloadPoster(canvas: HTMLCanvasElement, filename: string): void {
     const link = document.createElement('a')
     link.download = `${filename}.png`
