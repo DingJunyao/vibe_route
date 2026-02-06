@@ -18,35 +18,24 @@ export class PosterGenerator {
 
   private updateProgress(stage: PosterProgress['stage'], message: string, percent: number): void {
     this.progressCallback?.({ stage, message, percent })
+    console.log(`[PosterGenerator] ${stage}: ${message} (${percent}%)`)
   }
 
-  /**
-   * 捕获地图截图
-   */
   async captureMap(mapElement: HTMLElement, scale: number = 2): Promise<string> {
     this.updateProgress('capturing', '正在捕获地图', 10)
 
-    // 直接尝试使用 html2canvas 捕获
-    // 对于所有地图类型都尝试统一处理
-    try {
-      return await this.captureWithHtml2Canvas(mapElement, scale)
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error)
-      console.error('html2canvas 捕获失败:', errorMsg)
-      throw new Error('地图捕获失败：' + errorMsg)
-    }
-  }
+    console.log('[PosterGenerator] mapElement:', mapElement)
+    console.log('[PosterGenerator] mapElement class:', mapElement.className)
+    console.log('[PosterGenerator] mapElement children:', mapElement.children.length)
 
-  /**
-   * 使用 html2canvas 捕获地图
-   */
-  private async captureWithHtml2Canvas(mapElement: HTMLElement, scale: number): Promise<string> {
     // 先隐藏所有控件
     const controls = mapElement.querySelectorAll(
       '.map-controls, .desktop-layer-selector, .mobile-layer-selector, ' +
       '.leaflet-control-zoom, .leaflet-control-scale, .leaflet-control-attribution, ' +
       '.live-update-time-btn, .clear-highlight-btn'
     )
+    console.log('[PosterGenerator] hiding controls:', controls.length)
+
     const originalDisplay: string[] = []
     for (let i = 0; i < controls.length; i++) {
       const el = controls[i] as HTMLElement
@@ -60,13 +49,15 @@ export class PosterGenerator {
       const width = rect.width || 800
       const height = rect.height || 600
 
+      console.log('[PosterGenerator] container size:', { width, height })
+
       // 配置 html2canvas
       const options: any = {
         scale,
         useCORS: true,
         allowTaint: true,
         backgroundColor: '#e8e8e8',
-        logging: false,
+        logging: true,  // 开启日志以便调试
         imageTimeout: 20000,
         width,
         height,
@@ -74,9 +65,14 @@ export class PosterGenerator {
         windowHeight: height,
       }
 
+      console.log('[PosterGenerator] calling html2canvas with options:', options)
       const canvas = await html2canvas(mapElement, options)
+      console.log('[PosterGenerator] html2canvas success, canvas size:', canvas.width, 'x', canvas.height)
+
       this.updateProgress('capturing', '地图捕获成功', 30)
-      return canvas.toDataURL('image/png')
+      const dataUrl = canvas.toDataURL('image/png')
+      console.log('[PosterGenerator] dataURL length:', dataUrl.length)
+      return dataUrl
     } finally {
       // 恢复控件显示
       for (let i = 0; i < controls.length; i++) {
@@ -86,63 +82,6 @@ export class PosterGenerator {
     }
   }
 
-  /**
-   * 捕获 Leaflet 地图（已废弃，统一使用 captureWithHtml2Canvas）
-   */
-  private async captureLeafletMap(mapElement: HTMLElement, scale: number): Promise<string> {
-    return this.captureWithHtml2Canvas(mapElement, scale)
-  }
-
-  /**
-   * 捕获 Leaflet 地图
-   */
-  private async captureLeafletMap(mapElement: HTMLElement, scale: number): Promise<string> {
-    // 先隐藏所有控件
-    const controls = mapElement.querySelectorAll(
-      '.map-controls, .desktop-layer-selector, .mobile-layer-selector, ' +
-      '.leaflet-control-zoom, .leaflet-control-scale, .leaflet-control-attribution, ' +
-      '.live-update-time-btn, .clear-highlight-btn'
-    )
-    const originalDisplay: string[] = []
-    controls.forEach((el, i) => {
-      originalDisplay[i] = (el as HTMLElement).style.display
-      ;(el as HTMLElement).style.display = 'none'
-    })
-
-    try {
-      // 获取容器尺寸
-      const rect = mapElement.getBoundingClientRect()
-      const width = rect.width || 800
-      const height = rect.height || 600
-
-      // 配置 html2canvas
-      const options: any = {
-        scale,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#e8e8e8',
-        logging: false,
-        imageTimeout: 20000,
-        width,
-        height,
-        windowWidth: width,
-        windowHeight: height,
-      }
-
-      const canvas = await html2canvas(mapElement, options)
-      this.updateProgress('capturing', '地图捕获成功', 30)
-      return canvas.toDataURL('image/png')
-    } finally {
-      // 恢复控件显示
-      controls.forEach((el, i) => {
-        ;(el as HTMLElement).style.display = originalDisplay[i] || ''
-      })
-    }
-  }
-
-  /**
-   * 生成海报
-   */
   async generate(data: PosterData): Promise<HTMLCanvasElement> {
     this.updateProgress('drawing', '正在绘制海报', 40)
 
