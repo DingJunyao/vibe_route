@@ -415,7 +415,7 @@
                 <!-- <div style="background: #e5e5e5; padding: 10px; font-size: 12px; color: #666;">
                   调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
                 </div> -->
-                <div class="normal-map-container">
+                <div ref="mapElementRef" class="normal-map-container">
                   <UniversalMap
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
@@ -426,7 +426,6 @@
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
-                  </div>
                 </div>
               </template>
               <template v-else>
