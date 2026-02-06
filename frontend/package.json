@@ -24,6 +24,7 @@
     "codemirror": "^6.0.2",
     "echarts": "^5.4.3",
     "element-plus": "^2.4.4",
+    "html2canvas": "^1.4.1",
     "js-sha256": "^0.11.1",
     "leaflet": "^1.9.4",
     "leaflet.chinatmsproviders": "^3.0.6",
