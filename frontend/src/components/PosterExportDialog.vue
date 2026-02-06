@@ -63,69 +63,52 @@
 </template>
 
 <script setup lang="ts">
-/**
- * 海报导出对话框
- * 用于配置和生成轨迹海报
- */
 import { ref, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { PosterGenerator } from '@/utils/posterGenerator'
 import type { PosterConfig, PosterProgress } from '@/types/poster'
 import type { Track, TrackPoint, RegionNode } from '@/api/track'
 
-// Props
 interface Props {
   visible: boolean
   track: Track | null
   points: TrackPoint[]
   regions?: RegionNode[]
-  mapRef?: any  // UniversalMap 组件引用
+  mapRef?: any
 }
 
 const props = withDefaults(defineProps<Props>(), {
   visible: false,
   points: () => [],
   regions: () => [],
-  mapRef: null,
+  mapRef: undefined,
 })
 
-// Emits
 const emit = defineEmits<{
   'update:visible': [value: boolean]
 }>()
 
-// 对话框可见性
 const dialogVisible = ref(props.visible)
 
-// 配置
 const config = ref<PosterConfig>({
   template: 'simple',
-  sizePreset: 'landscape_1080',  // 默认横版
+  sizePreset: 'landscape_1080',
   showWatermark: true,
   infoLevel: 'basic',
 })
 
-// 预览图片
 const previewUrl = ref('')
-
-// 进度
 const progress = ref<PosterProgress>({
   stage: 'idle',
   message: '',
   percent: 0,
 })
-
-// 是否正在生成
 const isGenerating = ref(false)
-
-// 计算是否移动端
 const isMobile = computed(() => window.innerWidth <= 1366)
 
-// 监听 visible 变化
 watch(() => props.visible, (newVal) => {
   dialogVisible.value = newVal
   if (!newVal) {
-    // 关闭时清空预览
     previewUrl.value = ''
     progress.value = { stage: 'idle', message: '', percent: 0 }
   }
@@ -137,9 +120,6 @@ watch(dialogVisible, (newVal) => {
   }
 })
 
-/**
- * 关闭对话框
- */
 function handleClose(): void {
   if (isGenerating.value) {
     ElMessage.warning('正在生成海报，请稍候...')
@@ -148,9 +128,6 @@ function handleClose(): void {
   dialogVisible.value = false
 }
 
-/**
- * 准备海报数据
- */
 function preparePosterData() {
   if (!props.track) {
     throw new Error('轨迹数据不存在')
@@ -159,7 +136,6 @@ function preparePosterData() {
   const { regions } = props
   let regionNames: string[] = []
 
-  // 提取区域名称
   if (regions && regions.length > 0) {
     const extractNames = (nodes: RegionNode[]): string[] => {
       const names: string[] = []
@@ -189,9 +165,6 @@ function preparePosterData() {
   }
 }
 
-/**
- * 预览海报
- */
 async function handlePreview(): Promise<void> {
   if (!props.mapRef) {
     ElMessage.error('地图未加载完成')
@@ -202,14 +175,12 @@ async function handlePreview(): Promise<void> {
   progress.value = { stage: 'idle', message: '', percent: 0 }
 
   try {
-    // 优先使用地图 SDK 的截图 API
     let mapImage: string | null = null
     if (props.mapRef?.captureMap) {
-      progress.value = { stage: 'capturing', '正在捕获地图', 10 }
+      progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
       mapImage = await props.mapRef.captureMap()
     }
 
-    // 如果地图 SDK 没有返回截图，尝试使用 html2canvas
     if (!mapImage && props.mapRef?.getMapElement) {
       const mapElement = props.mapRef.getMapElement()
       if (mapElement) {
@@ -220,11 +191,9 @@ async function handlePreview(): Promise<void> {
       }
     }
 
-    // 准备数据
     const data = preparePosterData()
     data.mapImage = mapImage || undefined
 
-    // 生成海报
     const generator = new PosterGenerator(config.value, (p) => {
       progress.value = p
     })
@@ -241,9 +210,6 @@ async function handlePreview(): Promise<void> {
   }
 }
 
-/**
- * 导出海报
- */
 async function handleExport(): Promise<void> {
   if (!props.mapRef) {
     ElMessage.error('地图未加载完成')
@@ -260,14 +226,12 @@ async function handleExport(): Promise<void> {
   previewUrl.value = ''
 
   try {
-    // 优先使用地图 SDK 的截图 API
     let mapImage: string | null = null
     if (props.mapRef?.captureMap) {
-      progress.value = { stage: 'capturing', '正在捕获地图', 10 }
+      progress.value = { stage: 'capturing', message: '正在捕获地图', percent: 10 }
       mapImage = await props.mapRef.captureMap()
     }
 
-    // 如果地图 SDK 没有返回截图，尝试使用 html2canvas
     if (!mapImage && props.mapRef?.getMapElement) {
       const mapElement = props.mapRef.getMapElement()
       if (mapElement) {
@@ -279,17 +243,14 @@ async function handleExport(): Promise<void> {
       }
     }
 
-    // 准备数据
     const data = preparePosterData()
     data.mapImage = mapImage || undefined
 
-    // 生成海报
     const generator = new PosterGenerator(config.value, (p) => {
       progress.value = p
     })
     const canvas = await generator.generate(data)
 
-    // 下载
     generator.downloadPoster(canvas, props.track.name)
 
     ElMessage.success('海报导出成功')
