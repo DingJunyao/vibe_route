@@ -909,3 +909,146 @@ async def import_track_points(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导入失败: {str(e)}",
         )
+
+
+# ========== 公开 API 端点（用于海报生成） ==========
+
+POSTER_SECRET = settings.POSTER_SECRET if hasattr(settings, 'POSTER_SECRET') else "vibe-route-poster-secret"
+
+
+@router.get("/{track_id}/public", response_model=TrackResponse)
+async def get_track_public(
+    track_id: int,
+    secret: str = Query(..., description="海报生成密钥"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    公开获取轨迹详情（用于海报生成）
+
+    需要提供 poster secret 进行验证
+    只返回轨迹基本信息，不包含用户敏感信息
+    """
+    # 验证密钥
+    if secret != POSTER_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的海报生成密钥"
+        )
+
+    # 获取轨迹（跳过用户权限检查）
+    from app.models.track import Track
+    from sqlalchemy.orm import selectinload
+
+    query = (
+        select(Track)
+        .options(selectinload(Track.live_recordings))
+        .where(Track.id == track_id, Track.is_valid == True)
+    )
+    result = await db.execute(query)
+    track = result.scalar_one_or_none()
+
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在"
+        )
+
+    # 构建响应（与 TrackResponse 一致，但不包含敏感信息）
+    response_data = {
+        "id": track.id,
+        "user_id": track.user_id,  # 海报生成不需要用户信息，但保持 schema 一致
+        "name": track.name,
+        "description": track.description,
+        "original_filename": track.original_filename,
+        "original_crs": track.original_crs,
+        "distance": track.distance or 0,
+        "duration": track.duration or 0,
+        "elevation_gain": track.elevation_gain or 0,
+        "elevation_loss": track.elevation_loss or 0,
+        "start_time": track.start_time.isoformat() if track.start_time else None,
+        "end_time": track.end_time.isoformat() if track.end_time else None,
+        "has_area_info": track.has_area_info,
+        "has_road_info": track.has_road_info,
+        "is_live_recording": track.is_live_recording,
+        "created_at": track.created_at.isoformat() if track.created_at else None,
+        "updated_at": track.updated_at.isoformat() if track.updated_at else None,
+    }
+
+    # 实时记录状态
+    if track.live_recordings:
+        # 获取第一个有效的实时记录
+        recording = next((r for r in track.live_recordings if r.is_valid), None)
+        if recording:
+            response_data["live_recording_status"] = recording.status
+
+    return response_data
+
+
+@router.get("/{track_id}/points/public")
+async def get_track_points_public(
+    track_id: int,
+    secret: str = Query(..., description="海报生成密钥"),
+    crs: str = Query("wgs84", pattern="^(wgs84|gcj02|bd09)$"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    公开获取轨迹点数据（用于海报生成）
+
+    需要提供 poster secret 进行验证
+    返回所有坐标系数据，方便地图切换
+    """
+    # 验证密钥
+    if secret != POSTER_SECRET:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的海报生成密钥"
+        )
+
+    # 获取轨迹点（跳过用户权限检查）
+    from app.models.track import Track, TrackPoint
+
+    # 先检查轨迹是否存在
+    track_result = await db.execute(
+        select(Track).where(Track.id == track_id, Track.is_valid == True)
+    )
+    track = track_result.scalar_one_or_none()
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在"
+        )
+
+    # 获取轨迹点
+    result = await db.execute(
+        select(TrackPoint)
+        .where(TrackPoint.track_id == track_id, TrackPoint.is_valid == True)
+        .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
+    )
+    points = result.scalars().all()
+
+    # 返回所有坐标系数据
+    points_data = []
+    for point in points:
+        time_str = None
+        if point.time is not None:
+            time_str = point.time.isoformat() + '+00:00'
+
+        point_data = {
+            "id": point.id,
+            "point_index": point.point_index,
+            "time": time_str,
+            "latitude": point.latitude_wgs84,
+            "longitude": point.longitude_wgs84,
+            "latitude_wgs84": point.latitude_wgs84,
+            "longitude_wgs84": point.longitude_wgs84,
+            "latitude_gcj02": point.latitude_gcj02,
+            "longitude_gcj02": point.longitude_gcj02,
+            "latitude_bd09": point.latitude_bd09,
+            "longitude_bd09": point.longitude_bd09,
+            "elevation": point.elevation,
+        }
+        points_data.append(point_data)
+
+    return {
+        "points": points_data,
+    }

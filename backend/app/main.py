@@ -1,22 +1,32 @@
 """
 FastAPI 主应用
 """
-from contextlib import asynccontextmanager
-from pathlib import Path
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
+import asyncio
 import sys
 import traceback
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from starlette.middleware.gzip import GZipMiddleware
+
+# Windows 上需要使用 ProactorEventLoop 来支持子进程
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+# Windows 上需要使用 ProactorEventLoop 来支持子进程
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -228,6 +238,7 @@ app.include_router(logs.router, prefix=settings.API_V1_PREFIX)
 app.include_router(live_recordings.router, prefix=settings.API_V1_PREFIX)
 app.include_router(websocket.router, prefix=settings.API_V1_PREFIX)
 app.include_router(geo_editor.router, prefix=settings.API_V1_PREFIX)
+app.include_router(poster.router, prefix="/api/poster", tags=["poster"])
 
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息

@@ -10,6 +10,8 @@
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :mode="mode"
+      :map-scale="mapScale"
+      :track-orientation="trackOrientation"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -24,6 +26,8 @@
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :mode="mode"
+      :map-scale="mapScale"
+      :track-orientation="trackOrientation"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -38,6 +42,8 @@
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :mode="mode"
+      :map-scale="mapScale"
+      :track-orientation="trackOrientation"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -54,6 +60,8 @@
       :default-layer-id="currentLayerId"
       :hide-layer-selector="true"
       :mode="mode"
+      :map-scale="mapScale"
+      :track-orientation="trackOrientation"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -167,6 +175,7 @@ interface Props {
   mode?: 'home' | 'detail'
   liveStatusText?: string  // 实时更新状态文字（已废弃，使用 liveUpdateTime）
   liveUpdateTime?: string | null  // 实时更新时间
+  mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -179,6 +188,7 @@ const props = withDefaults(defineProps<Props>(), {
   mode: 'detail',
   liveStatusText: '',
   liveUpdateTime: null,
+  mapScale: 100,
 })
 
 // 定义 emit 事件
@@ -218,6 +228,59 @@ const highlightSegment = computed(() => {
   const maxEnd = Math.max(...segments.map(s => s.end))
 
   return { start: minStart, end: maxEnd }
+})
+
+// 计算轨迹方向（用于海报生成时的 zoom 调整）
+// 返回 'horizontal'（横向）或 'vertical'（竖向）
+const trackOrientation = computed(() => {
+  if (!props.tracks || props.tracks.length === 0) return 'horizontal'
+
+  // 收集所有轨迹点
+  let minLat = Infinity, maxLat = -Infinity
+  let minLon = Infinity, maxLon = -Infinity
+  let pointCount = 0
+
+  for (const track of props.tracks) {
+    if (!track.points || track.points.length === 0) continue
+
+    for (const point of track.points) {
+      // 使用 WGS84 坐标（如果没有则回退）
+      const lat = point.latitude_wgs84 ?? point.latitude ?? 0
+      const lon = point.longitude_wgs84 ?? point.longitude ?? 0
+
+      if (isNaN(lat) || isNaN(lon)) continue
+
+      minLat = Math.min(minLat, lat)
+      maxLat = Math.max(maxLat, lat)
+      minLon = Math.min(minLon, lon)
+      maxLon = Math.max(maxLon, lon)
+      pointCount++
+    }
+  }
+
+  if (pointCount === 0) return 'horizontal'
+
+  // 计算边界框的宽高比
+  const latDiff = maxLat - minLat
+  const lonDiff = maxLon - minLon
+
+  // 在中纬度地区，1 度纬度约 111km，1 度经度约 111km * cos(纬度)
+  // 取平均纬度计算
+  const avgLat = (minLat + maxLat) / 2
+  const latToKm = 111
+  const lonToKm = 111 * Math.cos(avgLat * Math.PI / 180)
+
+  const heightKm = latDiff * latToKm
+  const widthKm = lonDiff * lonToKm
+
+  // 使用 1.5 作为阈值：宽高比 > 1.5 为横向，< 1/1.5 为竖向，中间为横向
+  const ratio = widthKm / (heightKm || 1) // 避免除以 0
+
+  const orientation = ratio > 1.5 ? 'horizontal' : 'vertical'
+
+  console.log('[UniversalMap] 轨迹方向:', orientation === 'horizontal' ? '横' : '竖', `宽高比${ratio.toFixed(2)}`)
+
+  return orientation
 })
 
 // 当前选择的地图层 ID
@@ -276,16 +339,73 @@ function toggleFullscreen() {
 }
 
 // 将所有轨迹居中显示（四周留 5% 空间）
-function fitBounds() {
+function fitBounds(customPadding?: number) {
+  // 如果提供了自定义 padding，使用它；否则根据 mapScale 计算
+  const paddingPercent = customPadding ?? (props.mapScale ? calculatePaddingForScale(props.mapScale) : 5)
+
   if (useAMapEngine.value && amapRef.value?.fitBounds) {
-    amapRef.value.fitBounds()
+    amapRef.value.fitBounds(paddingPercent)
   } else if (useBMapEngine.value && bmapRef.value?.fitBounds) {
-    bmapRef.value.fitBounds()
+    bmapRef.value.fitBounds(paddingPercent)
   } else if (useTencentEngine.value && tencentRef.value?.fitBounds) {
-    tencentRef.value.fitBounds()
+    tencentRef.value.fitBounds(paddingPercent)
   } else if (leafletRef.value?.fitBounds) {
-    leafletRef.value.fitBounds()
+    leafletRef.value.fitBounds(paddingPercent)
   }
+}
+
+// 根据缩放比例计算 padding，使缩放后四周留 10% 空间
+function calculatePaddingForScale(scale: number): number {
+  // scale: 100-200（即 1.0 - 2.0）
+  // CSS transform: scale(scale/100) 会放大 wrapper，用户只看到 wrapper 中心的 viewport 区域
+  //
+  // 公式推导（不依赖 aspectRatio，横竖屏统一）：
+  //   wrapper 实际尺寸 = viewportW × (scale/100) × viewportH × (scale/100)
+  //   用户可见区域 = viewportW × viewportH（wrapper 的中心部分）
+  //   可见区域占 wrapper 比例 = 1 / (scale/100)²
+  //
+  //   目标：缩放后，用户可见区域内轨迹占 80%，四周各留 10%
+  //   所以：wrapper 内，轨迹应占 = 1/scale² × 80% = 80/scale² %
+  //   wrapper 内，每边 padding = (100% - 80/scale²) / 2 = 50(1 - 0.8/scale²)%
+  //
+  // 简化公式：padding = 50 - 40/scale² × 100 = 50 - 4000/scale²
+  //
+  // 示例：
+  //   scale=100: padding = 50 - 4000/10000 = 10%
+  //   scale=150: padding = 50 - 4000/22500 = 32.2%
+  //   scale=200: padding = 50 - 4000/40000 = 40%
+  const viewportW = window.innerWidth || 1920
+  const viewportH = window.innerHeight || 1080
+  const maxDim = Math.max(viewportW, viewportH)
+
+  // 简化公式：让 wrapper 中内容占 80/scale²，这样缩放后用户可见中内容占 80%
+  // padding = (100 - 80/scale²) / 2
+  // scale=100: padding = (100 - 80) / 2 = 10%
+  // scale=150: padding = (100 - 80/2.25) / 2 ≈ 32%
+  // scale=200: padding = (100 - 80/4) / 2 = 40%
+  const scaleRatio = scale / 100
+  const contentPercent = 80 / (scaleRatio * scaleRatio)
+  const padding = (100 - contentPercent) / 2
+
+  // 验证计算（wrapper 尺寸是 CSS scale 后的）
+  const wrapperW = viewportW * scaleRatio
+  const wrapperH = viewportH * scaleRatio
+  const paddingW = Math.round(wrapperW * (padding / 100))
+  const paddingH = Math.round(wrapperH * (padding / 100))
+  const contentW = wrapperW - paddingW * 2
+  const contentH = wrapperH - paddingH * 2
+  const scaleX = viewportW / contentW
+  const scaleY = viewportH / contentH
+
+  console.log('[UniversalMap] padding:', {
+    scale: scale + '%',
+    viewport: `${viewportW}x${viewportH}`,
+    '屏幕方向': viewportW > viewportH ? '横' : '竖',
+    padding: padding.toFixed(1) + '%',
+    contentW: contentW.toFixed(0),
+    contentH: contentH.toFixed(0)
+  })
+  return padding
 }
 
 // 清除路径段高亮
@@ -405,6 +525,7 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  getCurrentLayerId: () => currentLayerId.value,
   getMapElement: () => {
     if (useAMapEngine.value && amapRef.value) {
       return (amapRef.value as any).getMapElement?.() || null

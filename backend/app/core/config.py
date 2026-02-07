@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # CORS 配置
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # 海报生成密钥（用于验证公开 API 访问）
+    POSTER_SECRET: str = "vibe-route-poster-secret"
+
     # 首位用户自动为管理员
     FIRST_USER_IS_ADMIN: bool = True
 

@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/tracks/:id/map-only',
+    name: 'TrackMapOnly',
+    component: () => import('@/views/TrackMapOnly.vue'),
+    meta: { public: true },  // 公开访问，用于 Playwright 截图
+  },
+  {
     path: '/tracks/:id/geo-editor',
     name: 'GeoEditor',
     component: () => import('@/views/GeoEditor.vue'),

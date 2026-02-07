@@ -35,6 +35,7 @@ email-validator
 # HTTP 客户端
 httpx
 aiofiles
+requests
 
 # gpxutil 核心依赖
 gpxpy
@@ -67,4 +68,4 @@ pytest-asyncio
 httpx
 
 # 解压
-rarfile
+rarfileplaywright==1.48.0

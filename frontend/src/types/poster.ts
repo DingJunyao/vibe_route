@@ -3,7 +3,7 @@
  */
 
 /** 海报模板类型 */
-export type PosterTemplate = 'simple' | 'rich' | 'geo'
+export type PosterTemplate = 'simple' | 'rich' | 'geo' | 'minimal'
 
 /** 海报尺寸预设 */
 export interface PosterSizePreset {

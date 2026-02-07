@@ -148,6 +148,8 @@ interface Props {
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
+  mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
+  trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -158,6 +160,8 @@ const props = withDefaults(defineProps<Props>(), {
   latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
+  mapScale: 100,
+  trackOrientation: 'horizontal',
 })
 
 const configStore = useConfigStore()
@@ -1194,6 +1198,42 @@ async function initMap() {
     // 注册点击事件监听器（桌面端和移动端都需要）
     AMapInstance.on('click', handleMapClick)
 
+    // 监听地图缩放和移动事件（用于调试）
+    AMapInstance.on('zoomend', () => {
+      try {
+        const center = AMapInstance.getCenter()
+        const zoom = AMapInstance.getZoom()
+        const bounds = AMapInstance.getBounds()
+        if (center && bounds && bounds.southwest && bounds.northeast) {
+          console.log('[AMap] 缩放结束:', {
+            缩放级别: zoom,
+            中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
+            边界: {
+              sw: `${bounds.southwest.lng.toFixed(4)}, ${bounds.southwest.lat.toFixed(4)}`,
+              ne: `${bounds.northeast.lng.toFixed(4)}, ${bounds.northeast.lat.toFixed(4)}`
+            }
+          })
+        }
+      } catch (e) {
+        // 忽略高德地图内部错误
+      }
+    })
+
+    AMapInstance.on('moveend', () => {
+      try {
+        const center = AMapInstance.getCenter()
+        const zoom = AMapInstance.getZoom()
+        if (center) {
+          console.log('[AMap] 拖动结束:', {
+            缩放级别: zoom,
+            中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
+          })
+        }
+      } catch (e) {
+        // 忽略高德地图内部错误
+      }
+    })
+
     // 绘制轨迹
     drawTracks()
   } catch (error) {
@@ -1460,8 +1500,8 @@ function resize() {
   }
 }
 
-// 将所有轨迹居中显示（四周留 5% 空间）
-function fitBounds() {
+// 将所有轨迹居中显示（四周留指定百分比空间）
+function fitBounds(paddingPercent: number = 5) {
   if (!AMapInstance) return
 
   // 计算所有轨迹的边界
@@ -1482,18 +1522,150 @@ function fitBounds() {
 
   if (bounds.length === 0) return
 
-  // 获取地图容器尺寸，计算 5% 的 padding
+  // 获取地图容器尺寸
   const mapContainer = document.querySelector('.amap') as HTMLElement
   if (!mapContainer) return
-  const width = mapContainer.clientWidth
-  const height = mapContainer.clientHeight
-  const padding = Math.round(Math.max(width, height) * 0.05)
+  const containerWidth = mapContainer.clientWidth
+  const containerHeight = mapContainer.clientHeight
+  const padding = Math.round(Math.max(containerWidth, containerHeight) * (paddingPercent / 100))
+
+  // 检查是否是 map-only 模式（通过 URL 判断）
+  const isMapOnlyMode = window.location.pathname.includes('/map-only')
+  const mapScale = isMapOnlyMode ? (props.mapScale || 100) : 100
+
+  const zoomBefore = AMapInstance.getZoom()
 
   try {
     AMapInstance.setFitView(null, false, [padding, padding, padding, padding])
+
+    // 如果是 map-only 模式且有缩放，根据边界框几何计算目标 zoom
+    if (isMapOnlyMode && mapScale > 100 && bounds.length > 0) {
+      setTimeout(() => {
+        const zoomAfter = AMapInstance.getZoom()
+
+        // 计算边界框的经纬度范围
+        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+        for (const pt of bounds) {
+          const lng = pt.getLng(), lat = pt.getLat()
+          if (lng < minLng) minLng = lng
+          if (lng > maxLng) maxLng = lng
+          if (lat < minLat) minLat = lat
+          if (lat > maxLat) maxLat = lat
+        }
+
+        // 在当前 zoom 下，将边界框转换为像素
+        const AMap = (window as any).AMap
+        const swPixel = AMapInstance.lngLatToContainer(new AMap.LngLat(minLng, minLat))
+        const nePixel = AMapInstance.lngLatToContainer(new AMap.LngLat(maxLng, maxLat))
+
+        if (!swPixel || !nePixel) {
+          console.warn('[AMap] 像素转换失败，延迟后重试')
+          return
+        }
+
+        const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+        const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+        // CSS scale 会放大地图显示，但不改变容器尺寸
+        // 目标：边界框在放大后占据容器 90%，即放大前应占据 90% / scale
+        const scale = mapScale / 100
+        const targetContentWidth = containerWidth * 0.9 / scale
+        const targetContentHeight = containerHeight * 0.9 / scale
+
+        // 计算需要的缩放级别（zoom 每增加 1，像素尺寸翻倍）
+        const widthZoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+        const heightZoomDelta = Math.log2(targetContentHeight / currentPixelHeight)
+
+        // 取较小的 delta，确保边界框完全在视野内
+        const zoomDelta = Math.min(widthZoomDelta, heightZoomDelta)
+        const targetZoom = Math.max(3, Math.min(20, zoomAfter + zoomDelta))
+
+        console.log('[AMap] 几何缩放计算:', {
+          边界框: `(${minLng}, ${minLat}) → (${maxLng}, ${maxLat})`,
+          当前像素: `${currentPixelWidth.toFixed(0)}x${currentPixelHeight.toFixed(0)}`,
+          容器尺寸: `${containerWidth}x${containerHeight}`,
+          CSS缩放: `${scale}`,
+          目标内容: `${targetContentWidth.toFixed(0)}x${targetContentHeight.toFixed(0)}`,
+          zoomDelta: zoomDelta.toFixed(2),
+          zoom: `${zoomAfter.toFixed(1)} → ${targetZoom.toFixed(1)}`
+        })
+
+        // 先禁用动画，避免再次触发自动缩放
+        AMapInstance.setStatus({
+          dragEnable: true,
+          keyboardEnable: true,
+          doubleClickZoom: false,
+          scrollWheel: false
+        })
+
+        AMapInstance.setZoom(targetZoom)
+
+        // 重新启用滚轮缩放
+        setTimeout(() => {
+          AMapInstance.setStatus({
+            dragEnable: true,
+            keyboardEnable: true,
+            doubleClickZoom: true,
+            scrollWheel: true
+          })
+        }, 200)
+      }, 500)
+    }
   } catch (e) {
     console.error('[AMap] fitBounds failed:', e)
   }
+}
+
+/**
+ * 异步检查图片是否为空白或接近空白
+ * 通过实际加载图像并采样检查像素内容
+ */
+async function isBlankImage(dataUrl: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      // 创建临时 canvas 来检查像素
+      const tempCanvas = document.createElement('canvas')
+      const tempCtx = tempCanvas.getContext('2d')
+      if (!tempCtx) {
+        resolve(false)
+        return
+      }
+
+      // 缩小尺寸以提高性能
+      const sampleSize = 100
+      tempCanvas.width = sampleSize
+      tempCanvas.height = sampleSize
+
+      // 绘制并采样中心区域
+      tempCtx.drawImage(img, 0, 0, sampleSize, sampleSize)
+      const imageData = tempCtx.getImageData(0, 0, sampleSize, sampleSize)
+      const data = imageData.data
+
+      // 检查是否有非透明和非纯白的像素
+      let hasContent = false
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i]
+        const g = data[i + 1]
+        const b = data[i + 2]
+        const a = data[i + 3]
+
+        // 如果有非透明像素，且不是纯白色（或接近纯白）
+        if (a > 10) {
+          // 检查是否不是纯白色（250-255 范围内认为是纯白）
+          if (r < 240 || g < 240 || b < 240) {
+            hasContent = true
+            break
+          }
+        }
+      }
+
+      console.log('[AMap] Image content check:', hasContent ? 'has content' : 'blank')
+      resolve(!hasContent)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUrl
+  })
 }
 
 // 暴露方法给父组件
@@ -1503,10 +1675,6 @@ defineExpose({
   resize,
   fitBounds,
   getMapElement: () => mapContainer.value || null,
-  /**
-   * 捕获地图截图
-   * 返回 Base64 格式的图片数据
-   */
   async captureMap(): Promise<string | null> {
     if (!AMapInstance || !mapContainer.value) return null
 
@@ -1515,8 +1683,30 @@ defineExpose({
       const canvas = mapContainer.value.querySelector('canvas') as HTMLCanvasElement
       if (!canvas) return null
 
-      // 尝试直接从 canvas 获取图片数据
-      return canvas.toDataURL('image/png')
+      // 高德地图使用 Canvas2D，drawing buffer 默认会被清除
+      // 尝试直接截图
+      return new Promise<string | null>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            try {
+              const dataUrl = canvas.toDataURL('image/png')
+              isBlankImage(dataUrl).then((blank) => {
+                if (blank) {
+                  console.warn('[AMap] WebGL capture failed - drawing buffer was cleared')
+                  console.warn('[AMap] WebGL maps do not support poster export currently')
+                  resolve(null)
+                } else {
+                  console.log('[AMap] Captured image has content')
+                  resolve(dataUrl)
+                }
+              })
+            } catch (error) {
+              console.error('[AMap] captureMap failed:', error)
+              resolve(null)
+            }
+          })
+        })
+      })
     } catch (error) {
       console.error('[AMap] captureMap failed:', error)
       return null

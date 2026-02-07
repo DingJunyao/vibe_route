@@ -89,6 +89,8 @@ interface Props {
   defaultLayerId?: string
   hideLayerSelector?: boolean
   mode?: 'home' | 'detail'
+  mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
+  trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -100,6 +102,8 @@ const props = withDefaults(defineProps<Props>(), {
   defaultLayerId: undefined,
   hideLayerSelector: false,
   mode: 'detail',
+  mapScale: 100,
+  trackOrientation: 'horizontal',
 })
 
 const emit = defineEmits<{
@@ -193,6 +197,12 @@ function initMap() {
     return
   }
 
+  // 如果地图已存在，先移除（防止重复初始化）
+  if (map.value) {
+    map.value.remove()
+    map.value = null
+  }
+
   // 获取当前层配置
   const layerConfig = currentLayerConfig.value
   const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
@@ -203,6 +213,8 @@ function initMap() {
     center: [39.9, 116.4],
     zoom: 10,
     zoomControl: true,
+    zoomSnap: 1,              // 缩放级别为整数
+    wheelPxPerZoomLevel: 240, // 滚轮每 240 像素改变一个级别（默认 120）
     crs: crs,
   })
 
@@ -219,6 +231,42 @@ function initMap() {
   createMouseMarker()
   createLatestPointMarker()
   createCustomTooltip()
+
+  // 监听缩放和移动事件（调试日志）
+  map.value.on('zoomend', () => {
+    try {
+      const center = map.value!.getCenter()
+      const zoom = map.value!.getZoom()
+      const bounds = map.value!.getBounds()
+      if (center && bounds) {
+        console.log('[LeafletMap] 缩放结束:', {
+          缩放级别: zoom,
+          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
+          边界: {
+            sw: `${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}`,
+            ne: `${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}`
+          }
+        })
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  })
+
+  map.value.on('moveend', () => {
+    try {
+      const center = map.value!.getCenter()
+      const zoom = map.value!.getZoom()
+      if (center) {
+        console.log('[LeafletMap] 拖动结束:', {
+          缩放级别: zoom,
+          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
+        })
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  })
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
@@ -741,6 +789,7 @@ function addTileLayer(layerId: string) {
         minZoom: layerConfig.min_zoom,
         attribution: layerConfig.attribution,
         subdomains: layerConfig.subdomains || undefined,
+        crossOrigin: true,  // 允许 html2canvas 捕获瓦片
       }).addTo(map.value as L.Map)
     }
   } else if (layerConfig.crs === 'gcj02') {
@@ -866,6 +915,7 @@ function addTileLayer(layerId: string) {
         minZoom: layerConfig.min_zoom,
         attribution: layerConfig.attribution,
         subdomains: layerConfig.subdomains || undefined,
+        crossOrigin: true,  // 允许 html2canvas 捕获瓦片
       }).addTo(map.value as L.Map)
     }
   } else {
@@ -876,6 +926,7 @@ function addTileLayer(layerId: string) {
         minZoom: layerConfig.min_zoom,
         attribution: layerConfig.attribution,
         subdomains: layerConfig.subdomains || undefined,
+        crossOrigin: true,  // 允许 html2canvas 捕获瓦片
       }).addTo(map.value as L.Map)
     }
   }
@@ -940,6 +991,42 @@ function recreateMap() {
   createMouseMarker()
   createLatestPointMarker()
   createCustomTooltip()
+
+  // 监听缩放和移动事件（调试日志）
+  map.value.on('zoomend', () => {
+    try {
+      const center = map.value!.getCenter()
+      const zoom = map.value!.getZoom()
+      const bounds = map.value!.getBounds()
+      if (center && bounds) {
+        console.log('[LeafletMap] 缩放结束:', {
+          缩放级别: zoom,
+          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
+          边界: {
+            sw: `${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}`,
+            ne: `${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}`
+          }
+        })
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  })
+
+  map.value.on('moveend', () => {
+    try {
+      const center = map.value!.getCenter()
+      const zoom = map.value!.getZoom()
+      if (center) {
+        console.log('[LeafletMap] 拖动结束:', {
+          缩放级别: zoom,
+          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
+        })
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+  })
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
@@ -1836,14 +1923,6 @@ function updateCustomTooltipPosition(pointPixel: L.Point, containerSize: { x: nu
       offsetY = 15
     }
 
-    console.log('[Leaflet] updateCustomTooltipPosition:', {
-      px, py, cw, ch, tooltipWidth, tooltipHeight, offsetX, offsetY, padding,
-      tooltipLeft: px - tooltipWidth / 2 + offsetX,
-      tooltipRight: px + tooltipWidth / 2 + offsetX,
-      containerLeft: padding,
-      containerRight: cw - padding
-    })
-
     // 设置位置和 transform
     tooltip.style.left = `${px}px`
     tooltip.style.top = `${py}px`
@@ -1898,14 +1977,6 @@ function updateCustomTooltip(content: string, pointPixel: L.Point, containerSize
     translateY = '0'
     offsetY = 15
   }
-
-  console.log('[Leaflet] updateCustomTooltip:', {
-    px, py, cw, ch, tooltipWidth, tooltipHeight, offsetX, offsetY, padding,
-    tooltipLeft: px - tooltipWidth / 2 + offsetX,
-    tooltipRight: px + tooltipWidth / 2 + offsetX,
-    containerLeft: padding,
-    containerRight: cw - padding
-  })
 
   // 设置位置和 transform
   tooltip.style.left = `${px}px`
@@ -2139,7 +2210,7 @@ function resize() {
 }
 
 // 将所有轨迹居中显示（四周留 5% 空间）
-function fitBounds() {
+function fitBounds(paddingPercent: number = 5) {
   if (!map.value) return
 
   // 计算所有轨迹的边界
@@ -2162,14 +2233,80 @@ function fitBounds() {
 
   if (!bounds.isValid()) return
 
-  // 获取地图容器尺寸，计算 5% 的 padding
+  // 获取地图容器尺寸
   const mapContainer = map.value.getContainer()
-  const width = mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800
-  const height = mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600
-  const padding = Math.round(Math.max(width, height) * 0.05)
+  const containerWidth = mapContainer.value?.clientWidth || map.value?.getContainer()?.clientWidth || 800
+  const containerHeight = mapContainer.value?.clientHeight || map.value?.getContainer()?.clientHeight || 600
+  const padding = Math.round(Math.max(containerWidth, containerHeight) * (paddingPercent / 100))
 
-  // 使用 L.point() 创建 padding 对象
-  map.value.fitBounds(bounds, { padding: L.point(padding, padding) })
+  // 检查是否是 map-only 模式（通过 URL 判断）
+  const isMapOnlyMode = window.location.pathname.includes('/map-only')
+  const mapScale = isMapOnlyMode ? (props.mapScale || 100) : 100
+
+  // 如果是 map-only 模式且有缩放，直接基于地理范围计算 zoom
+  if (isMapOnlyMode && mapScale > 100) {
+    // 获取边界框中心和地理范围
+    const center = bounds.getCenter()
+    const lngSpan = bounds.getEast() - bounds.getWest()
+    const latSpan = bounds.getNorth() - bounds.getSouth()
+
+    // 转换为公里
+    const centerLat = center.lat
+    const boundsKmWidth = lngSpan * 111 * Math.cos(centerLat * Math.PI / 180)
+    const boundsKmHeight = latSpan * 111
+    const maxKm = Math.max(boundsKmWidth, boundsKmHeight)
+
+    // 目标：边界框在放大后占 90%
+    const scale = mapScale / 100
+    const targetKm = maxKm / 0.9 / scale
+
+    // 判断轨迹方向（横向 vs 竖向）
+    const isTrackHorizontal = boundsKmWidth > boundsKmHeight * 1.5
+    const isTrackVertical = boundsKmHeight > boundsKmWidth * 1.5
+
+    // 判断容器方向
+    const isContainerHorizontal = containerWidth > containerHeight
+    const isContainerVertical = containerHeight > containerWidth
+
+    // 关键：根据方向和匹配情况选择使用哪个维度
+    // 横屏+横向匹配 → 用 maxDim
+    // 其他情况 → 用 minDim（竖向匹配也用 minDim，避免过度缩小）
+    const isOrientationMatch = (isTrackHorizontal && isContainerHorizontal) || (isTrackVertical && isContainerVertical)
+    const isHorizontalMatch = isTrackHorizontal && isContainerHorizontal
+    const relevantDim = isHorizontalMatch ? Math.max(containerWidth, containerHeight) : Math.min(containerWidth, containerHeight)
+
+    // 计算 zoom：zoom=N 时，每像素 = 40075km / (2^N * 256)
+    // 偏移量需要根据宽高比动态调整：宽高比越极端，需要越大的负偏移
+    // 计算宽高比的"极端程度"：ratio=2.5 时为 0，ratio≥6 时为 1
+    const ratio = boundsKmWidth / (boundsKmHeight || 1)
+    const extremeRatio = ratio > 1 ? ratio : (1 / ratio)
+    const extremeFactor = Math.min(1, Math.max(0, (extremeRatio - 2.5) / 3.5))  // 0 ~ 1
+
+    // 基础偏移：横向匹配用 maxDim 时只需 -1，其他用 minDim 需要 -2
+    // 加上极端程度调整
+    const baseOffset = isHorizontalMatch ? -1 : -2
+    const offset = baseOffset - Math.round(extremeFactor)
+
+    const kmPerPixel = targetKm / relevantDim
+    const targetZoom = Math.max(3, Math.min(20, Math.round(Math.log2(40075 / (256 * kmPerPixel))) + offset))
+
+    console.log('[LeafletMap] 直接计算缩放:', {
+      轨迹方向: isTrackHorizontal ? '横' : (isTrackVertical ? '竖' : '方'),
+      容器: `${containerWidth}x${containerHeight}`,
+      容器方向: isContainerHorizontal ? '横' : '竖',
+      匹配: isOrientationMatch,
+      使用: isOrientationMatch ? 'maxDim' : 'minDim',
+      边界框: `${boundsKmWidth.toFixed(1)}km x ${boundsKmHeight.toFixed(1)}km`,
+      中心: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
+      目标视野: targetKm.toFixed(1) + 'km',
+      zoom: `→ ${targetZoom}`
+    })
+
+    // 直接设置中心和 zoom，不用 fitBounds
+    map.value.setView([center.lat, center.lng], targetZoom, { animate: false })
+  } else {
+    map.value.fitBounds(bounds, { padding: L.point(padding, padding) })
+  }
 }
 
 // 暴露方法给父组件
@@ -2206,6 +2343,16 @@ onMounted(async () => {
   initMap()
   drawTracks()
 
+  // 添加控制台调试函数
+  ;(window as any).setMapZoom = (zoom: number) => {
+    if (map.value) {
+      map.value.setZoom(zoom)
+      console.log(`[Leaflet] 缩放级别设置为: ${zoom}`)
+    } else {
+      console.warn('[Leaflet] 地图未初始化')
+    }
+  }
+
   // 监听全屏变化，更新地图尺寸
   document.addEventListener('fullscreenchange', handleFullscreenChange)
 })
@@ -2216,6 +2363,8 @@ onUnmounted(() => {
   }
   // 清理全屏事件监听器
   document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  // 清理控制台调试函数
+  delete (window as any).setMapZoom
 })
 
 // 监听外部指定的高亮点索引（用于指针同步）

@@ -149,6 +149,8 @@ interface Props {
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
+  mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
+  trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -159,6 +161,8 @@ const props = withDefaults(defineProps<Props>(), {
   latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
+  mapScale: 100,
+  trackOrientation: 'horizontal',
 })
 
 const configStore = useConfigStore()
@@ -673,6 +677,29 @@ async function initMap() {
           updateCustomTooltip(content, pointPixel, containerSize)
         }
       }
+
+      // 拖动结束日志
+      const center = BMapInstance.getCenter()
+      const zoom = BMapInstance.getZoom()
+      console.log('[BMap] 拖动结束:', {
+        缩放级别: zoom,
+        中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
+      })
+    })
+
+    // 监听缩放结束事件（鼠标滚轮缩放）
+    BMapInstance.addEventListener('zoomend', () => {
+      const center = BMapInstance.getCenter()
+      const zoom = BMapInstance.getZoom()
+      const bounds = BMapInstance.getBounds()
+      console.log('[BMap] 缩放结束:', {
+        缩放级别: zoom,
+        中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
+        边界: {
+          sw: `${bounds.sw.lng.toFixed(4)}, ${bounds.sw.lat.toFixed(4)}`,
+          ne: `${bounds.ne.lng.toFixed(4)}, ${bounds.ne.lat.toFixed(4)}`
+        }
+      })
     })
 
     // 统一的鼠标处理函数
@@ -1299,8 +1326,8 @@ function resize() {
   }
 }
 
-// 将所有轨迹居中显示（四周留 5% 空间）
-function fitBounds() {
+// 将所有轨迹居中显示（四周留指定百分比空间）
+function fitBounds(paddingPercent: number = 5) {
   if (!BMapInstance) return
 
   // 计算所有轨迹的边界
@@ -1322,7 +1349,71 @@ function fitBounds() {
   if (bounds.length === 0) return
 
   try {
-    BMapInstance.setViewport(bounds)
+    // 获取容器尺寸
+    const container = mapContainer.value
+    if (!container) {
+      BMapInstance.setViewport(bounds)
+      return
+    }
+    const containerWidth = container.clientWidth || 800
+    const containerHeight = container.clientHeight || 600
+    const padding = Math.round(Math.max(containerWidth, containerHeight) * (paddingPercent / 100))
+
+    // 检查是否是 map-only 模式（通过 URL 判断）
+    const isMapOnlyMode = window.location.pathname.includes('/map-only')
+    const mapScale = isMapOnlyMode ? (props.mapScale || 100) : 100
+
+    // BMapGL setViewport 的 margins 参数: [上, 右, 下, 左]
+    BMapInstance.setViewport(bounds, {
+      margins: [padding, padding, padding, padding]
+    })
+
+    // 如果是 map-only 模式且有缩放，根据边界框几何计算目标 zoom
+    if (isMapOnlyMode && mapScale > 100 && bounds.length > 0) {
+      setTimeout(() => {
+        const zoomAfter = BMapInstance.getZoom()
+
+        // 计算边界框的经纬度范围
+        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+        for (const pt of bounds) {
+          const lng = pt.lng, lat = pt.lat
+          if (lng < minLng) minLng = lng
+          if (lng > maxLng) maxLng = lng
+          if (lat < minLat) minLat = lat
+          if (lat > maxLat) maxLat = lat
+        }
+
+        // 在当前 zoom 下，将边界框转换为像素
+        const swPixel = BMapInstance.pointToPixel(new BMapGL.Point(minLng, minLat))
+        const nePixel = BMapInstance.pointToPixel(new BMapGL.Point(maxLng, maxLat))
+        const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+        const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+        // CSS scale 会放大地图显示，但不改变容器尺寸
+        // 目标：边界框在放大后占据容器 90%，即放大前应占据 90% / scale
+        const scale = mapScale / 100
+        const targetContentWidth = containerWidth * 0.9 / scale
+        const targetContentHeight = containerHeight * 0.9 / scale
+        const widthZoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+        const heightZoomDelta = Math.log2(targetContentHeight / currentPixelHeight)
+
+        // 取较小的 delta，确保边界框完全在视野内
+        const zoomDelta = Math.min(widthZoomDelta, heightZoomDelta)
+        const targetZoom = Math.max(3, Math.min(20, zoomAfter + zoomDelta))
+
+        console.log('[BMap] 几何缩放计算:', {
+          边界框: `(${minLng}, ${minLat}) → (${maxLng}, ${maxLat})`,
+          当前像素: `${currentPixelWidth.toFixed(0)}x${currentPixelHeight.toFixed(0)}`,
+          容器尺寸: `${containerWidth}x${containerHeight}`,
+          CSS缩放: `${scale}`,
+          目标内容: `${targetContentWidth.toFixed(0)}x${targetContentHeight.toFixed(0)}`,
+          zoomDelta: zoomDelta.toFixed(2),
+          zoom: `${zoomAfter.toFixed(1)} → ${targetZoom.toFixed(1)}`
+        })
+
+        BMapInstance.setZoom(targetZoom)
+      }, 500)
+    }
   } catch (e) {
     console.error('[BMap] fitBounds failed:', e)
   }
@@ -1415,6 +1506,51 @@ watch(() => props.highlightPointIndex, (newIndex) => {
   highlightPoint(newIndex)
 })
 
+/**
+ * 异步检查图片是否为空白或接近空白
+ * 通过实际加载图像并采样检查像素内容
+ */
+async function isBlankImage(dataUrl: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      const tempCanvas = document.createElement('canvas')
+      const tempCtx = tempCanvas.getContext('2d')
+      if (!tempCtx) {
+        resolve(false)
+        return
+      }
+
+      const sampleSize = 100
+      tempCanvas.width = sampleSize
+      tempCanvas.height = sampleSize
+
+      tempCtx.drawImage(img, 0, 0, sampleSize, sampleSize)
+      const imageData = tempCtx.getImageData(0, 0, sampleSize, sampleSize)
+      const data = imageData.data
+
+      let hasContent = false
+      for (let i = 0; i < data.length; i += 4) {
+        const a = data[i + 3]
+        if (a > 10) {
+          const r = data[i]
+          const g = data[i + 1]
+          const b = data[i + 2]
+          if (r < 240 || g < 240 || b < 240) {
+            hasContent = true
+            break
+          }
+        }
+      }
+
+      console.log('[BMap] Image content check:', hasContent ? 'has content' : 'blank')
+      resolve(!hasContent)
+    }
+    img.onerror = () => resolve(false)
+    img.src = dataUrl
+  })
+}
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
@@ -1422,20 +1558,34 @@ defineExpose({
   resize,
   fitBounds,
   getMapElement: () => mapContainer.value || null,
-  /**
-   * 捕获地图截图
-   * 返回 Base64 格式的图片数据
-   */
   async captureMap(): Promise<string | null> {
     if (!BMapInstance || !mapContainer.value) return null
 
     try {
-      // 查找地图 canvas 元素
       const canvas = mapContainer.value.querySelector('canvas') as HTMLCanvasElement
       if (!canvas) return null
 
-      // 尝试直接从 canvas 获取图片数据
-      return canvas.toDataURL('image/png')
+      return new Promise<string | null>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            try {
+              const dataUrl = canvas.toDataURL('image/png')
+              isBlankImage(dataUrl).then((blank) => {
+                if (blank) {
+                  console.warn('[BMap] WebGL capture failed - drawing buffer was cleared')
+                  resolve(null)
+                } else {
+                  console.log('[BMap] Captured image has content')
+                  resolve(dataUrl)
+                }
+              })
+            } catch (error) {
+              console.error('[BMap] captureMap failed:', error)
+              resolve(null)
+            }
+          })
+        })
+      })
     } catch (error) {
       console.error('[BMap] captureMap failed:', error)
       return null

@@ -1479,3 +1479,191 @@ history[2]: move 操作  (before = resize 后, after = move 后)
 
 - [`frontend/src/stores/geoEditor.ts`](frontend/src/stores/geoEditor.ts) - 类型定义、undo/redo 函数
 - [`frontend/src/views/GeoEditor.vue`](frontend/src/views/GeoEditor.vue) - 键盘快捷键绑定
+
+## 最新更改 (2026-02 地图缩放)
+
+### 海报导出地图缩放
+
+**功能背景：** 在导出海报时，地图需要根据 CSS scale（150% 或 200%）调整缩放级别，使轨迹在放大后占据容器的 90%。
+
+**核心原理：**
+
+1. CSS `transform: scale()` 放大的是地图显示，不改变容器尺寸
+2. 目标：边界框在放大后占容器 90%，即放大前应占 `90% / scale`
+3. 公式：`targetContentWidth = containerWidth * 0.9 / scale`
+
+### 各地图组件的缩放方式
+
+#### 高德地图 (AMap)
+
+```typescript
+// 1. 先 setFitView 让地图自动适应边界框
+AMapInstance.setFitView(null, false, [padding, padding, padding, padding])
+
+// 2. 延迟后获取当前 zoom 和像素数据
+setTimeout(() => {
+  const zoomAfter = AMapInstance.getZoom()
+
+  // 3. 将边界框经纬度转换为容器像素
+  const swPixel = AMapInstance.lngLatToContainer(new AMap.LngLat(minLng, minLat))
+  const nePixel = AMapInstance.lngLatToContainer(new AMap.LngLat(maxLng, maxLat))
+  const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+  const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+  // 4. 计算目标像素尺寸
+  const scale = mapScale / 100
+  const targetContentWidth = containerWidth * 0.9 / scale
+  const targetContentHeight = containerHeight * 0.9 / scale
+
+  // 5. 使用对数公式计算 zoom 调整量
+  const zoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+  const targetZoom = zoomAfter + zoomDelta
+
+  AMapInstance.setZoom(targetZoom)
+}, 500)
+```
+
+**API：**
+- 坐标转像素：`lngLatToContainer(LngLat)`
+- Zoom 范围：3-20
+
+#### 百度地图 (BMap)
+
+```typescript
+// 1. 先 setViewport 让地图自动适应边界框
+BMapInstance.setViewport(bounds, { margins: [padding, padding, padding, padding] })
+
+// 2. 延迟后获取当前 zoom 和像素数据
+setTimeout(() => {
+  const zoomAfter = BMapInstance.getZoom()
+
+  // 3. 将边界框经纬度转换为容器像素
+  const swPixel = BMapInstance.pointToPixel(new BMapGL.Point(minLng, minLat))
+  const nePixel = BMapInstance.pointToPixel(new BMapGL.Point(maxLng, maxLat))
+  const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+  const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+  // 4. 计算目标像素尺寸
+  const scale = mapScale / 100
+  const targetContentWidth = containerWidth * 0.9 / scale
+  const targetContentHeight = containerHeight * 0.9 / scale
+
+  // 5. 使用对数公式计算 zoom 调整量
+  const zoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+  const targetZoom = zoomAfter + zoomDelta
+
+  BMapInstance.setZoom(targetZoom)
+}, 500)
+```
+
+**API：**
+- 坐标转像素：`pointToPixel(Point)`
+- Zoom 范围：3-20
+
+#### 腾讯地图 (TencentMap)
+
+```typescript
+// 1. 先 fitBounds 让地图自动适应边界框
+TMapInstance.fitBounds(boundsObj, { padding })
+
+// 2. 延迟后获取当前 zoom 和像素数据
+setTimeout(() => {
+  const zoomAfter = TMapInstance.getZoom()
+
+  // 3. 将边界框经纬度转换为容器像素
+  const swPixel = TMapInstance.projectToContainer(sw)
+  const nePixel = TMapInstance.projectToContainer(ne)
+  const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+  const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+  // 4. 计算目标像素尺寸
+  const scale = mapScale / 100
+  const targetContentWidth = containerWidth * 0.9 / scale
+  const targetContentHeight = containerHeight * 0.9 / scale
+
+  // 5. 使用对数公式计算 zoom 调整量
+  const zoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+  const targetZoom = zoomAfter + zoomDelta
+
+  TMapInstance.setZoom(targetZoom)
+}, 500)
+```
+
+**API：**
+- 坐标转像素：`projectToContainer(LatLng)`
+- Zoom 范围：3-20
+
+#### Leaflet 地图
+
+**问题：** Leaflet 在 fitBounds 后会触发多次 zoom 事件，延迟获取时 zoom 可能已经变化，且 `latLngToContainerPoint` 在高 zoom 时可能返回异常值（如负坐标或超大值）。
+
+**解决方案：** 放弃 fitBounds + 像素转换的方式，改用**直接地理范围计算**。
+
+**核心公式：**
+
+```typescript
+// 1. 计算边界框的地理范围（公里）
+const lngSpan = bounds.getEast() - bounds.getWest()
+const latSpan = bounds.getNorth() - bounds.getSouth()
+const boundsKmWidth = lngSpan * 111 * Math.cos(centerLat * Math.PI / 180)
+const boundsKmHeight = latSpan * 111
+const maxKm = Math.max(boundsKmWidth, boundsKmHeight)
+
+// 2. 考虑 CSS scale，计算目标视野
+const scale = mapScale / 100
+const targetKm = maxKm / 0.9 / scale
+
+// 3. 根据方向匹配选择维度
+const isHorizontalMatch = isTrackHorizontal && isContainerHorizontal
+const relevantDim = isHorizontalMatch ? max(containerWidth, containerHeight) : min(containerWidth, containerHeight)
+
+// 4. 计算 zoom（Leaflet：zoom=N 时，256px ≈ 40075km / 2^N）
+const kmPerPixel = targetKm / relevantDim
+const targetZoom = Math.round(Math.log2(40075 / (256 * kmPerPixel))) + offset
+
+// 5. 直接设置中心和 zoom，不用 fitBounds
+map.setView([center.lat, center.lng], targetZoom, { animate: false })
+```
+
+**偏移量计算：**
+
+```typescript
+// 计算宽高比的"极端程度"：ratio=2.5 时为 0，ratio≥6 时为 1
+const ratio = boundsKmWidth / (boundsKmHeight || 1)
+const extremeRatio = ratio > 1 ? ratio : (1 / ratio)
+const extremeFactor = Math.min(1, Math.max(0, (extremeRatio - 2.5) / 3.5))
+
+// 基础偏移：横向匹配用 maxDim 时只需 -1，其他用 minDim 需要 -2
+// 加上极端程度调整：极端时额外 -1
+const baseOffset = isHorizontalMatch ? -1 : -2
+const offset = baseOffset - Math.round(extremeFactor)
+```
+
+**规则总结：**
+
+| 场景 | 使用维度 | 基础偏移 | 极端宽高比 | 最终偏移 |
+|------|----------|----------|-----------|----------|
+| 横屏+横向 | maxDim | -1 | 额外 -1 | -2 或 -3 |
+| 竖屏+竖向 | minDim | -2 | 额外 -1 | -3 或 -4 |
+| 其他不匹配 | minDim | -2 | 额外 -1 | -3 或 -4 |
+
+**调试函数：** 可在浏览器控制台使用 `setMapZoom(zoom)` 直接设置缩放级别。
+
+**滚轮缩放设置：**
+
+```typescript
+L.map(mapContainer, {
+  zoomSnap: 1,               // 缩放级别为整数
+  wheelPxPerZoomLevel: 240,   // 滚轮每 240 像素改变一个级别
+})
+```
+
+**API：**
+- 坐标转像素：`latLngToContainerPoint(LatLng)`
+- Zoom 范围：1-20（天地图）、0-20（OSM）
+
+**涉及文件：**
+- [`frontend/src/components/map/AMap.vue`](frontend/src/components/map/AMap.vue) - 高德地图缩放
+- [`frontend/src/components/map/BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图缩放
+- [`frontend/src/components/map/TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图缩放
+- [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图缩放

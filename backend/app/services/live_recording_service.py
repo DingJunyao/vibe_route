@@ -700,23 +700,20 @@ class LiveRecordingService:
                 needs_fix = True
                 break
 
-        if not needs_fix:
-            logger.info(f"Track {track_id}: point_index 已正确，无需修复")
-            return {
-                "track_id": track_id,
-                "status": "ok",
-                "message": "point_index 已正确",
-                "point_count": len(points)
-            }
+        # 无论是否需要修复 point_index，都重新计算距离
+        # 因为实时记录过程中 track.distance 一直是 0（添加点时不累加距离）
+        logger.info(f"Track {track_id}: point_index {'需要修复' if needs_fix else '已正确'}")
 
-        # 重新分配 point_index
-        logger.info(f"Track {track_id}: 开始修复 {len(points)} 个点的 point_index")
         updated_count = 0
-        for i, point in enumerate(points):
-            if point.point_index != i:
-                point.point_index = i
-                point.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                updated_count += 1
+        # 只有在需要修复时才更新 point_index
+        if needs_fix:
+            # 重新分配 point_index
+            logger.info(f"Track {track_id}: 开始修复 {len(points)} 个点的 point_index")
+            for i, point in enumerate(points):
+                if point.point_index != i:
+                    point.point_index = i
+                    point.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    updated_count += 1
 
         # 重新计算距离和爬升
         total_distance = 0.0
@@ -784,11 +781,14 @@ class LiveRecordingService:
 
         await db.commit()
 
-        logger.info(f"Track {track_id}: 已修复 {updated_count} 个点")
+        if updated_count > 0:
+            logger.info(f"Track {track_id}: 已修复 {updated_count} 个点")
+        else:
+            logger.info(f"Track {track_id}: point_index 无需修复，已重新计算距离")
 
         return {
             "track_id": track_id,
-            "status": "fixed",
+            "status": "fixed" if updated_count > 0 else "recalculated",
             "point_count": len(points),
             "updated_count": updated_count,
             "old_distance": old_distance if track else None,
