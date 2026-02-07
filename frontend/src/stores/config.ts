@@ -1,8 +1,9 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { authApi, type PublicConfig } from '@/api/auth'
 import { adminApi, type SystemConfig, type MapLayerConfig } from '@/api/admin'
 import { useAuthStore } from './auth'
+import { useUserConfigStore } from './userConfig'
 
 export const useConfigStore = defineStore('config', () => {
   // State
@@ -148,6 +149,32 @@ export const useConfigStore = defineStore('config', () => {
   // 统一的配置 getter（优先使用 adminConfig，回退到 publicConfig）
   const config = computed(() => adminConfig.value || publicConfig.value)
 
+  // 系统配置的默认地图提供商
+  const defaultMapProvider = computed(() => publicConfig.value?.default_map_provider || 'osm')
+
+  // 系统配置的地图层
+  const mapLayers = computed(() => publicConfig.value?.map_layers || {})
+
+  // 获取有效的地图提供商（考虑用户配置）
+  function getEffectiveProvider(): string {
+    const userConfigStore = useUserConfigStore()
+    return userConfigStore.getEffectiveProvider
+  }
+
+  // 获取有效的地图层（考虑用户配置）
+  function getEffectiveLayers(): Record<string, MapLayerConfig> {
+    const userConfigStore = useUserConfigStore()
+    return userConfigStore.getEffectiveLayers
+  }
+
+  // 根据地图层 ID 获取地图层配置（优先用户配置）
+  function getMapLayerById(id: string): MapLayerConfig | undefined {
+    const userConfigStore = useUserConfigStore()
+    const userLayer = userConfigStore.getMapLayerById(id)
+    if (userLayer) return userLayer
+    return publicConfig.value?.map_layers?.[id]
+  }
+
   // 初始化时获取配置（不等待，让组件自己等待）
   fetchConfig()
 
@@ -156,11 +183,15 @@ export const useConfigStore = defineStore('config', () => {
     adminConfig,
     config,
     loading,
+    defaultMapProvider,
+    mapLayers,
     fetchConfig,
     refreshConfig,
     getMapProvider,
     getMapLayers,
     getMapLayerById,
+    getEffectiveProvider,
+    getEffectiveLayers,
     isMapLayerEnabled,
     isInviteCodeRequired,
     isRegistrationEnabled,

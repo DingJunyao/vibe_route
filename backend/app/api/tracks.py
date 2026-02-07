@@ -23,8 +23,10 @@ from app.schemas.track import (
     TrackStatsResponse,
     RegionTreeResponse,
     UnifiedTrackListResponse,
+    ShareStatusResponse,
 )
 from app.services.track_service import track_service
+from app.services.share_service import share_service
 
 router = APIRouter(prefix="/tracks", tags=["轨迹"])
 logger = logging.getLogger(__name__)
@@ -1052,3 +1054,94 @@ async def get_track_points_public(
     return {
         "points": points_data,
     }
+
+
+# ========== 分享功能端点 ==========
+
+
+@router.post("/{track_id}/share", response_model=ShareStatusResponse)
+async def create_share(
+    track_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    启用轨迹分享
+
+    生成分享令牌并启用分享功能。
+    如果已有分享令牌，则复用原令牌。
+    """
+    track = await share_service.enable_share(db, track_id, current_user.id)
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在"
+        )
+
+    # 生成分享 URL
+    share_url = f"/s/{track.share_token}"
+
+    return ShareStatusResponse(
+        is_shared=track.is_shared,
+        share_token=track.share_token,
+        share_url=share_url
+    )
+
+
+@router.get("/{track_id}/share", response_model=ShareStatusResponse)
+async def get_share_status(
+    track_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取轨迹分享状态
+
+    返回轨迹的分享状态和分享链接（如果已启用）。
+    """
+    status_data = await share_service.get_share_status(db, track_id, current_user.id)
+    if not status_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在"
+        )
+
+    share_url = None
+    if status_data["share_token"]:
+        share_url = f"/s/{status_data['share_token']}"
+
+    return ShareStatusResponse(
+        is_shared=status_data["is_shared"],
+        share_token=status_data["share_token"],
+        share_url=share_url
+    )
+
+
+@router.delete("/{track_id}/share", response_model=ShareStatusResponse)
+async def delete_share(
+    track_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    停用轨迹分享
+
+    不删除分享令牌，只是关闭分享开关。
+    可以通过 POST 重新启用分享。
+    """
+    track = await share_service.disable_share(db, track_id, current_user.id)
+    if not track:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="轨迹不存在"
+        )
+
+    share_url = None
+    if track.share_token:
+        share_url = f"/s/{track.share_token}"
+
+    return ShareStatusResponse(
+        is_shared=track.is_shared,
+        share_token=track.share_token,
+        share_url=share_url
+    )

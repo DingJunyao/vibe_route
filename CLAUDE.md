@@ -1922,3 +1922,108 @@ if (isBaidu) {
 - [`frontend/src/components/PosterExportDialog.vue`](frontend/src/components/PosterExportDialog.vue) - 导出对话框
 - [`frontend/src/utils/frontendPosterGenerator.ts`](frontend/src/utils/frontendPosterGenerator.ts) - 前端海报生成器
 - [`backend/app/services/poster_service.py`](backend/app/services/poster_service.py) - 后端海报服务（Playwright）
+
+---
+
+## 最新更改 (2026-02 分享嵌入模式)
+
+### 分享轨迹嵌入模式
+
+**功能背景**：通过 iframe 嵌入分享轨迹时，只显示地图组件，隐藏其他所有元素（header、图表、统计等）。在地图右上角提供"查看轨迹详情"按钮，点击后跳转到完整的分享页面。
+
+**URL 格式**：
+- 完整分享页：`/s/{token}`
+- 嵌入模式：`/s/{token}?embed=true`
+
+**实现要点**：
+
+**1. 嵌入模式检测** ([`SharedTrack.vue`](frontend/src/views/SharedTrack.vue))
+
+```typescript
+// 检测是否为嵌入模式
+const isEmbed = computed(() => route.query.embed === 'true')
+
+// 嵌入模式：查看详情链接（指向完整分享页面）
+const viewDetailsUrl = computed(() => {
+  if (!shareToken.value || !isEmbed.value) return ''
+  const baseUrl = window.location.origin
+  return `${baseUrl}/s/${shareToken.value}`
+})
+```
+
+**2. 条件渲染模板结构**
+
+```vue
+<!-- 嵌入模式：只显示地图 -->
+<div v-if="isEmbed" ref="mapElementRef" class="embed-map-container">
+  <div v-if="loading" class="embed-loading">加载中...</div>
+  <div v-else-if="loadFailed" class="embed-error">加载失败</div>
+  <UniversalMap
+    v-else-if="trackWithPoints"
+    ref="mapRef"
+    :tracks="[trackWithPoints]"
+    :highlight-track-id="track?.id"
+    :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
+    :view-details-url="viewDetailsUrl"
+    @point-hover="handleMapPointHover"
+    @clear-segment-highlight="clearSegmentHighlight"
+  />
+</div>
+
+<!-- 完整模式：显示完整分享页面 -->
+<div v-else ref="containerRef" class="track-detail-container">
+  <!-- header、图表、统计等完整内容 -->
+</div>
+```
+
+**3. 嵌入模式样式**
+
+```css
+/* 嵌入模式样式 */
+.embed-map-container {
+  width: 100%;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+.embed-loading,
+.embed-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: 16px;
+  color: #909399;
+}
+
+.embed-error {
+  color: #f56c6c;
+}
+```
+
+**4. UniversalMap 查看详情按钮**
+
+[`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) 组件已有 `viewDetailsUrl` prop 支持，当传入该 prop 时，会在地图右上角、地图选择器左侧显示"查看轨迹详情"按钮。
+
+**关键技术点**：
+
+1. **完全独立的根容器**：使用 `v-if`/`v-else` 渲染两个不同的根元素，避免样式冲突
+2. **100vh 高度**：嵌入模式下容器占据整个视口高度，无滚动条
+3. **按钮样式**：与地图控制栏其他按钮保持一致的设计风格
+4. **公开访问**：嵌入模式同样不需要登录，通过 token 验证访问权限
+
+**嵌入代码生成**（[`shared.ts`](frontend/src/api/shared.ts)）：
+
+```typescript
+// 生成嵌入代码
+getEmbedCode(token: string, width = '100%', height = '520'): string {
+  const url = this.getShareUrl(token, true)
+  return `<iframe src="${url}" width="${width}" height="${height}" frameborder="0" scrolling="no" allowfullscreen allow="fullscreen"></iframe>`
+}
+```
+
+**涉及文件**：
+- [`frontend/src/views/SharedTrack.vue`](frontend/src/views/SharedTrack.vue) - 分享页面主组件
+- [`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图组件（viewDetailsUrl prop）
+- [`frontend/src/api/shared.ts`](frontend/src/api/shared.ts) - 分享 API 和嵌入代码生成

@@ -1519,6 +1519,214 @@ class TrackService:
             }
         }
 
+    async def get_region_tree_no_auth(
+        self,
+        db: AsyncSession,
+        track_id: int,
+    ) -> dict:
+        """
+        获取轨迹的区域树结构（不检查权限，用于分享页面）
+
+        返回按时间顺序展开的区域树，同一区域的多次经过会分开显示。
+        结构：省 -> 市 -> 区 -> 道路
+
+        Args:
+            db: 数据库会话
+            track_id: 轨迹 ID
+
+        Returns:
+            {'regions': 区域树列表, 'stats': 各级区域数量统计}
+        """
+        # 获取轨迹点（按时间排序）
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.time, TrackPoint.created_at)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
+
+        # 按时间顺序构建区域树
+        root_nodes = []
+        node_counter = [0]
+
+        # 统计各级区域数量（去重）
+        province_set = set()
+        city_set = set()
+        district_set = set()
+        road_set = set()
+
+        def create_node(name: str, node_type: str, road_number: str = None) -> dict:
+            """创建一个新节点"""
+            node_counter[0] += 1
+            return {
+                'id': f"node_{node_counter[0]}",
+                'name': name,
+                'type': node_type,
+                'road_number': road_number,
+                'own_distance': 0.0,
+                'distance': 0.0,
+                'own_point_count': 0,
+                'point_count': 0,
+                'start_time': None,
+                'end_time': None,
+                'start_index': -1,
+                'end_index': -1,
+                'children': [],
+            }
+
+        # 当前活跃的节点路径
+        current_province = None
+        current_city = None
+        current_district = None
+        current_road = None
+        prev_point = None
+
+        for time_idx, point in enumerate(points):
+            province = point.province or '未知区域'
+            city = point.city
+            district = point.district
+            road_name = point.road_name
+            road_number = point.road_number
+
+            # 统计各级区域
+            if province and province != '未知区域': province_set.add(province)
+            if city and city != province and city != '未知区域': city_set.add(city)
+            if district and district != city and district != '未知区域': district_set.add(district)
+            if road_name and road_name != '未知区域': road_set.add(road_name)
+
+            # 检查是否需要创建新的省级节点
+            if current_province is None or current_province[0] != province:
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                if current_province is not None and prev_point is not None:
+                    current_province[1]['end_index'] = time_idx - 1
+                new_province = create_node(province, 'province')
+                new_province['start_index'] = time_idx
+                root_nodes.append(new_province)
+                current_province = (province, new_province)
+                current_city = None
+                current_district = None
+                current_road = None
+
+            province_node = current_province[1]
+
+            city_key = city if city and city != province else None
+            if city_key and (current_city is None or current_city[0] != city_key):
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                new_city = create_node(city_key, 'city')
+                new_city['start_index'] = time_idx
+                province_node['children'].append(new_city)
+                current_city = (city_key, new_city)
+                current_district = None
+                current_road = None
+            elif not city_key and current_city is not None:
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                current_city = None
+                current_district = None
+                current_road = None
+
+            city_node = current_city[1] if current_city else province_node
+
+            district_key = district if district and district != city_key else None
+            if district_key and (current_district is None or current_district[0] != district_key):
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                new_district = create_node(district_key, 'district')
+                new_district['start_index'] = time_idx
+                city_node['children'].append(new_district)
+                current_district = (district_key, new_district)
+                current_road = None
+
+            district_node = current_district[1] if current_district else city_node
+
+            if road_name:
+                road_key = (road_name, road_number or '')
+            else:
+                road_key = ('（无名）', road_number or '')
+
+            if current_road is None or current_road[0] != road_key:
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if road_name:
+                    new_road = create_node(road_name, 'road', road_number)
+                else:
+                    new_road = create_node('（无名）', 'road', road_number)
+                new_road['start_index'] = time_idx
+                district_node['children'].append(new_road)
+                current_road = (road_key, new_road)
+
+            if current_road:
+                active_node = current_road[1]
+            elif current_district:
+                active_node = current_district[1]
+            elif current_city:
+                active_node = current_city[1]
+            else:
+                active_node = province_node
+
+            active_node['point_count'] += 1
+            active_node['own_point_count'] += 1
+
+            # 更新时间范围
+            if point.time:
+                if active_node['start_time'] is None or point.time < active_node['start_time']:
+                    active_node['start_time'] = point.time
+                if active_node['end_time'] is None or point.time > active_node['end_time']:
+                    active_node['end_time'] = point.time
+
+            # 计算距离
+            if prev_point:
+                distance = await self.spatial_service.distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84
+                )
+                active_node['own_distance'] += distance
+
+            prev_point = point
+
+        # 设置所有活跃节点的结束索引
+        last_time_idx = len(points) - 1
+        if current_road is not None:
+            current_road[1]['end_index'] = last_time_idx
+        if current_district is not None:
+            current_district[1]['end_index'] = last_time_idx
+        if current_city is not None:
+            current_city[1]['end_index'] = last_time_idx
+        if current_province is not None:
+            current_province[1]['end_index'] = last_time_idx
+
+        # 后处理：聚合统计信息
+        for node in root_nodes:
+            self._aggregate_node_stats(node)
+
+        return {
+            'regions': root_nodes,
+            'stats': {
+                'province': len(province_set),
+                'city': len(city_set),
+                'district': len(district_set),
+                'road': len(road_set),
+            }
+        }
 
     async def export_points_to_csv(
         self,

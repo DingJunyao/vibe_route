@@ -26,6 +26,7 @@ class User(Base, AuditMixin):
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
     created_invite_codes = relationship("InviteCode", back_populates="created_by_user")
     live_recordings = relationship("LiveRecording", back_populates="user", cascade="all, delete-orphan")
+    config = relationship("UserConfig", back_populates="user", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', is_admin={self.is_admin})>"

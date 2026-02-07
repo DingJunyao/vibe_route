@@ -1,9 +1,24 @@
 <template>
-  <div ref="containerRef" class="track-detail-container">
+  <!-- 嵌入模式：只显示地图 -->
+  <div v-if="isEmbed" ref="mapElementRef" class="embed-map-container">
+    <div v-if="loading" class="embed-loading">加载中...</div>
+    <div v-else-if="loadFailed" class="embed-error">加载失败</div>
+    <UniversalMap
+      v-else-if="trackWithPoints"
+      ref="mapRef"
+      :tracks="[trackWithPoints]"
+      :highlight-track-id="track?.id"
+      :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
+      :view-details-url="viewDetailsUrl"
+      @point-hover="handleMapPointHover"
+      @clear-segment-highlight="clearSegmentHighlight"
+    />
+  </div>
+
+  <!-- 完整模式：显示完整分享页面 -->
+  <div v-else ref="containerRef" class="track-detail-container">
     <el-header>
       <div class="header-left">
-        <el-button @click="$router.back()" :icon="ArrowLeft" class="nav-btn" />
-        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
         <div class="title-with-tags">
           <!-- 实时记录状态指示器 -->
           <el-tooltip
@@ -13,100 +28,12 @@
           >
             <span class="live-status-indicator status-recording"></span>
           </el-tooltip>
-          <!-- 实时更新状态指示器 -->
-          <el-tooltip
-            v-if="isLiveUpdating && liveUpdateStatus !== 'connected'"
-            :content="liveUpdateStatus === 'connected' ? '实时更新中' : '连接断开'"
-            placement="bottom"
-          >
-            <span
-              class="live-status-indicator"
-              :class="{
-                'status-error': liveUpdateStatus === 'error' || liveUpdateStatus === 'disconnected'
-              }"
-            ></span>
-          </el-tooltip>
           <h1>{{ track?.name || '轨迹详情' }}</h1>
         </div>
       </div>
       <div class="header-right">
         <div class="header-actions">
-          <el-button
-            v-if="track?.is_live_recording && track.live_recording_token"
-            type="warning"
-            @click="showRecordingDetail"
-            class="desktop-only"
-          >
-            <el-icon><Link /></el-icon>
-            记录配置
-          </el-button>
-          <el-button type="primary" @click="showEditDialog" class="desktop-only">
-            <el-icon><Edit /></el-icon>
-            编辑
-          </el-button>
-          <el-button type="primary" @click="exportPointsDialogVisible = true" class="desktop-only">
-            <el-icon><Download /></el-icon>
-            导出数据
-          </el-button>
-          <el-button type="primary" @click="importDialogVisible = true" class="desktop-only">
-            <el-icon><Upload /></el-icon>
-            导入数据
-          </el-button>
-          <el-button type="primary" @click="posterDialogVisible = true" class="desktop-only">
-            <el-icon><Picture /></el-icon>
-            导出海报
-          </el-button>
-          <el-button type="primary" @click="shareDialogVisible = true" class="desktop-only">
-            <el-icon><Share /></el-icon>
-            分享
-          </el-button>
         </div>
-        <el-dropdown @command="handleCommand">
-          <span class="user-info">
-            <el-icon><User /></el-icon>
-            <span class="username">{{ authStore.user?.username }}</span>
-            <el-icon class="el-icon--right"><arrow-down /></el-icon>
-          </span>
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                command="recordingDetail"
-                v-if="isMobile && track?.is_live_recording && track.live_recording_token"
-              >
-                <el-icon><Link /></el-icon>
-                记录配置
-              </el-dropdown-item>
-              <el-dropdown-item command="edit" v-if="isMobile">
-                <el-icon><Edit /></el-icon>
-                编辑
-              </el-dropdown-item>
-              <el-dropdown-item command="exportPoints" v-if="isMobile">
-                <el-icon><Download /></el-icon>
-                导出数据
-              </el-dropdown-item>
-              <el-dropdown-item command="import" v-if="isMobile">
-                <el-icon><Upload /></el-icon>
-                导入数据
-              </el-dropdown-item>
-              <el-dropdown-item command="poster" v-if="isMobile">
-                <el-icon><Picture /></el-icon>
-                导出海报
-              </el-dropdown-item>
-              <el-dropdown-item command="share" v-if="isMobile">
-                <el-icon><Share /></el-icon>
-                分享
-              </el-dropdown-item>
-              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
-                <el-icon><Setting /></el-icon>
-                后台管理
-              </el-dropdown-item>
-              <el-dropdown-item command="logout">
-                <el-icon><SwitchButton /></el-icon>
-                退出登录
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
       </div>
     </el-header>
 
@@ -206,10 +133,9 @@
                     <UniversalMap
                       ref="mapRef"
                       :tracks="[trackWithPoints]"
-                      :highlight-track-id="track.id"
+                      :highlight-track-id="track?.id"
                       :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
-                      :latest-point-index="latestPointIndex"
-                      :live-update-time="track.last_point_created_at || track.last_upload_at"
+                      :view-details-url="viewDetailsUrl"
                       @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -218,13 +144,11 @@
               </template>
               <template v-else>
                 <div class="map-placeholder">
-                  <p v-if="isWaitingForPoints">等待记录中...</p>
-                  <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
-                  <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
+                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0" class="debug-info">
                     轨迹点数量: {{ points.length }}，
                     有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
                   </p>
-                  <el-button v-if="!isWaitingForPoints" size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
                 </div>
               </template>
             </el-card>
@@ -247,36 +171,28 @@
                   <template #header>
                     <span>轨迹信息</span>
                   </template>
-                  <!-- 待记录状态 -->
-                  <div v-if="isWaitingForPoints" class="waiting-for-points">
-                    <el-icon class="waiting-icon"><Clock /></el-icon>
-                    <p class="waiting-text">等待记录中...</p>
-                    <p class="waiting-hint">请使用 GPS Logger 等应用上传轨迹点</p>
-                  </div>
-                  <!-- 正常统计信息 -->
-                  <template v-else>
-                    <!-- 起止时间 -->
-                    <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
-                      <div class="time-range-item">
-                        <div class="time-range-content">
-                          <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
-                          <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
-                        </div>
-                      </div>
-                      <div class="time-range-divider">
-                        <template v-if="isSameDay(track.start_time, track.end_time)">
-                          <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
-                        </template>
-                        <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
-                      </div>
-                      <div class="time-range-item">
-                        <div class="time-range-content">
-                          <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
-                          <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
-                        </div>
+                  <!-- 起止时间 -->
+                  <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                    <div class="time-range-item">
+                      <div class="time-range-content">
+                        <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                        <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
                       </div>
                     </div>
-                    <el-divider style="margin: 16px 0;"></el-divider>
+                    <div class="time-range-divider">
+                      <template v-if="isSameDay(track.start_time, track.end_time)">
+                        <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                      </template>
+                      <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                    </div>
+                    <div class="time-range-item">
+                      <div class="time-range-content">
+                        <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                        <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <el-divider style="margin: 16px 0;"></el-divider>
                     <el-row :gutter="20">
                       <el-col :span="12">
                         <div class="stat-item">
@@ -320,7 +236,6 @@
                       <el-divider style="margin: 16px 0;"></el-divider>
                       <div class="description-text">{{ track.description }}</div>
                     </div>
-                  </template>
                 </el-card>
 
                 <!-- 经过的区域 - 树形展示 -->
@@ -334,79 +249,37 @@
                     </div>
                   </template>
 
-                  <!-- 未填充提示（仅在未填充且未开始填充时显示） -->
-                  <div v-if="(!track.has_area_info || !track.has_road_info) && !(fillProgress.status === 'filling' || fillingGeocoding)" class="no-fill-hint">
-                    <el-icon><LocationFilled /></el-icon>
-                    <span>请填充地理信息后查看</span>
-                    <div class="no-fill-actions">
-                      <el-button type="primary" size="small" @click="handleFillGeocoding" :loading="fillingGeocoding">
-                        立即填充
-                      </el-button>
-                      <el-button type="success" size="small" @click="importDialogVisible = true">
-                        导入数据
-                      </el-button>
-                    </div>
-                  </div>
-
-                  <!-- 填充进度（开始填充后显示，无论是否已填充） -->
-                  <template v-if="fillProgress.status === 'filling' || fillingGeocoding">
-                    <div class="fill-progress-section">
-                      <div class="fill-progress-hint">正在填充地理信息……</div>
-                      <div class="fill-progress-with-action">
-                        <el-progress
-                          :percentage="fillProgressPercentage"
-                          :show-text="false"
-                          :stroke-width="8"
-                        />
-                        <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
-                      </div>
-                      <div class="fill-progress-text">
-                        <span v-if="fillProgress.total > 0">
-                          <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
-                            {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                          </template>
-                          <template v-else>
-                            {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                          </template>
-                        </span>
-                        <span v-else>正在准备...</span>
-                      </div>
-                    </div>
-                  </template>
-
                   <!-- 区域树 -->
-                  <template v-else>
-                    <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
-                    <div v-else-if="regionTree.length > 0" class="region-tree-container">
-                      <el-tree
-                        :data="regionTree"
-                        :props="{ label: 'name', children: 'children' }"
-                        default-expand-all
-                        :expand-on-click-node="false"
-                        node-key="id"
-                        :key="treeForceUpdateKey"
-                        @node-click="handleRegionNodeClick"
-                      >
-                        <template #default="{ data }">
-                          <div class="region-tree-node">
-                            <div class="node-label">
-                              <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
-                                <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
-                                <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
-                                <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
-                              </el-icon>
-                              <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
-                              <component v-else :is="() => renderNodeLabel(data)" />
-                            </div>
-                            <div class="node-info">
-                              <span class="node-distance">{{ formatDistance(data.distance) }}</span>
-                              <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
-                            </div>
+                  <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+                  <div v-else-if="regionTree.length > 0" class="region-tree-container">
+                    <el-tree
+                      :data="regionTree"
+                      :props="{ label: 'name', children: 'children' }"
+                      default-expand-all
+                      :expand-on-click-node="false"
+                      node-key="id"
+                      :key="treeForceUpdateKey"
+                      @node-click="handleRegionNodeClick"
+                    >
+                      <template #default="{ data }">
+                        <div class="region-tree-node">
+                          <div class="node-label">
+                            <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
+                              <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
+                              <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
+                              <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
+                            </el-icon>
+                            <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
+                            <component v-else :is="() => renderNodeLabel(data)" />
                           </div>
-                        </template>
-                      </el-tree>
-                    </div>
-                  </template>
+                          <div class="node-info">
+                            <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                            <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                          </div>
+                        </div>
+                      </template>
+                    </el-tree>
+                  </div>
                 </el-card>
               </el-col>
             </el-row>
@@ -427,10 +300,9 @@
                   <UniversalMap
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
-                    :highlight-track-id="track.id"
+                    :highlight-track-id="track?.id"
                     :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
-                    :latest-point-index="latestPointIndex"
-                    :live-update-time="track.last_point_created_at || track.last_upload_at"
+                    :view-details-url="viewDetailsUrl"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -438,13 +310,11 @@
               </template>
               <template v-else>
                 <div class="map-placeholder">
-                  <p v-if="isWaitingForPoints">等待记录中...</p>
-                  <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
-                  <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
+                  <p>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
+                  <p v-if="points.length > 0" class="debug-info">
                     轨迹点数量: {{ points.length }}，
                     有效坐标: {{ points.filter(p => p.latitude_wgs84 != null && p.longitude_wgs84 != null).length }}
                   </p>
-                  <el-button v-if="!isWaitingForPoints" size="small" @click="$router.push('/upload')">上传新轨迹</el-button>
                 </div>
               </template>
             </el-card>
@@ -465,80 +335,71 @@
               <template #header>
                 <span>轨迹信息</span>
               </template>
-              <!-- 待记录状态 -->
-              <div v-if="isWaitingForPoints" class="waiting-for-points">
-                <el-icon class="waiting-icon"><Clock /></el-icon>
-                <p class="waiting-text">等待记录中...</p>
-                <p class="waiting-hint">请使用 GPS Logger 等应用上传轨迹点</p>
+              <!-- 起止时间 -->
+              <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
+                <div class="time-range-item">
+                  <div class="time-range-content">
+                    <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
+                    <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
+                  </div>
+                </div>
+                <div class="time-range-divider">
+                  <template v-if="isSameDay(track.start_time, track.end_time)">
+                    <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
+                  </template>
+                  <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
+                </div>
+                <div class="time-range-item">
+                  <div class="time-range-content">
+                    <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
+                    <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
+                  </div>
+                </div>
               </div>
-              <!-- 正常统计信息 -->
-              <template v-else>
-                <!-- 起止时间 -->
-                <div class="time-range-section" :class="{ 'same-day': isSameDay(track.start_time, track.end_time) }">
-                  <div class="time-range-item">
-                    <div class="time-range-content">
-                      <div class="time-range-time">{{ formatTimeOnly(track.start_time) }}</div>
-                      <div class="time-range-date">{{ formatDate(track.start_time) }}</div>
+              <el-divider style="margin: 16px 0;"></el-divider>
+              <el-row :gutter="20">
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatDistance(track.distance) }}</div>
+                      <div class="stat-label">总里程</div>
                     </div>
                   </div>
-                  <div class="time-range-divider">
-                    <template v-if="isSameDay(track.start_time, track.end_time)">
-                      <span class="time-range-divider-date">{{ formatDate(track.start_time) }}</span>
-                    </template>
-                    <el-icon v-else class="time-range-divider-icon"><Clock /></el-icon>
-                  </div>
-                  <div class="time-range-item">
-                    <div class="time-range-content">
-                      <div class="time-range-time">{{ formatTimeOnly(track.end_time) }}</div>
-                      <div class="time-range-date">{{ formatDate(track.end_time) }}</div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatDuration(track.duration) }}</div>
+                      <div class="stat-label">总时长</div>
                     </div>
                   </div>
-                </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
+                      <div class="stat-label">总爬升</div>
+                    </div>
+                  </div>
+                </el-col>
+                <el-col :span="12">
+                  <div class="stat-item">
+                    <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
+                    <div class="stat-content">
+                      <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
+                      <div class="stat-label">总下降</div>
+                    </div>
+                  </div>
+                </el-col>
+              </el-row>
+              <!-- 备注 -->
+              <div v-if="track.description" class="description-section">
                 <el-divider style="margin: 16px 0;"></el-divider>
-                <el-row :gutter="20">
-                  <el-col :span="12">
-                    <div class="stat-item">
-                      <el-icon class="stat-icon" color="#409eff"><Odometer /></el-icon>
-                      <div class="stat-content">
-                        <div class="stat-value">{{ formatDistance(track.distance) }}</div>
-                        <div class="stat-label">总里程</div>
-                      </div>
-                    </div>
-                  </el-col>
-                  <el-col :span="12">
-                    <div class="stat-item">
-                      <el-icon class="stat-icon" color="#67c23a"><Clock /></el-icon>
-                      <div class="stat-content">
-                        <div class="stat-value">{{ formatDuration(track.duration) }}</div>
-                        <div class="stat-label">总时长</div>
-                      </div>
-                    </div>
-                  </el-col>
-                  <el-col :span="12">
-                    <div class="stat-item">
-                      <el-icon class="stat-icon" color="#e6a23c"><Top /></el-icon>
-                      <div class="stat-content">
-                        <div class="stat-value">{{ formatElevation(track.elevation_gain) }}</div>
-                        <div class="stat-label">总爬升</div>
-                      </div>
-                    </div>
-                  </el-col>
-                  <el-col :span="12">
-                    <div class="stat-item">
-                      <el-icon class="stat-icon" color="#f56c6c"><Bottom /></el-icon>
-                      <div class="stat-content">
-                        <div class="stat-value">{{ formatElevation(track.elevation_loss) }}</div>
-                        <div class="stat-label">总下降</div>
-                      </div>
-                    </div>
-                  </el-col>
-                </el-row>
-                <!-- 备注 -->
-                <div v-if="track.description" class="description-section">
-                  <el-divider style="margin: 16px 0;"></el-divider>
-                  <div class="description-text">{{ track.description }}</div>
-                </div>
-              </template>
+                <div class="description-text">{{ track.description }}</div>
+              </div>
             </el-card>
 
             <!-- 经过的区域 - 树形展示 -->
@@ -552,79 +413,37 @@
                 </div>
               </template>
 
-              <!-- 未填充提示（仅在未填充且未开始填充时显示） -->
-              <div v-if="(!track.has_area_info || !track.has_road_info) && !(fillProgress.status === 'filling' || fillingGeocoding)" class="no-fill-hint">
-                <el-icon><LocationFilled /></el-icon>
-                <span>请填充地理信息后查看</span>
-                <div class="no-fill-actions">
-                  <el-button type="primary" size="small" @click="handleFillGeocoding" :loading="fillingGeocoding">
-                    立即填充
-                  </el-button>
-                  <el-button type="success" size="small" @click="importDialogVisible = true">
-                    导入数据
-                  </el-button>
-                </div>
-              </div>
-
-              <!-- 填充进度（开始填充后显示，无论是否已填充） -->
-              <template v-if="fillProgress.status === 'filling' || fillingGeocoding">
-                <div class="fill-progress-section">
-                  <div class="fill-progress-hint">正在填充地理信息……</div>
-                  <div class="fill-progress-with-action">
-                    <el-progress
-                      :percentage="fillProgressPercentage"
-                      :show-text="false"
-                      :stroke-width="8"
-                    />
-                    <el-button class="stop-fill-btn" type="danger" circle @click="handleStopFillGeocoding" />
-                  </div>
-                  <div class="fill-progress-text">
-                    <span v-if="fillProgress.total > 0">
-                      <template v-if="(fillProgress.current + fillProgress.failed) > 0 && fillProgress.failed > 0">
-                        {{ fillProgress.current }} <span class="fill-failed-count">+ {{ fillProgress.failed }} 失败</span> / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                      </template>
-                      <template v-else>
-                        {{ fillProgress.current }} / {{ fillProgress.total }} 点（{{ fillProgressPercentage }}%）
-                      </template>
-                    </span>
-                    <span v-else>正在准备...</span>
-                  </div>
-                </div>
-              </template>
-
               <!-- 区域树 -->
-              <template v-else>
-                <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
-                <div v-else-if="regionTree.length > 0" class="region-tree-container">
-                  <el-tree
-                    :data="regionTree"
-                    :props="{ label: 'name', children: 'children' }"
-                    default-expand-all
-                    :expand-on-click-node="false"
-                    node-key="id"
-                    :key="treeForceUpdateKey"
-                    @node-click="handleRegionNodeClick"
-                  >
-                    <template #default="{ data }">
-                      <div class="region-tree-node">
-                        <div class="node-label">
-                          <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
-                            <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
-                            <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
-                            <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
-                          </el-icon>
-                          <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
-                          <component v-else :is="() => renderNodeLabel(data)" />
-                        </div>
-                        <div class="node-info">
-                          <span class="node-distance">{{ formatDistance(data.distance) }}</span>
-                          <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
-                        </div>
+              <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+              <div v-else-if="regionTree.length > 0" class="region-tree-container">
+                <el-tree
+                  :data="regionTree"
+                  :props="{ label: 'name', children: 'children' }"
+                  default-expand-all
+                  :expand-on-click-node="false"
+                  node-key="id"
+                  :key="treeForceUpdateKey"
+                  @node-click="handleRegionNodeClick"
+                >
+                  <template #default="{ data }">
+                    <div class="region-tree-node">
+                      <div class="node-label">
+                        <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
+                          <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
+                          <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
+                          <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
+                        </el-icon>
+                        <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
+                        <component v-else :is="() => renderNodeLabel(data)" />
                       </div>
-                    </template>
-                  </el-tree>
-                </div>
-              </template>
+                      <div class="node-info">
+                        <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                        <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                      </div>
+                    </div>
+                  </template>
+                </el-tree>
+              </div>
             </el-card>
 
             <!-- 轨迹点列表
@@ -661,68 +480,9 @@
             </el-card> -->
           </div>
         </div>
-      </template>
+        </template>
       </template>
     </el-main>
-
-    <!-- 编辑对话框 -->
-    <el-dialog v-model="editDialogVisible" title="编辑轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <el-form :model="editForm" label-width="100px" class="dialog-form">
-        <el-form-item label="名称">
-          <el-input v-model="editForm.name" placeholder="请输入轨迹名称" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input
-            v-model="editForm.description"
-            type="textarea"
-            :rows="3"
-            placeholder="请输入备注信息"
-          />
-        </el-form-item>
-
-        <!-- <el-divider content-position="left">更改坐标系</el-divider> -->
-
-        <el-form-item label="原坐标系">
-          <el-radio-group v-model="editForm.original_crs">
-            <el-radio value="wgs84">WGS84</el-radio>
-            <el-radio value="gcj02">GCJ02</el-radio>
-            <el-radio value="bd09">BD09</el-radio>
-          </el-radio-group>
-          <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
-        </el-form-item>
-      
-      <!-- <el-divider content-position="left"></el-divider> -->
-        <el-form-item label="地理信息">
-          <el-button
-                type="primary"
-                :loading="fillingGeocoding"
-                @click="handleFillGeocoding"
-                class="fill-geo-btn"
-              >
-                <el-icon><LocationFilled /></el-icon>
-                {{ fillingGeocoding ? '填充中...' : (track?.has_area_info || track?.has_road_info) ? '重新填充' : '填充' }}
-          </el-button>
-          <el-button
-            @click="handleOpenGeoEditor"
-            class="fill-geo-btn"
-          >
-            <el-icon><Edit /></el-icon>
-            编辑
-          </el-button>
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <div class="dialog-footer-content">
-          
-          <div class="dialog-footer-right">
-            <el-button @click="editDialogVisible = false">取消</el-button>
-            <el-button type="primary" :loading="saving || changingCrs" @click="saveEdit">
-              {{ changingCrs ? '更改中...' : '保存' }}
-            </el-button>
-          </div>
-        </div>
-      </template>
-    </el-dialog>
 
     <!-- 导出数据对话框 -->
     <el-dialog v-model="exportPointsDialogVisible" title="导出轨迹" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
@@ -764,93 +524,6 @@
       </template>
     </el-dialog>
 
-    <!-- 导入数据对话框 -->
-    <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
-      <el-form label-width="100px" class="dialog-form">
-        <el-form-item label="匹配方式">
-          <el-radio-group v-model="importMatchMode">
-            <el-radio value="index">索引</el-radio>
-            <el-radio value="time">时间</el-radio>
-          </el-radio-group>
-          <div class="radio-hint">
-            <template v-if="importMatchMode === 'index'">
-              匹配 index 列的值
-            </template>
-            <template v-else>
-              匹配 time_date/time_time 或 time 列的值
-            </template>
-          </div>
-        </el-form-item>
-        <el-form-item v-if="importMatchMode === 'time'" label="文件时区">
-          <el-select v-model="importTimezone" placeholder="选择导入文件的时间戳时区">
-            <el-option label="UTC (世界标准时间)" value="UTC" />
-            <el-option label="UTC+8 (北京时间)" value="UTC+8" />
-            <el-option label="Asia/Shanghai (中国标准时间)" value="Asia/Shanghai" />
-            <el-option label="UTC+1" value="UTC+1" />
-            <el-option label="UTC+2" value="UTC+2" />
-            <el-option label="UTC+3" value="UTC+3" />
-            <el-option label="UTC+4" value="UTC+4" />
-            <el-option label="UTC+5" value="UTC+5" />
-            <el-option label="UTC+6" value="UTC+6" />
-            <el-option label="UTC+7" value="UTC+7" />
-            <el-option label="UTC+9" value="UTC+9" />
-            <el-option label="UTC+10" value="UTC+10" />
-            <el-option label="UTC-5" value="UTC-5" />
-            <el-option label="UTC-6" value="UTC-6" />
-            <el-option label="UTC-7" value="UTC-7" />
-            <el-option label="UTC-8" value="UTC-8" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="importMatchMode === 'time'" label="时间误差">
-          <el-input-number v-model="importTimeTolerance" :min="0.1" :max="60" :step="0.1" :precision="1" style="width: 150px" />
-          <span style="margin-left: 8px; color: #999;">秒（不含边界值，如 1 表示 &lt; 1 秒）</span>
-        </el-form-item>
-        <el-form-item label="选择文件">
-          <el-upload
-            ref="uploadRef"
-            :auto-upload="false"
-            :limit="1"
-            accept=".csv,.xlsx"
-            :on-change="handleFileChange"
-            :on-remove="handleFileRemove"
-          >
-            <el-button type="primary">
-              <el-icon><Upload /></el-icon>
-              选择文件
-            </el-button>
-            <template #tip>
-              <div style="font-size: 12px; color: #999; margin-top: 5px">
-                支持 CSV 或 XLSX 格式
-              </div>
-            </template>
-          </el-upload>
-        </el-form-item>
-        <el-alert type="info" :closable="false" style="margin-top: 10px">
-          导入将更新地理信息和备注，不会修改坐标和原始数据
-        </el-alert>
-      </el-form>
-      <template #footer>
-        <el-button @click="importDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="importing" @click="importPoints" :disabled="!importFile">导入</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 实时记录配置对话框 -->
-    <LiveRecordingDialog
-      v-model:visible="recordingDetailVisible"
-      :recording-id="currentRecordingId || 0"
-      :token="currentRecordingToken || ''"
-      :name="currentRecordingName || ''"
-      :status="currentRecordingStatus || 'ended'"
-      :fill-geocoding="currentRecordingFillGeocoding || false"
-      :last-upload-at="currentRecordingLastUploadAt"
-      :last-point-time="currentRecordingLastPointTime"
-      :last-point-created-at="currentRecordingLastPointCreatedAt"
-      @ended="handleRecordingEnded"
-      @fill-geocoding-changed="handleFillGeocodingChanged"
-      @refresh="refreshRecordingStatus"
-    />
-
     <!-- 海报导出对话框 -->
     <PosterExportDialog
       v-model:visible="posterDialogVisible"
@@ -859,63 +532,45 @@
       :regions="regionTree"
       :map-ref="mapRef"
     />
-
-    <ShareDialog
-      v-model:visible="shareDialogVisible"
-      :track-id="trackId"
-      :initial-status="shareStatus"
-      @update:status="shareStatus = $event"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, onBeforeUnmount, nextTick, watch, h } from 'vue'
 import { useRoute } from 'vue-router'
-import { useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import type { UploadFile, UploadInstance } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import {
   ArrowLeft,
   HomeFilled,
-  Download,
-  Upload,
-  Edit,
-  Document,
   Odometer,
   Clock,
   Top,
   Bottom,
-  SuccessFilled,
-  User,
-  ArrowDown,
-  Setting,
-  SwitchButton,
   LocationFilled,
-  Close,
-  Loading,
-  Link,
-  Picture,
-  Share,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
-import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode, type ShareStatus } from '@/api/track'
-import { liveRecordingApi } from '@/api/liveRecording'
+import { trackApi, type Track, type TrackPoint, type RegionNode } from '@/api/track'
+import { sharedApi } from '@/api/shared'
 import UniversalMap from '@/components/map/UniversalMap.vue'
-import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
-import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
-import { getWebSocketOrigin } from '@/utils/origin'
-import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
-import PosterExportDialog from '@/components/PosterExportDialog.vue'
-import ShareDialog from '@/components/ShareDialog.vue'
 
 const route = useRoute()
-const router = useRouter()
-const authStore = useAuthStore()
 const configStore = useConfigStore()
+
+// 获取分享 token
+const shareToken = computed(() => route.params.token as string)
+
+// 检测是否为嵌入模式
+const isEmbed = computed(() => route.query.embed === 'true')
+
+// 嵌入模式：查看详情链接（指向完整分享页面）
+const viewDetailsUrl = computed(() => {
+  if (!shareToken.value || !isEmbed.value) return ''
+  const baseUrl = window.location.origin
+  return `${baseUrl}/s/${shareToken.value}`
+})
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
@@ -934,7 +589,7 @@ function handleResize() {
 const loading = ref(true)
 const track = ref<Track | null>(null)
 const points = ref<TrackPoint[]>([])
-const trackId = ref<number>(parseInt(route.params.id as string))
+const trackId = ref<number>(0)  // 从分享 API 获取后设置
 const highlightedPointIndex = ref<number>(-1)
 const loadFailed = ref(false)  // 标记是否加载失败
 
@@ -948,26 +603,6 @@ const mapElementRef = ref<HTMLElement | null>(null)
 const chartRef = ref<HTMLElement>()
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
-
-// 编辑相关
-const editDialogVisible = ref(false)
-const saving = ref(false)
-const changingCrs = ref(false)
-const editForm = ref({
-  name: '',
-  description: '',
-  original_crs: 'wgs84'
-})
-
-// 填充地理信息相关
-const fillingGeocoding = ref(false)
-const fillProgress = ref<{
-  current: number
-  total: number
-  failed: number
-  status: 'idle' | 'filling' | 'completed' | 'error' | 'stopped'
-}>({ current: 0, total: 0, failed: 0, status: 'idle' })
-let fillProgressTimer: number | null = null
 
 // 区域树相关
 const regionTree = ref<RegionNode[]>([])
@@ -986,50 +621,8 @@ const loadingSigns = ref<Set<string>>(new Set())
 // 强制更新树组件的 key（当 SVG 加载完成后）
 const treeForceUpdateKey = ref(0)
 
-// 实时记录详情相关（使用 LiveRecordingDialog 组件）
-const recordingDetailVisible = ref(false)
-const currentRecordingId = ref<number | null>(null)
-const currentRecordingToken = ref<string | null>(null)
-const currentRecordingName = ref<string | null>(null)
-const currentRecordingStatus = ref<'active' | 'ended' | null>(null)
-const currentRecordingFillGeocoding = ref<boolean>(false)
-const currentRecordingLastUploadAt = ref<string | null>(null)
-const currentRecordingLastPointTime = ref<string | null>(null)
-const currentRecordingLastPointCreatedAt = ref<string | null>(null)
-
 // 路径段高亮相关
 const highlightedSegment = ref<{ start: number; end: number; nodeName: string } | null>(null)
-
-// 实时轨迹最新点索引（用于显示绿色标记）
-const latestPointIndex = computed(() => {
-  // 只有实时记录时才显示最新点标记
-  if (!track.value?.is_live_recording || !points.value.length) {
-    return null
-  }
-
-  // 过滤出有有效坐标的点（与 trackWithPoints 逻辑一致）
-  const validPoints = points.value.filter(p =>
-    p.latitude_wgs84 != null &&
-    p.longitude_wgs84 != null &&
-    !isNaN(p.latitude_wgs84) &&
-    !isNaN(p.longitude_wgs84)
-  )
-
-  if (validPoints.length === 0) return null
-
-  // 找到 GPS 时间最新的点在 validPoints 中的索引
-  let latestIndex = -1
-  let latestTime: string | null = null
-
-  validPoints.forEach((point, index) => {
-    if (point.time && point.time > (latestTime || '')) {
-      latestTime = point.time
-      latestIndex = index
-    }
-  })
-
-  return latestIndex >= 0 ? latestIndex : null
-})
 
 // 导出相关
 const exportPointsDialogVisible = ref(false)
@@ -1037,35 +630,8 @@ const exportFormat = ref<'gpx' | 'kml' | 'csv' | 'xlsx'>('gpx')
 const exportCRS = ref('original')
 const exporting = ref(false)
 
-// 导入相关
-const importDialogVisible = ref(false)
-const importing = ref(false)
-
 // 海报导出相关
 const posterDialogVisible = ref(false)
-
-// 分享相关
-const shareDialogVisible = ref(false)
-const shareStatus = ref<ShareStatus | null>(null)
-
-const importFile = ref<File | null>(null)
-const importMatchMode = ref<'index' | 'time'>('index')
-const importTimezone = ref<string>('UTC+8')
-const importTimeTolerance = ref<number>(1.0)
-const uploadRef = ref<UploadInstance>()
-
-// 实时更新相关
-let liveTrackWs: LiveTrackWebSocket | null = null
-const isLiveUpdating = ref(false)
-const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnected')
-// 区域更新节流：最多每 10 秒更新一次
-let regionUpdateTimer: number | null = null
-const REGION_UPDATE_INTERVAL = 10000 // 10 秒
-
-// 判断是否是"待记录"状态（实时记录且没有点）
-const isWaitingForPoints = computed(() => {
-  return track.value?.is_live_recording && points.value.length === 0
-})
 
 // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
@@ -1106,60 +672,28 @@ const trackWithPoints = computed(() => {
 
 // 处理用户下拉菜单命令
 function handleCommand(command: string) {
-  if (command === 'logout') {
-    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
-    }).then(() => {
-      authStore.logout()
-      ElMessage.success('已退出登录')
-      router.push('/login')
-    })
-  } else if (command === 'admin') {
-    router.push('/admin')
-  } else if (command === 'recordingDetail') {
-    showRecordingDetail()
-  } else if (command === 'edit') {
-    showEditDialog()
-  } else if (command === 'exportPoints') {
+  if (command === 'exportPoints') {
     exportPointsDialogVisible.value = true
-  } else if (command === 'import') {
-    importDialogVisible.value = true
   } else if (command === 'poster') {
     posterDialogVisible.value = true
-  } else if (command === 'share') {
-    shareDialogVisible.value = true
   }
 }
 
 // 获取轨迹详情
 async function fetchTrackDetail() {
-  try {
-    // 如果是虚拟 ID（负数），说明是等待上传点的实时记录
-    if (trackId.value < 0) {
-      const recordingId = -trackId.value
-      const result = await liveRecordingApi.getDetail(recordingId)
-      if (!isMounted.value) return
-      track.value = result
-      points.value = []  // 空轨迹没有点
+  if (!shareToken.value) {
+    loadFailed.value = true
+    return
+  }
 
-      // 如果后端返回了真实轨迹 ID，说明已经有轨迹点了
-      if (track.value.id > 0) {
-        console.log(`[TrackDetail] 虚拟轨迹已转为真实轨迹: ${track.value.id}`)
-        // 更新 trackId，这样后续的 fetchTrackPoints 等函数能正确工作
-        trackId.value = track.value.id
-        // 重定向到正确的 URL（不影响当前组件的数据）
-        router.replace(`/tracks/${track.value.id}`)
-        // 重新获取轨迹点数据
-        await fetchTrackPoints()
-        return
-      }
-    } else {
-      const result = await trackApi.getDetail(trackId.value)
-      if (!isMounted.value) return
-      track.value = result
-    }
+  try {
+    // 使用分享 API 获取轨迹和点数据
+    const result = await sharedApi.getSharedTrack(shareToken.value)
+    if (!isMounted.value) return
+
+    track.value = result.track
+    trackId.value = result.track.id
+    points.value = result.points
   } catch (error) {
     // 错误已在拦截器中处理
     if (isMounted.value) {
@@ -1168,22 +702,10 @@ async function fetchTrackDetail() {
   }
 }
 
-// 获取轨迹点
+// 获取轨迹点（分享模式已在 fetchTrackDetail 中获取）
 async function fetchTrackPoints() {
-  // 如果是虚拟 ID（负数），跳过（空轨迹没有点）
-  if (trackId.value < 0) {
-    points.value = []
-    return
-  }
-
-  try {
-    const response = await trackApi.getPoints(trackId.value)
-    if (isMounted.value) {
-      points.value = response.points
-    }
-  } catch (error) {
-    // 错误已在拦截器中处理
-  }
+  // 分享模式在 fetchTrackDetail 中已经获取了点数据
+  // 这里留空，保持接口一致性
 }
 
 // 获取区域树
@@ -1194,9 +716,11 @@ async function fetchRegions() {
     return
   }
 
+  if (!shareToken.value) return
+
   try {
     regionTreeLoading.value = true
-    const response = await trackApi.getRegions(trackId.value)
+    const response = await sharedApi.getSharedRegions(shareToken.value)
     if (!isMounted.value) return
     regionTree.value = response.regions
     regionStats.value = response.stats
@@ -1391,12 +915,14 @@ function formatTimeRange(start: string | null, end: string | null): string {
 
 // 处理区域节点点击（高亮对应路径段）
 function handleRegionNodeClick(node: RegionNode) {
+  console.log('[SharedTrack] handleRegionNodeClick', node)
   if (node.start_index >= 0 && node.end_index >= 0) {
     highlightedSegment.value = {
       start: node.start_index,
       end: node.end_index,
       nodeName: node.name,
     }
+    console.log('[SharedTrack] highlightedSegment set', highlightedSegment.value)
     // 移动端：滚动到地图位置
     if (screenWidth.value <= 1366) {
       containerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
@@ -1676,318 +1202,6 @@ function handleMapPointHover(point: any, pointIndex: number) {
   highlightedPointIndex.value = pointIndex
 }
 
-// 填充地理信息
-async function handleFillGeocoding() {
-  // 如果已经填充过，显示确认对话框
-  if (track.value?.has_area_info || track.value?.has_road_info) {
-    try {
-      await ElMessageBox.confirm(
-        '已填充地理信息，再次填充会覆盖已有的信息，是否继续？',
-        '确认重新填充',
-        {
-          confirmButtonText: '继续',
-          cancelButtonText: '取消',
-          type: 'warning',
-        }
-      )
-    } catch {
-      // 用户点击取消
-      return
-    }
-  }
-
-  try {
-    await trackApi.fillGeocoding(trackId.value)
-    ElMessage.success('开始填充地理信息')
-    fillingGeocoding.value = true
-    startPollingProgress()
-  } catch (error) {
-    // 错误已在拦截器中处理
-  }
-}
-
-// 打开地理信息在线编辑器
-function handleOpenGeoEditor() {
-  // 关闭编辑对话框
-  editDialogVisible.value = false
-  // 导航到地理编辑器页面
-  router.push(`/tracks/${trackId.value}/geo-editor`)
-}
-
-// 停止填充地理信息
-async function handleStopFillGeocoding() {
-  try {
-    await trackApi.stopFillGeocoding(trackId.value)
-    ElMessage.info('已停止填充')
-    stopPollingProgress()
-    fillingGeocoding.value = false
-    // 重新加载进度状态
-    const response = await trackApi.getFillProgress(trackId.value)
-    fillProgress.value = response.progress
-  } catch (error) {
-    console.error('Stop fill error:', error)
-  }
-}
-
-// 开始轮询进度
-function startPollingProgress() {
-  if (fillProgressTimer) return
-
-  fillProgressTimer = window.setInterval(async () => {
-    try {
-      const response = await trackApi.getFillProgress(trackId.value)
-      fillProgress.value = response.progress
-
-      if (response.progress.status === 'completed') {
-        stopPollingProgress()
-        fillingGeocoding.value = false
-        const { current, failed } = response.progress
-        const total = current + failed
-        // 根据失败数量显示不同的提示
-        if (current > 0 && failed === 0) {
-          // 全部成功
-          ElMessage.success('地理信息填充完成')
-        } else if (current > 0 && failed > 0) {
-          // 部分失败
-          const failedPercent = Math.round((failed / total) * 100)
-          ElMessage.warning(`地理信息填充完成，但包含 ${failed} 条失败数据（占 ${failedPercent}%），请自行填充失败部分`)
-        } else if (current === 0 && failed > 0) {
-          // 全部失败
-          ElMessage.error('地理信息填充失败，请自行填充')
-        }
-        // 重新加载轨迹数据
-        await fetchTrackDetail()
-        await fetchTrackPoints()
-        await fetchRegions()
-      } else if (response.progress.status === 'error') {
-        stopPollingProgress()
-        fillingGeocoding.value = false
-        ElMessage.error('填充地理信息失败')
-      } else if (response.progress.status === 'stopped') {
-        stopPollingProgress()
-        fillingGeocoding.value = false
-        ElMessage.info('填充已停止')
-      }
-    } catch (error) {
-      console.error('Failed to fetch fill progress:', error)
-    }
-  }, 2000)
-}
-
-// 停止轮询进度
-function stopPollingProgress() {
-  if (fillProgressTimer) {
-    clearInterval(fillProgressTimer)
-    fillProgressTimer = null
-  }
-}
-
-// 填充进度百分比
-const fillProgressPercentage = computed(() => {
-  if (fillProgress.value.total > 0) {
-    return Math.round((fillProgress.value.current / fillProgress.value.total) * 100)
-  }
-  return 0
-})
-
-// 获取填充进度百分比
-function getFillProgressPercentage(): number {
-  if (fillProgress.value.total > 0) {
-    return Math.round((fillProgress.value.current / fillProgress.value.total) * 100)
-  }
-  return 0
-}
-
-// 检查并恢复填充进度轮询
-async function checkAndResumeFilling() {
-  // 跳过虚拟轨迹（等待上传点的实时记录）
-  if (!trackId.value || trackId.value < 0) {
-    return
-  }
-
-  try {
-    const response = await trackApi.getFillProgress(trackId.value)
-    fillProgress.value = response.progress
-
-    // 如果正在填充，启动轮询
-    if (response.progress.status === 'filling') {
-      fillingGeocoding.value = true
-      startPollingProgress()
-    }
-  } catch (error) {
-    // 忽略错误，可能是填充功能还未调用过
-  }
-}
-
-// 高亮点
-function highlightPoint(index: number) {
-  highlightedPointIndex.value = index
-  // TODO: 在地图上高亮该点
-}
-
-// 显示实时记录详情对话框
-async function showRecordingDetail() {
-  if (!track.value?.live_recording_id || !track.value?.live_recording_token) return
-
-  try {
-    // 从后端获取最新的实时记录数据（包含 fill_geocoding 和最新上传时间）
-    const recording = await liveRecordingApi.getList('active')
-    const currentRecording = recording.find(r => r.id === track.value?.live_recording_id)
-
-    if (!currentRecording) {
-      ElMessage.error('找不到实时记录')
-      return
-    }
-
-    currentRecordingId.value = track.value.live_recording_id
-    currentRecordingToken.value = track.value.live_recording_token
-    currentRecordingName.value = track.value.name
-    currentRecordingStatus.value = track.value.live_recording_status
-    currentRecordingFillGeocoding.value = currentRecording.fill_geocoding || track.value.fill_geocoding || false
-    currentRecordingLastUploadAt.value = currentRecording.last_upload_at || null
-    currentRecordingLastPointTime.value = currentRecording.last_point_time || null
-    currentRecordingLastPointCreatedAt.value = track.value.last_point_created_at || null
-    recordingDetailVisible.value = true
-  } catch (error) {
-    ElMessage.error('获取实时记录信息失败')
-  }
-}
-
-// 更新填充地理信息设置
-async function updateRecordingFillGeocoding(value: boolean) {
-  if (!currentRecordingId.value) return
-
-  const originalValue = currentRecordingFillGeocoding.value
-
-  try {
-    await liveRecordingApi.updateFillGeocoding(currentRecordingId.value, value)
-    // 成功后更新本地状态
-    currentRecordingFillGeocoding.value = value
-    // 同时更新 track 的 fill_geocoding 值（如果存在）
-    if (track.value) {
-      track.value.fill_geocoding = value
-    }
-    ElMessage.success(value ? '已开启自动填充地理信息' : '已关闭自动填充地理信息')
-  } catch (error) {
-    // 失败时恢复到原来的值
-    currentRecordingFillGeocoding.value = originalValue
-    console.error('更新填充地理信息设置失败:', error)
-  }
-}
-
-// 处理填充地理信息变更（由 LiveRecordingDialog 触发）
-function handleFillGeocodingChanged(value: boolean) {
-  currentRecordingFillGeocoding.value = value
-  // 同时更新 track 的 fill_geocoding 值
-  if (track.value) {
-    track.value.fill_geocoding = value
-  }
-}
-
-// 刷新实时记录状态
-async function refreshRecordingStatus() {
-  if (!currentRecordingId.value) return
-
-  try {
-    const status = await liveRecordingApi.getStatus(currentRecordingId.value)
-    // 更新状态
-    currentRecordingLastUploadAt.value = status.last_upload_at
-    currentRecordingLastPointTime.value = status.last_point_time
-    currentRecordingLastPointCreatedAt.value = status.last_point_created_at
-
-    // 同时更新 track 的数据
-    if (track.value) {
-      track.value.last_upload_at = status.last_upload_at
-      track.value.last_point_time = status.last_point_time
-      track.value.last_point_created_at = status.last_point_created_at
-    }
-  } catch (error) {
-    // 静默处理错误
-  }
-}
-
-// 处理记录结束事件
-function handleRecordingEnded() {
-  recordingDetailVisible.value = false
-  // 重新加载轨迹数据
-  fetchTrackDetail()
-}
-
-// 显示编辑对话框
-function showEditDialog() {
-  if (track.value) {
-    editForm.value.name = track.value.name
-    editForm.value.description = track.value.description || ''
-    editForm.value.original_crs = track.value.original_crs || 'wgs84'
-  }
-  editDialogVisible.value = true
-}
-
-// 保存编辑
-async function saveEdit() {
-  if (!track.value) return
-
-  if (!editForm.value.name.trim()) {
-    ElMessage.warning('轨迹名称不能为空')
-    return
-  }
-
-  saving.value = true
-  try {
-    // 检查是否需要更改坐标系
-    const needsCrsChange = editForm.value.original_crs !== track.value.original_crs
-
-    if (needsCrsChange) {
-      // 需要更改坐标系
-      try {
-        await ElMessageBox.confirm(
-          '更改坐标系会重新计算所有坐标并保存，此操作不可撤销。如果此前填充了轨迹，可能需要重新填充。是否继续？',
-          '确认更改坐标系',
-          {
-            confirmButtonText: '继续',
-            cancelButtonText: '取消',
-            type: 'warning',
-          }
-        )
-      } catch {
-        // 用户取消
-        saving.value = false
-        return
-      }
-
-      changingCrs.value = true
-      const updated = await trackApi.changeCrs(track.value.id, editForm.value.original_crs)
-      track.value = updated
-      // 重新加载轨迹点数据
-      await fetchTrackPoints()
-      // 强制刷新地图
-      await nextTick()
-      if (mapRef.value?.resize) {
-        mapRef.value.resize()
-      }
-      if (mapRef.value?.fitBounds) {
-        mapRef.value.fitBounds()
-      }
-      ElMessage.success('坐标系更改成功')
-    } else {
-      // 只更新名称和描述
-      const updated = await trackApi.update(track.value.id, {
-        name: editForm.value.name.trim(),
-        description: editForm.value.description.trim() || undefined
-      })
-      track.value = updated
-      ElMessage.success('保存成功')
-    }
-
-    editDialogVisible.value = false
-  } catch (error) {
-    // 错误已在拦截器中处理
-  } finally {
-    saving.value = false
-    changingCrs.value = false
-  }
-}
-
 // 导出轨迹
 async function exportPoints() {
   try {
@@ -2056,50 +1270,6 @@ async function exportPoints() {
   }
 }
 
-// 处理文件选择
-function handleFileChange(file: UploadFile) {
-  if (file.raw) {
-    importFile.value = file.raw
-  }
-}
-
-// 处理文件移除
-function handleFileRemove() {
-  importFile.value = null
-}
-
-// 导入轨迹点
-async function importPoints() {
-  if (!importFile.value) {
-    ElMessage.warning('请先选择文件')
-    return
-  }
-
-  try {
-    importing.value = true
-    const result = await trackApi.importPoints(trackId.value, importFile.value, importMatchMode.value, importTimezone.value, importTimeTolerance.value)
-
-    const matchMsg = result.matched_by === 'time' ? '（通过时间匹配）' : '（通过索引匹配）'
-    ElMessage.success(`导入成功！更新了 ${result.updated} 个点，共 ${result.total} 个点 ${matchMsg}`)
-
-    importDialogVisible.value = false
-    importFile.value = null
-    if (uploadRef.value) {
-      uploadRef.value.clearFiles()
-    }
-
-    // 重新加载轨迹数据
-    await fetchTrackDetail()
-    await fetchTrackPoints()
-    await fetchRegions()
-  } catch (error) {
-    console.error('Import error:', error)
-    ElMessage.error('导入失败，请检查文件格式是否正确')
-  } finally {
-    importing.value = false
-  }
-}
-
 // 格式化函数
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
@@ -2161,218 +1331,6 @@ function isSameDay(dateStr1: string | null, dateStr2: string | null): boolean {
     date1.getDate() === date2.getDate()
 }
 
-// ========== 实时更新相关 ==========
-
-/**
- * 启动实时更新（如果是实时轨迹）
- */
-function startLiveUpdate() {
-  if (!track.value?.is_live_recording || !track.value.live_recording_token) {
-    return
-  }
-
-  if (track.value.live_recording_status !== 'active') {
-    console.log('[LiveUpdate] 记录已结束，不启动实时更新')
-    return
-  }
-
-  const token = track.value.live_recording_token
-  const recordingId = track.value.live_recording_id
-
-  if (!recordingId) {
-    console.warn('[LiveUpdate] 缺少 recording_id')
-    return
-  }
-
-  // 打印调试信息
-  const wsOrigin = getWebSocketOrigin()
-  console.log(`[LiveUpdate] ========== 启动实时更新 ==========`)
-  console.log(`[LiveUpdate] recording_id=${recordingId}`)
-  console.log(`[LiveUpdate] token=${token.substring(0, 16)}...`)
-  console.log(`[LiveUpdate] getWebSocketOrigin() 返回: ${wsOrigin}`)
-  console.log(`[LiveUpdate] 预期 WebSocket URL: ${wsOrigin}/api/ws/live-recording/${recordingId}?token=${token}`)
-  console.log(`[LiveUpdate] VITE_ORIGIN=${import.meta.env.VITE_ORIGIN || '(未设置)'}`)
-  console.log(`[LiveUpdate] VITE_DEBUG_WS=${import.meta.env.VITE_DEBUG_WS || '(未设置，默认开启)'}`)
-  console.log(`[LiveUpdate] ======================================`)
-
-  try {
-    liveTrackWs = new LiveTrackWebSocket(token, recordingId)
-    isLiveUpdating.value = true
-
-    // 设置重连判断回调：只有记录状态为 active 时才重连
-    liveTrackWs.setShouldReconnectCallback(() => {
-      const shouldReconnect = track.value?.live_recording_status === 'active'
-      console.log('[LiveUpdate] 重连判断:', shouldReconnect ? '继续重连' : '停止重连（记录已结束）')
-      return shouldReconnect
-    })
-
-    // 监听连接状态
-    liveTrackWs.on('connected', () => {
-      console.log('[LiveUpdate] WebSocket 已连接')
-      liveUpdateStatus.value = 'connected'
-    })
-
-    // 监听断开连接
-    liveTrackWs.on('disconnected', async (message) => {
-      console.log('[LiveUpdate] WebSocket 已断开:', message.data)
-      liveUpdateStatus.value = 'disconnected'
-
-      // 主动获取最新记录状态（因为可能是记录被结束导致断开）
-      if (track.value?.is_live_recording && track.value?.live_recording_id) {
-        try {
-          const status = await liveRecordingApi.getStatus(track.value.live_recording_id)
-          console.log('[LiveUpdate] 获取到最新记录状态:', status.status)
-
-          // 更新 track 状态
-          if (track.value) {
-            track.value.live_recording_status = status.status
-          }
-
-          // 如果记录已结束，停止实时更新
-          if (status.status !== 'active') {
-            console.log('[LiveUpdate] 记录已结束，停止实时更新')
-            stopLiveUpdate()
-            // 刷新页面数据以显示最终状态
-            fetchTrackDetail()
-          }
-        } catch (error) {
-          console.error('[LiveUpdate] 获取记录状态失败:', error)
-        }
-      }
-    })
-
-    // 监听新点添加
-    liveTrackWs.on('point_added', (message) => {
-      console.log('[LiveUpdate] 收到新点:', message)
-      handleNewPointAdded(message.data as PointAddedData)
-    })
-
-    // 连接
-    liveTrackWs.connect()
-  } catch (error) {
-    console.error('[LiveUpdate] 启动失败:', error)
-    liveUpdateStatus.value = 'error'
-  }
-}
-
-/**
- * 停止实时更新
- */
-function stopLiveUpdate() {
-  console.log('[LiveUpdate] 停止实时更新')
-  if (liveTrackWs) {
-    liveTrackWs.disconnect()
-    liveTrackWs = null
-  }
-  isLiveUpdating.value = false
-  liveUpdateStatus.value = 'disconnected'
-
-  // 清除区域更新定时器
-  if (regionUpdateTimer) {
-    clearTimeout(regionUpdateTimer)
-    regionUpdateTimer = null
-  }
-
-  // 停止时立即获取一次完整的区域数据
-  fetchRegions()
-}
-
-/**
- * 延迟更新经过区域（使用节流）
- */
-function scheduleRegionUpdate() {
-  // 清除之前的定时器
-  if (regionUpdateTimer) {
-    clearTimeout(regionUpdateTimer)
-  }
-
-  // 设置新的定时器，10 秒后执行
-  regionUpdateTimer = window.setTimeout(() => {
-    console.log('[LiveUpdate] 更新经过区域')
-    fetchRegions()
-    regionUpdateTimer = null
-  }, REGION_UPDATE_INTERVAL)
-}
-
-/**
- * 处理新点添加事件
- */
-async function handleNewPointAdded(data: PointAddedData) {
-  const { point, stats } = data
-
-  // 添加新点到 points 数组
-  points.value.push({
-    id: point.id,
-    point_index: point.point_index,
-    time: point.time,
-    created_at: point.created_at || null,
-    latitude: point.latitude_wgs84 || point.latitude,
-    longitude: point.longitude_wgs84 || point.longitude,
-    latitude_wgs84: point.latitude_wgs84 ?? point.latitude ?? null,
-    longitude_wgs84: point.longitude_wgs84 ?? point.longitude ?? null,
-    latitude_gcj02: point.latitude_gcj02 ?? null,
-    longitude_gcj02: point.longitude_gcj02 ?? null,
-    latitude_bd09: point.latitude_bd09 ?? null,
-    longitude_bd09: point.longitude_bd09 ?? null,
-    elevation: point.elevation,
-    speed: point.speed,
-    bearing: null,
-    province: point.province || null,
-    city: point.city || null,
-    district: point.district || null,
-    road_name: point.road_name || null,
-    road_number: point.road_number || null,
-    province_en: point.province_en || null,
-    city_en: point.city_en || null,
-    district_en: point.district_en || null,
-    road_name_en: point.road_name_en || null,
-    memo: point.memo || null,
-  })
-
-  // 按时间戳排序（防止乱序）
-  points.value.sort((a, b) => {
-    const timeA = a.time ? new Date(a.time).getTime() : 0
-    const timeB = b.time ? new Date(b.time).getTime() : 0
-    return timeA - timeB
-  })
-
-  // 更新轨迹统计（包括结束时间）
-  if (track.value) {
-    track.value.distance = stats.distance
-    track.value.duration = stats.duration
-    track.value.elevation_gain = stats.elevation_gain
-    track.value.elevation_loss = stats.elevation_loss
-    // 只有当新点时间更晚时才更新结束时间（避免乱序点导致倒流）
-    if (point.time && (!track.value.end_time || point.time > track.value.end_time)) {
-      track.value.end_time = point.time
-    }
-    // 更新最后轨迹点时间（用于记录配置对话框显示 GPS 时间）
-    track.value.last_point_time = point.time
-    // 更新最后轨迹点服务器接收时间（用于地图显示）
-    track.value.last_point_created_at = point.created_at || point.time
-    // 如果开始时间为空（第一个点），设置为当前点的时间
-    if (!track.value.start_time && point.time) {
-      track.value.start_time = point.time
-    } else if (point.time && (!track.value.start_time || point.time < track.value.start_time)) {
-      // 同样处理开始时间：只有当新点时间更早时才更新
-      track.value.start_time = point.time
-    }
-  }
-
-  // 延迟更新经过区域（节流：最多每 10 秒更新一次）
-  scheduleRegionUpdate()
-
-  // 重新渲染图表
-  nextTick(() => {
-    renderChart()
-  })
-
-  // 如果地图已初始化，触发地图更新
-  if (mapRef.value?.refresh) {
-    mapRef.value.refresh()
-  }
-}
-
 onMounted(async () => {
   try {
     await fetchTrackDetail()
@@ -2382,14 +1340,6 @@ onMounted(async () => {
     console.error('Failed to load track data:', error)
   } finally {
     loading.value = false
-  }
-
-  // 检查是否有正在进行的填充操作
-  await checkAndResumeFilling()
-
-  // 启动实时更新（如果是实时轨迹）
-  if (track.value?.is_live_recording && track.value.live_recording_status === 'active') {
-    startLiveUpdate()
   }
 
   // 等待 DOM 更新后渲染图表
@@ -2424,11 +1374,6 @@ watch(isTallScreen, () => {
 })
 
 onUnmounted(() => {
-  stopPollingProgress()
-
-  // 停止实时更新
-  stopLiveUpdate()
-
   // 清理地图 ResizeObserver
   if (mapResizeObserver) {
     mapResizeObserver.disconnect()
@@ -2441,6 +1386,28 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 嵌入模式样式 */
+.embed-map-container {
+  width: 100%;
+  height: 100vh;
+  position: relative;
+  overflow: hidden;
+}
+
+.embed-loading,
+.embed-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: 16px;
+  color: #909399;
+}
+
+.embed-error {
+  color: #f56c6c;
+}
+
 .track-detail-container {
   height: 100vh;
   overflow-y: auto;

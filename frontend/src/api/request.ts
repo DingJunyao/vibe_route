@@ -40,19 +40,21 @@ request.interceptors.response.use(
   },
   (error) => {
     if (error.response) {
-      const { status, data } = error.response
+      const { status, data, config } = error.response
       const isLoginPage = window.location.pathname === '/login'
+      // 检查是否是公开请求（skipAuth），如果是则不执行登录页跳转
+      const isPublicRequest = config?.skipAuth === true
 
       switch (status) {
         case 401:
           // 使用后端返回的具体错误信息
           ElMessage.error(data.detail || '未授权，请重新登录')
-          // 如果不在登录页，清除 token 并跳转到登录页
-          if (!isLoginPage) {
+          // 如果不在登录页且不是公开请求，清除 token 并跳转到登录页
+          if (!isLoginPage && !isPublicRequest) {
             localStorage.removeItem('token')
             window.location.href = '/login'
           } else {
-            // 在登录页时只清除 token
+            // 在登录页时或公开请求只清除 token
             localStorage.removeItem('token')
           }
           break

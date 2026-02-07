@@ -69,6 +69,18 @@
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
+      <!-- 查看详情按钮（嵌入模式） -->
+      <el-button
+        v-if="viewDetailsUrl"
+        type="primary"
+        size="small"
+        class="view-details-btn"
+      >
+        <a :href="viewDetailsUrl" target="_blank" class="view-details-link">
+          <el-icon><Link /></el-icon>
+          <span>查看详情</span>
+        </a>
+      </el-button>
       <!-- 实时更新时间标识 -->
       <el-button
         v-if="formattedLiveUpdateTime"
@@ -134,7 +146,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
-import { Close, FullScreen } from '@element-plus/icons-vue'
+import { Close, FullScreen, Link } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
 import BMap from './BMap.vue'
@@ -177,6 +189,7 @@ interface Props {
   liveStatusText?: string  // 实时更新状态文字（已废弃，使用 liveUpdateTime）
   liveUpdateTime?: string | null  // 实时更新时间
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
+  viewDetailsUrl?: string  // 嵌入模式：查看详情链接
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -190,6 +203,7 @@ const props = withDefaults(defineProps<Props>(), {
   liveStatusText: '',
   liveUpdateTime: null,
   mapScale: 100,
+  viewDetailsUrl: '',
 })
 
 // 定义 emit 事件
@@ -222,13 +236,16 @@ const formattedLiveUpdateTime = computed(() => {
 // 合并多段高亮为一个区域（兼容现有实现）
 const highlightSegment = computed(() => {
   const segments = props.highlightSegments
+  console.log('[UniversalMap] highlightSegment computed, segments:', segments)
   if (!segments || segments.length === 0) return null
 
   // 找到最小起始和最大结束
   const minStart = Math.min(...segments.map(s => s.start))
   const maxEnd = Math.max(...segments.map(s => s.end))
 
-  return { start: minStart, end: maxEnd }
+  const result = { start: minStart, end: maxEnd }
+  console.log('[UniversalMap] highlightSegment result:', result)
+  return result
 })
 
 // 计算轨迹方向（用于海报生成时的 zoom 调整）
@@ -599,6 +616,29 @@ defineExpose({
   padding: 4px 8px;
   height: auto;
   flex-shrink: 0;
+}
+
+.view-details-btn {
+  flex-shrink: 0;
+  padding: 0;
+  height: 24px;
+}
+
+.view-details-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+  padding: 5px 12px;
+  color: inherit;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+
+.view-details-link:hover {
+  text-decoration: none;
 }
 
 @media (max-width: 1366px) {

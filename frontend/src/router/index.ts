@@ -83,6 +83,19 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/Admin.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
   },
+  {
+    path: '/settings',
+    name: 'Settings',
+    component: () => import('@/views/Settings.vue'),
+    meta: { requiresAuth: true },
+  },
+  // 分享页面（公开访问，无需登录）
+  {
+    path: '/s/:token',
+    name: 'SharedTrack',
+    component: () => import('@/views/SharedTrack.vue'),
+    meta: { public: true },
+  },
   // 日志查看器（仅开发环境）
   {
     path: '/log-viewer',

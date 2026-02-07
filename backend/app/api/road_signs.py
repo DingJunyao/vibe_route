@@ -6,7 +6,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_db, get_current_user
 from app.models.user import User
 from app.models.road_sign import RoadSignCache
 from app.services.road_sign_service import road_sign_service
@@ -106,10 +106,9 @@ class RoadSignResponse(BaseModel):
 async def generate_road_sign(
     request: RoadSignRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ):
     """
-    生成道路标志 SVG
+    生成道路标志 SVG（公开访问，无需认证）
 
     - **sign_type**: way (普通道路) 或 expwy (高速)
     - **code**: 道路编号

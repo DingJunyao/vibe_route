@@ -1,0 +1,1242 @@
+<template>
+  <div class="shared-track-page" :class="{ 'embed-mode': isEmbed }">
+    <!-- 非嵌入模式显示头部 -->
+    <div v-if="!isEmbed" class="page-header">
+      <div class="header-content">
+        <h1 class="page-title">{{ track?.name || '加载中...' }}</h1>
+        <div v-if="track?.description" class="track-description">
+          {{ track.description }}
+        </div>
+      </div>
+    </div>
+
+    <!-- 加载状态 -->
+    <div v-if="loading" class="loading-container">
+      <el-skeleton :rows="3" animated />
+      <div class="map-skeleton">
+        <el-skeleton :rows="8" animated />
+      </div>
+    </div>
+
+    <!-- 错误状态 -->
+    <div v-else-if="error" class="error-container">
+      <el-result icon="error" title="加载失败" :sub-title="error">
+        <template #extra>
+          <el-button type="primary" @click="retry">重试</el-button>
+        </template>
+      </el-result>
+    </div>
+
+    <!-- 分享内容 -->
+    <div v-else class="shared-content">
+      <!-- 非嵌入模式显示统计卡片 -->
+      <div v-if="!isEmbed" class="stats-section">
+        <div class="stats-inner">
+          <div class="stat-item">
+          <div class="stat-icon distance">
+            <el-icon><Odometer /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatDistance(track?.distance) }}</div>
+            <div class="stat-label">里程</div>
+          </div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-icon duration">
+            <el-icon><Clock /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatDuration(track?.duration) }}</div>
+            <div class="stat-label">时长</div>
+          </div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-icon ascent">
+            <el-icon><Top /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatElevation(track?.elevation_gain) }}</div>
+            <div class="stat-label">爬升</div>
+          </div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-icon descent">
+            <el-icon><Bottom /></el-icon>
+          </div>
+          <div class="stat-info">
+            <div class="stat-value">{{ formatElevation(track?.elevation_loss) }}</div>
+            <div class="stat-label">下降</div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <!-- 主要内容区域 -->
+      <div class="main-content">
+        <!-- 左侧：地图和图表 -->
+        <div class="left-column">
+          <!-- 地图 -->
+          <div ref="mapSectionRef" class="map-section">
+            <UniversalMap
+              ref="mapRef"
+              :tracks="tracks"
+              :highlight-track-id="track?.id"
+              :highlight-segments="highlightedSegments"
+              :mode="'detail'"
+              :highlight-point-index="highlightedPointIndex"
+              :view-details-url="isEmbed ? sharePageUrl : undefined"
+              @point-hover="handlePointHover"
+              @clear-segment-highlight="clearSegmentHighlight"
+            />
+          </div>
+
+          <!-- 海拔和速度图表（仅非嵌入模式） -->
+          <el-card v-if="!isEmbed" class="chart-card" shadow="never">
+            <template #header>
+              <span>海拔与速度变化</span>
+            </template>
+            <div ref="chartRef" class="chart"></div>
+          </el-card>
+        </div>
+
+        <!-- 右侧：经过区域（仅非嵌入模式） -->
+        <div v-if="!isEmbed" class="regions-section">
+          <el-card class="regions-card" shadow="never">
+            <template #header>
+              <div class="card-header">
+                <span>经过区域</span>
+                <el-tag v-if="regionStats.province > 0" size="small" type="info">
+                  {{ regionStats.province }} 省级 / {{ regionStats.city }} 地级 / {{ regionStats.district }} 县级
+                </el-tag>
+              </div>
+            </template>
+
+            <div v-if="regionTreeLoading" v-loading="true" style="min-height: 60px"></div>
+            <div v-else-if="regionTree.length > 0" class="region-tree-container">
+              <el-tree
+                ref="regionTreeRef"
+                :data="regionTree"
+                :props="{ label: 'name', children: 'children' }"
+                :default-expand-all="false"
+                :default-expanded-keys="defaultExpandedKeys"
+                :expand-on-click-node="false"
+                node-key="id"
+                @node-click="handleRegionNodeClick"
+              >
+                <template #default="{ data }">
+                  <div class="region-tree-node">
+                    <div class="node-label">
+                      <el-icon v-if="(data.original_type || data.type) !== 'road'" class="node-icon" :class="`icon-${data.original_type || data.type}`">
+                        <LocationFilled v-if="(data.original_type || data.type) === 'province'" />
+                        <LocationFilled v-else-if="(data.original_type || data.type) === 'city'" />
+                        <LocationFilled v-else-if="(data.original_type || data.type) === 'district'" />
+                      </el-icon>
+                      <el-tag v-if="data.name === '未知区域'" type="danger" size="small">未知区域</el-tag>
+                      <component v-else :is="() => renderNodeLabel(data)" />
+                    </div>
+                    <div class="node-info">
+                      <span class="node-distance">{{ formatDistance(data.distance) }}</span>
+                      <span v-if="data.start_time" class="node-time">{{ formatTimeRange(data.start_time, data.end_time) }}</span>
+                    </div>
+                  </div>
+                </template>
+              </el-tree>
+            </div>
+            <el-empty v-else description="暂无区域数据" :image-size="60" />
+          </el-card>
+        </div>
+      </div>
+
+      <!-- 非嵌入模式显示底部信息 -->
+      <div v-if="!isEmbed" class="page-footer">
+        <el-text type="info" size="small">
+          由 <a href="/" target="_blank">Vibe Route</a> 提供
+        </el-text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, nextTick, h } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import {
+  Odometer,
+  Clock,
+  Top,
+  Bottom,
+  LocationFilled,
+} from '@element-plus/icons-vue'
+import * as echarts from 'echarts'
+import UniversalMap from '@/components/map/UniversalMap.vue'
+import { sharedApi } from '@/api/shared'
+import { roadSignApi } from '@/api/roadSign'
+import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { useConfigStore } from '@/stores/config'
+import type { SharedTrackResponse, SharedConfigResponse } from '@/api/shared'
+import type { Track, TrackPoint, RegionNode, RegionStats } from '@/api/track'
+
+const route = useRoute()
+const configStore = useConfigStore()
+
+const token = computed(() => route.params.token as string)
+const isEmbed = computed(() => route.query.embed === 'true')
+
+// 判断是否为移动端
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 1366)
+const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
+const screenHeight = ref(window.innerHeight)
+
+// 监听窗口大小变化
+window.addEventListener('resize', () => {
+  screenWidth.value = window.innerWidth
+  screenHeight.value = window.innerHeight
+})
+
+const loading = ref(true)
+const error = ref('')
+const track = ref<Track | null>(null)
+const points = ref<TrackPoint[]>([])
+const mapRef = ref()
+const mapSectionRef = ref<HTMLElement | null>(null)
+const regionTreeRef = ref()
+const chartRef = ref()
+const highlightedPointIndex = ref(-1)
+const highlightedSegments = ref<Array<{ start: number; end: number }> | null>(null)
+
+// 图表实例
+let chartInstance: echarts.ECharts | null = null
+
+// 区域树相关
+const regionTree = ref<RegionNode[]>([])
+const regionStats = ref<RegionStats>({ province: 0, city: 0, district: 0, road: 0 })
+const regionTreeLoading = ref(false)
+
+// 道路标志 SVG 缓存
+const roadSignSvgCache = ref<Map<string, string>>(new Map())
+const loadingSigns = ref<Set<string>>(new Set())
+const roadSignUpdateTrigger = ref(0)  // 用于触发树节点重新渲染
+
+// 分享页面 URL（嵌入模式下的"查看详情"按钮链接）
+const sharePageUrl = computed(() => {
+  if (!token.value) return '#'
+  return `${window.location.origin}/s/${token.value}`
+})
+
+// 轨迹数据（用于地图组件，与轨迹详情页一致）
+const tracks = computed(() => {
+  if (!track.value || !points.value.length) return []
+
+  // 过滤出有有效坐标的点
+  const validPoints = points.value.filter(p =>
+    p.latitude_wgs84 != null &&
+    p.longitude_wgs84 != null &&
+    !isNaN(p.latitude_wgs84) &&
+    !isNaN(p.longitude_wgs84)
+  )
+
+  if (validPoints.length === 0) return []
+
+  return [{
+    id: track.value.id,
+    points: validPoints.map(p => ({
+      latitude: p.latitude_wgs84,
+      longitude: p.longitude_wgs84,
+      latitude_wgs84: p.latitude_wgs84,
+      longitude_wgs84: p.longitude_wgs84,
+      latitude_gcj02: p.latitude_gcj02,
+      longitude_gcj02: p.longitude_gcj02,
+      latitude_bd09: p.latitude_bd09,
+      longitude_bd09: p.longitude_bd09,
+      elevation: p.elevation,
+      time: p.time,
+      speed: p.speed,
+      province: p.province,
+      city: p.city,
+      district: p.district,
+      road_name: p.road_name,
+      road_number: p.road_number,
+    })),
+  }]
+})
+
+// 原始点索引到有效点索引的映射（用于区域高亮）
+// 后端区域树的 start_index/end_index 是基于原始 points 数组的索引
+// 但地图组件使用的是过滤后的 validPoints 数组，需要转换索引
+const indexMap = computed(() => {
+  const map: number[] = [] // map[原始索引] = 有效索引
+  let validIndex = 0
+  for (let i = 0; i < points.value.length; i++) {
+    const p = points.value[i]
+    const isValid = p.latitude_wgs84 != null &&
+      p.longitude_wgs84 != null &&
+      !isNaN(p.latitude_wgs84) &&
+      !isNaN(p.longitude_wgs84)
+    if (isValid) {
+      map[i] = validIndex
+      validIndex++
+    } else {
+      map[i] = -1 // 无效点映射为 -1
+    }
+  }
+  return map
+})
+
+// 默认展开到县级的节点 ID
+const defaultExpandedKeys = computed(() => {
+  const keys: string[] = []
+
+  function collectKeys(nodes: RegionNode[]) {
+    for (const node of nodes) {
+      // 展开省、市、区级，不展开道路
+      if (node.type !== 'road') {
+        keys.push(node.id)
+        if (node.children && node.children.length > 0) {
+          collectKeys(node.children)
+        }
+      }
+    }
+  }
+
+  collectKeys(regionTree.value)
+  return keys
+})
+
+// 格式化距离（与轨迹详情页一致）
+function formatDistance(meters: number | undefined): string {
+  if (meters === undefined || meters === null) return '-'
+  if (meters >= 1000) {
+    const km = (meters / 1000).toFixed(2)
+    // 去掉末尾的 .00
+    return km.endsWith('.00') ? `${km.slice(0, -3)} km` : `${km} km`
+  }
+  return `${Math.round(meters)} m`
+}
+
+// 格式化时长（与轨迹详情页一致）
+function formatDuration(seconds: number | undefined): string {
+  if (!seconds) return '-'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  if (hours > 0) return `${hours}h ${minutes}min`
+  return `${minutes}min`
+}
+
+// 格式化海拔（与轨迹详情页一致）
+function formatElevation(meters: number | undefined): string {
+  if (meters === undefined || meters === null) return '-'
+  return `${meters.toFixed(0)} m`
+}
+
+// 格式化时间（用于图表 tooltip）
+function formatTime(timeStr: string): string {
+  if (!timeStr) return '-'
+  const date = new Date(timeStr)
+  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+}
+
+// 格式化时间范围（与轨迹详情页一致）
+function formatTimeRange(start: string | null, end: string | null): string {
+  if (!start) return '-'
+  const startDate = new Date(start)
+  const endDate = end ? new Date(end) : null
+
+  // 格式化时间（本地时区）
+  const formatTime = (date: Date) => {
+    const hours = date.getHours().toString().padStart(2, '0')
+    const minutes = date.getMinutes().toString().padStart(2, '0')
+    return `${hours}:${minutes}`
+  }
+
+  if (endDate) {
+    const diff = (endDate.getTime() - startDate.getTime()) / 1000 / 60 // 分钟
+    if (diff < 1) {
+      return `${formatTime(startDate)}`
+    } else if (diff < 60) {
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${Math.round(diff)}分钟)`
+    } else {
+      const diffHours = Math.floor(diff / 60)
+      const diffMins = Math.round(diff % 60)
+      return `${formatTime(startDate)} - ${formatTime(endDate)} (${diffHours}h${diffMins > 0 ? ' ' + diffMins + 'min' : ''})`
+    }
+  } else {
+    return formatTime(startDate)
+  }
+}
+
+/**
+ * 获取道路标志 SVG（带缓存）
+ */
+async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
+  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+  const cached = roadSignSvgCache.value.get(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await roadSignApi.generate({
+      sign_type: signType,
+      code: code,
+      ...(province && { province }),
+    })
+    const svg = response.svg
+    roadSignSvgCache.value.set(cacheKey, svg)
+    return svg
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 异步加载道路编号的 SVG
+ */
+async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
+  const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+
+  if (loadingSigns.value.has(key)) return
+
+  loadingSigns.value.add(key)
+
+  try {
+    const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+    if (svg) {
+      roadSignSvgCache.value.set(key, svg)
+      // 触发更新（由于 Map 变化不会自动触发，需要手动触发）
+      roadSignUpdateTrigger.value++
+    }
+  } catch {
+    // 生成失败，忽略错误
+  } finally {
+    loadingSigns.value.delete(key)
+  }
+}
+
+/**
+ * 渲染节点标签（支持 SVG 标牌）
+ */
+function renderNodeLabel(node: RegionNode) {
+  // 依赖 roadSignUpdateTrigger 以确保 SVG 加载后重新渲染
+  void roadSignUpdateTrigger.value
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+
+  // 处理道路节点且有道路编号
+  if (node.type === 'road' && node.road_number) {
+    const roadNumbers = node.road_number.split(',').map(s => s.trim())
+    const contents: (string | ReturnType<typeof h>)[] = []
+
+    if (showSigns) {
+      roadNumbers.forEach((num, index) => {
+        const parsed = parseRoadNumber(num)
+        if (parsed) {
+          const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+          const svg = roadSignSvgCache.value.get(cacheKey)
+          if (svg) {
+            contents.push(h('span', { innerHTML: svg, class: 'road-sign-inline' }))
+          } else {
+            contents.push(num)
+            loadRoadSignSvg(parsed)
+          }
+        } else {
+          contents.push(num)
+        }
+        if (index < roadNumbers.length - 1) contents.push(' ')
+      })
+    } else {
+      contents.push(roadNumbers.join(' / '))
+    }
+
+    // 添加道路名称
+    if (node.name && node.name !== '（无名）') {
+      contents.push(' ')
+      contents.push(node.name)
+    }
+
+    return h('span', contents)
+  }
+
+  // 非道路节点，使用原文本
+  return h('span', node.name)
+}
+
+// 处理点悬停
+function handlePointHover(point: TrackPoint | null, pointIndex: number) {
+  if (point && pointIndex >= 0) {
+    highlightedPointIndex.value = pointIndex
+  }
+  // 同步到图表
+  handleMapPointHover(point, pointIndex)
+}
+
+// 清除路径段高亮
+function clearSegmentHighlight() {
+  highlightedSegments.value = null
+  hideChartTip()
+}
+
+// 处理区域节点点击（高亮对应路径段）
+function handleRegionNodeClick(node: RegionNode) {
+  console.log('[SharedTrack] handleRegionNodeClick called', {
+    node,
+    start_index: node.start_index,
+    end_index: node.end_index,
+  })
+
+  if (node.start_index >= 0 && node.end_index >= 0) {
+    // 后端索引是基于原始 points 数组的，需要转换为有效点数组的索引
+    const map = indexMap.value
+    const validStart = map[node.start_index]
+    const validEnd = map[node.end_index]
+
+    console.log('[SharedTrack] Index mapping:', {
+      originalStart: node.start_index,
+      originalEnd: node.end_index,
+      validStart,
+      validEnd,
+      mapLength: map.length,
+    })
+
+    if (validStart >= 0 && validEnd >= 0) {
+      // 设置高亮段（数组格式）
+      highlightedSegments.value = [{ start: validStart, end: validEnd }]
+      console.log('[SharedTrack] Set highlightedSegments', highlightedSegments.value)
+
+      // 移动端：滚动到地图位置
+      if (screenWidth.value <= 1366 && mapSectionRef.value) {
+        console.log('[SharedTrack] Mobile: scrolling to map')
+        mapSectionRef.value.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
+    } else {
+      console.log('[SharedTrack] Invalid mapped indices:', validStart, validEnd)
+    }
+  } else {
+    console.log('[SharedTrack] Invalid indices:', node.start_index, node.end_index)
+  }
+}
+
+// 渲染海拔和速度图表
+function renderChart() {
+  console.log('[SharedTrack] renderChart called', {
+    hasChartRef: !!chartRef.value,
+    chartRef: chartRef.value,
+    pointsLength: points.value.length,
+    isEmbed: isEmbed.value,
+    offsetWidth: chartRef.value?.offsetWidth,
+    offsetHeight: chartRef.value?.offsetHeight
+  })
+
+  if (!chartRef.value) {
+    console.error('[SharedTrack] chartRef is null or undefined! Chart DOM element not found.')
+    console.log('[SharedTrack] Check if v-if="!isEmbed" is hiding the chart card. isEmbed =', isEmbed.value)
+    return
+  }
+
+  if (!points.value.length) {
+    console.error('[SharedTrack] points array is empty!')
+    return
+  }
+
+  // 确保容器有尺寸
+  const container = chartRef.value
+  if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+    // 容器还没有尺寸，延迟重试
+    console.log('[SharedTrack] Container has no size, retrying...', {
+      offsetWidth: container.offsetWidth,
+      offsetHeight: container.offsetHeight
+    })
+    setTimeout(() => renderChart(), 100)
+    return
+  }
+
+  // 销毁旧实例
+  if (chartInstance) {
+    chartInstance.dispose()
+    console.log('[SharedTrack] Disposed old chart instance')
+  }
+
+  console.log('[SharedTrack] Initializing ECharts...')
+  const chart = echarts.init(container)
+  chartInstance = chart
+
+  // 准备海拔数据
+  const elevationData = points.value
+    .filter((p: any) => p.elevation !== null)
+    .map((p: any, index: number) => [index, p.elevation])
+
+  // 准备速度数据（转换为 km/h）
+  const speedData = points.value
+    .filter((p: any) => p.speed !== null && p.speed !== undefined)
+    .map((p: any, index: number) => [index, (p.speed ?? 0) * 3.6])
+
+  // X 轴数据（使用时间标签）
+  const xAxisData = points.value.map((p: any, index: number) => {
+    if (p.time) {
+      const date = new Date(p.time)
+      return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+    }
+    return index.toString()
+  })
+
+  console.log('[SharedTrack] Chart data prepared:', {
+    elevationDataLength: elevationData.length,
+    speedDataLength: speedData.length,
+    xAxisDataLength: xAxisData.length,
+    sampleElevation: elevationData.slice(0, 3),
+    sampleSpeed: speedData.slice(0, 3)
+  })
+
+  const option = {
+    grid: {
+      left: isMobile.value ? '30px' : '70px',
+      right: isMobile.value ? '30px' : '70px',
+      top: isMobile.value ? '30px' : '50px',
+      bottom: isMobile.value ? '30px' : '50px',
+    },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const dataIndex = params[0].dataIndex
+        const point = points.value[dataIndex]
+        const speedRaw = point.speed
+        const speedKmh = speedRaw !== null ? (speedRaw * 3.6).toFixed(2) : '-'
+        let result = `点 #${dataIndex}<br/>时间: ${point.time ? formatTime(point.time) : '-'}<br/>`
+        for (const param of params) {
+          if (param.seriesName === '海拔') {
+            const elevationValue = param.value !== null ? param.value.toFixed(1) : '-'
+            result += `${param.marker}${param.seriesName}: ${elevationValue} m<br/>`
+          } else if (param.seriesName === '速度') {
+            result += `${param.marker}${param.seriesName}: ${speedKmh} km/h<br/>`
+          }
+        }
+        return result
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: xAxisData,
+      axisLabel: {
+        interval: isMobile.value ? 'auto' : Math.max(1, Math.floor(xAxisData.length / 10)),
+        fontSize: isMobile.value ? 9 : 12,
+        rotate: isMobile.value ? 45 : 0,
+      },
+      axisTick: {
+        alignWithLabel: true,
+      },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: '海拔 (m)',
+        nameLocation: 'middle',
+        nameGap: isMobile.value ? 20 : 40,
+        nameTextStyle: {
+          padding: [0, 0, 0, 0],
+          fontSize: isMobile.value ? 10 : 12,
+        },
+        axisLine: {
+          lineStyle: {
+            color: '#409eff',
+          },
+        },
+        splitLine: {
+          show: true,
+          lineStyle: {
+            color: '#e5e5e5',
+          },
+        },
+        splitNumber: isMobile.value ? 4 : 5,
+        axisLabel: {
+          fontSize: isMobile.value ? 9 : 12,
+        },
+      },
+      {
+        type: 'value',
+        name: '速度 (km/h)',
+        nameLocation: 'middle',
+        nameGap: isMobile.value ? 20 : 40,
+        nameTextStyle: {
+          padding: [0, 0, 0, 0],
+          fontSize: isMobile.value ? 10 : 12,
+        },
+        axisLine: {
+          lineStyle: {
+            color: '#67c23a',
+          },
+        },
+        splitLine: {
+          show: false,
+        },
+        splitNumber: isMobile.value ? 4 : 5,
+        axisLabel: {
+          fontSize: isMobile.value ? 9 : 12,
+        },
+      },
+    ],
+    series: [
+      {
+        name: '海拔',
+        type: 'line',
+        yAxisIndex: 0,
+        data: elevationData.map(d => d[1]),
+        smooth: !isMobile.value,
+        sampling: null,
+        symbol: 'none',
+        areaStyle: isMobile.value ? undefined : {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(64, 158, 255, 0.3)' },
+              { offset: 1, color: 'rgba(64, 158, 255, 0.05)' },
+            ],
+          },
+        },
+        lineStyle: {
+          color: '#409eff',
+          width: 2,
+        },
+      },
+      {
+        name: '速度',
+        type: 'line',
+        yAxisIndex: 1,
+        data: speedData.map(d => d[1]),
+        smooth: false,
+        sampling: null,
+        symbol: 'none',
+        areaStyle: isMobile.value ? undefined : {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(103, 194, 58, 0.3)' },
+              { offset: 1, color: 'rgba(103, 194, 58, 0.05)' },
+            ],
+          },
+        },
+        lineStyle: {
+          color: '#67c23a',
+          width: 2,
+        },
+      },
+    ],
+    legend: {
+      data: ['海拔', '速度'],
+      top: isMobile.value ? 5 : 10,
+      right: 20,
+      textStyle: {
+        fontSize: isMobile.value ? 10 : 12,
+      },
+    },
+  }
+
+  console.log('[SharedTrack] Setting chart option...')
+  chart.setOption(option)
+  console.log('[SharedTrack] Chart option set successfully')
+
+  // 图表鼠标移动事件监听 - 用于反向同步到地图
+  chart.on('showTip', (params: any) => {
+    if (params.dataIndex !== undefined && mapRef.value?.highlightPoint) {
+      mapRef.value.highlightPoint(params.dataIndex)
+    }
+  })
+
+  // 图表鼠标离开事件 - 隐藏地图标记
+  chart.on('hideTip', () => {
+    if (mapRef.value?.hideMarker) {
+      mapRef.value.hideMarker()
+    }
+  })
+
+  // 响应式调整
+  const resizeObserver = new ResizeObserver(() => {
+    chart.resize()
+  })
+  resizeObserver.observe(chartRef.value)
+}
+
+// 处理地图点悬浮事件 - 同步到图表
+function handleMapPointHover(point: any, pointIndex: number) {
+  if (!chartInstance || pointIndex < 0) return
+
+  // 在图表上显示标记线
+  chartInstance.dispatchAction({
+    type: 'showTip',
+    seriesIndex: 0,
+    dataIndex: pointIndex,
+  })
+}
+
+// 清除图表标记
+function hideChartTip() {
+  if (chartInstance) {
+    chartInstance.dispatchAction({
+      type: 'hideTip',
+    })
+  }
+}
+
+// 加载区域数据
+async function loadRegions() {
+  if (!track.value) return
+
+  regionTreeLoading.value = true
+  try {
+    const data = await sharedApi.getSharedRegions(token.value)
+    regionTree.value = data.regions
+    regionStats.value = data.stats
+  } catch {
+    // 忽略区域加载失败
+  } finally {
+    regionTreeLoading.value = false
+  }
+}
+
+// 加载分享数据
+async function loadSharedData() {
+  loading.value = true
+  error.value = ''
+
+  try {
+    // 并行加载轨迹数据和配置
+    const [trackData, configData] = await Promise.allSettled([
+      sharedApi.getSharedTrack(token.value),
+      sharedApi.getSharedConfig(token.value),
+    ])
+
+    if (trackData.status === 'fulfilled') {
+      track.value = trackData.value.track
+      points.value = trackData.value.points
+
+      // 加载区域数据
+      await loadRegions()
+
+      // 渲染图表 - 需要多次 nextTick 确保 DOM 完全渲染
+      await nextTick()
+      await nextTick()
+      // 使用 setTimeout 确保 DOM 完全挂载
+      setTimeout(() => renderChart(), 50)
+    } else {
+      throw new Error('轨迹加载失败')
+    }
+
+    // 加载分享者配置（如果有）
+    if (configData.status === 'fulfilled' && configData.value) {
+      const sharedConfig = configData.value
+      if (sharedConfig.map_provider || sharedConfig.map_layers) {
+        // 应用分享者的地图配置
+        // 暂时不做特殊处理，使用系统默认配置
+      }
+    }
+  } catch (err: any) {
+    error.value = err.message || '加载失败'
+    ElMessage.error('加载分享轨迹失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+// 重试加载
+function retry() {
+  loadSharedData()
+}
+
+// 组件卸载时销毁图表
+onUnmounted(() => {
+  if (chartInstance) {
+    chartInstance.dispose()
+    chartInstance = null
+  }
+})
+
+onMounted(() => {
+  loadSharedData()
+})
+</script>
+
+<style scoped>
+.shared-track-page {
+  min-height: 100vh;
+  background-color: var(--el-bg-color-page);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 嵌入模式 */
+.embed-mode {
+  min-height: auto;
+  height: 100%;
+  background-color: transparent;
+}
+
+.embed-mode .page-header {
+  display: none;
+}
+
+.embed-mode .stats-section {
+  display: none;
+}
+
+.embed-mode .regions-section {
+  display: none;
+}
+
+.embed-mode .page-footer {
+  display: none;
+}
+
+.embed-mode .shared-content {
+  height: 100%;
+}
+
+.embed-mode .main-content {
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+  height: 100%;
+}
+
+.embed-mode .map-section {
+  height: 500px !important;
+  min-height: auto !important;
+  flex: none;
+  border-radius: 0;
+}
+
+/* 页面头部 */
+.page-header {
+  background-color: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color);
+}
+
+.header-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 16px 20px;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 500;
+  margin: 0 0 8px 0;
+}
+
+.track-meta {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  gap: 8px;
+}
+
+.track-description {
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+/* 内容区域 */
+.shared-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 加载和错误 */
+.loading-container,
+.error-container {
+  max-width: 800px;
+  margin: 40px auto;
+  padding: 20px;
+}
+
+.map-skeleton {
+  margin-top: 20px;
+}
+
+/* 统计卡片 */
+.stats-section {
+  background-color: var(--el-bg-color);
+  border-bottom: 1px solid var(--el-border-color);
+}
+
+.stats-section .stats-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  padding: 16px 20px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.stat-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.stat-icon.distance {
+  background-color: var(--el-color-primary-light-9);
+  color: var(--el-color-primary);
+}
+
+.stat-icon.duration {
+  background-color: var(--el-color-success-light-9);
+  color: var(--el-color-success);
+}
+
+.stat-icon.ascent {
+  background-color: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+}
+
+.stat-icon.descent {
+  background-color: var(--el-color-info-light-9);
+  color: var(--el-color-info);
+}
+
+.stat-info {
+  flex: 1;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+/* 主内容区域 */
+.main-content {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  padding: 16px 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 左侧列（地图+图表） */
+.left-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 地图区域 */
+.map-section {
+  flex: 1;
+  min-height: 500px;
+  position: relative;
+}
+
+/* 图表卡片 */
+.chart-card {
+  margin-bottom: 0;
+  height: 300px;
+  flex-shrink: 0;
+}
+
+.chart-card :deep(.el-card__body) {
+  padding: 12px;
+  height: 100%;
+}
+
+.chart {
+  width: 100%;
+  height: 100%;
+}
+
+/* 区域树区域 */
+.regions-section {
+  width: 320px;
+  flex-shrink: 0;
+}
+
+.regions-card {
+  height: fit-content;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+/* 区域树样式 */
+.region-tree-container {
+  padding: 10px 0;
+  overflow-x: auto;
+}
+
+/* 让 el-tree 的宽度由内容决定，而不是填充父容器 */
+.region-tree-container :deep(.el-tree) {
+  display: inline-block;
+  min-width: 100%;
+}
+
+.region-tree-container :deep(.el-tree-node__content) {
+  min-width: max-content;
+}
+
+.region-tree-node {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  min-width: max-content;
+  padding-right: 10px;
+}
+
+.node-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.node-icon {
+  font-size: 16px;
+}
+
+.node-icon.icon-province {
+  color: #f56c6c;
+}
+
+.node-icon.icon-city {
+  color: #409eff;
+}
+
+.node-icon.icon-district {
+  color: #67c23a;
+}
+
+.node-name {
+  font-weight: 500;
+  color: #303133;
+}
+
+/* 行内道路标志 SVG */
+.road-sign-inline {
+  display: inline-block;
+  vertical-align: middle;
+  line-height: 1;
+  margin: 0 1px;
+}
+
+.road-sign-inline :deep(svg) {
+  display: inline-block;
+  vertical-align: middle;
+  height: 1em;
+  width: auto;
+}
+
+.node-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #909399;
+  font-size: 12px;
+}
+
+.node-distance {
+  color: #606266;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.node-time {
+  color: #909399;
+}
+
+/* 页面底部 */
+.page-footer {
+  padding: 16px 20px;
+  text-align: center;
+  border-top: 1px solid var(--el-border-color);
+  background-color: var(--el-bg-color);
+}
+
+.page-footer a {
+  color: var(--el-color-primary);
+  text-decoration: none;
+}
+
+/* 移动端适配（与 isMobile 断点一致：1366px） */
+@media (max-width: 1366px) {
+  .main-content {
+    flex-direction: column;
+  }
+
+  .regions-section {
+    width: 100%;
+  }
+
+  .left-column {
+    flex: none;
+    width: 100%;
+  }
+
+  .map-section {
+    height: 400px;
+    min-height: 400px;
+    flex: none;
+  }
+
+  .chart-card :deep(.el-card__body) {
+    height: 200px;
+  }
+}
+
+@media (max-width: 768px) {
+  .stats-section .stats-inner {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .page-title {
+    font-size: 20px;
+  }
+
+  .map-section {
+    height: 300px;
+    min-height: 300px;
+  }
+
+  .main-content {
+    padding: 12px 16px;
+  }
+
+  .chart-card :deep(.el-card__body) {
+    height: 180px;
+  }
+}
+</style>

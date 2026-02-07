@@ -11,6 +11,7 @@ from app.models.road_sign import RoadSignCache
 from app.models.live_recording import LiveRecording
 from app.models.admin_division import AdminDivision
 from app.models.admin_division_spatial import AdminDivisionSpatial
+from app.models.user_config import UserConfig
 
 __all__ = [
     "Base",
@@ -25,4 +26,5 @@ __all__ = [
     "LiveRecording",
     "AdminDivision",
     "AdminDivisionSpatial",
+    "UserConfig",
 ]

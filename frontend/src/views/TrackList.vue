@@ -30,6 +30,10 @@
                 记录实时轨迹
               </el-dropdown-item>
               <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
+              <el-dropdown-item command="settings">
+                <el-icon><Setting /></el-icon>
+                设置
+              </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -714,6 +718,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'settings') {
+    router.push('/settings')
   } else if (command === 'liveRecording') {
     openCreateRecordingDialog()
   } else if (command === 'upload') {

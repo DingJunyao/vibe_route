@@ -1,0 +1,28 @@
+-- 013_add_user_configs_and_share.sql.mysql
+-- 添加用户配置表和分享功能字段
+-- MySQL 版本
+
+-- 创建用户配置表
+CREATE TABLE IF NOT EXISTS user_configs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_by INT,
+    updated_by INT,
+    is_valid BOOLEAN NOT NULL DEFAULT TRUE,
+
+    user_id INT NOT NULL UNIQUE,
+    map_provider VARCHAR(50),
+    map_layers JSON,
+
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX ix_user_configs_user_id ON user_configs(user_id);
+
+-- 为 tracks 表添加分享相关字段
+ALTER TABLE tracks
+    ADD COLUMN share_token VARCHAR(36) UNIQUE,
+    ADD COLUMN is_shared BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX ix_tracks_share_token ON tracks(share_token);

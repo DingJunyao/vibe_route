@@ -41,6 +41,10 @@ class Track(Base, AuditMixin):
     # 标记是否为实时记录的轨迹
     is_live_recording = Column(Boolean, default=False, nullable=False)
 
+    # 分享相关字段
+    share_token = Column(String(36), nullable=True, unique=True, index=True, comment="分享令牌")
+    is_shared = Column(Boolean, default=False, nullable=False, comment="是否开启分享")
+
     # 关系
     user = relationship("User", back_populates="tracks")
     points = relationship("TrackPoint", back_populates="track", cascade="all, delete-orphan")

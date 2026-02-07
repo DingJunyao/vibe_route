@@ -27,9 +27,9 @@ export interface RoadSignListItem {
 
 // API 方法
 export const roadSignApi = {
-  // 生成道路标志
+  // 生成道路标志（公开访问，无需认证）
   generate(data: RoadSignRequest): Promise<RoadSignResponse> {
-    return http.post('/road-signs/generate', data)
+    return http.post('/road-signs/generate', data, { skipAuth: true })
   },
 
   // 获取已生成的标志列表

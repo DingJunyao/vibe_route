@@ -56,6 +56,9 @@ class TrackResponse(BaseModel):
     last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
     last_point_time: Optional[datetime] = Field(None, description="最近一次轨迹点的 GPS 时间")
     last_point_created_at: Optional[datetime] = Field(None, description="最近一次轨迹点的服务器接收时间")
+    # 分享相关字段
+    share_token: Optional[str] = Field(None, description="分享令牌")
+    is_shared: bool = Field(False, description="是否开启分享")
 
     @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time', 'last_point_created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
@@ -203,3 +206,22 @@ class RegionTreeResponse(BaseModel):
     track_id: int
     regions: List[RegionNode]
     stats: dict  # 各级区域数量统计
+
+
+class ShareStatusResponse(BaseModel):
+    """分享状态响应 schema"""
+    is_shared: bool
+    share_token: Optional[str] = None
+    share_url: Optional[str] = None
+
+
+class SharedTrackResponse(BaseModel):
+    """分享轨迹响应 schema（公开访问）"""
+    track: TrackResponse
+    points: List[TrackPointResponse]
+
+
+class SharedConfigResponse(BaseModel):
+    """分享者地图配置响应 schema"""
+    map_provider: Optional[str] = None
+    map_layers: Optional[dict] = None

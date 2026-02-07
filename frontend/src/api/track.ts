@@ -27,6 +27,9 @@ export interface Track {
   last_upload_at: string | null  // 最近一次上传的时间
   last_point_time: string | null  // 最近一次轨迹点的 GPS 时间
   last_point_created_at: string | null  // 最近一次轨迹点的服务器接收时间
+  // 分享相关
+  share_token: string | null
+  is_shared: boolean
 }
 
 // 统一轨迹类型（包含实时记录）
@@ -170,6 +173,13 @@ export interface ImportResponse {
   matched_by: 'index' | 'time' | 'none'
 }
 
+// 分享相关类型
+export interface ShareStatus {
+  is_shared: boolean
+  share_token: string | null
+  share_url: string | null
+}
+
 // API 方法
 export const trackApi = {
   // 上传轨迹
@@ -307,5 +317,22 @@ export const trackApi = {
         'Content-Type': 'multipart/form-data',
       },
     })
+  },
+
+  // ========== 分享相关 API ==========
+
+  // 启用分享
+  createShare(trackId: number): Promise<ShareStatus> {
+    return http.post(`/tracks/${trackId}/share`)
+  },
+
+  // 获取分享状态
+  getShareStatus(trackId: number): Promise<ShareStatus> {
+    return http.get(`/tracks/${trackId}/share`)
+  },
+
+  // 停用分享
+  deleteShare(trackId: number): Promise<ShareStatus> {
+    return http.delete(`/tracks/${trackId}/share`)
   },
 }

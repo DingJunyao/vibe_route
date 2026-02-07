@@ -1,11 +1,11 @@
 <template>
-  <div class="amap-container">
+  <div class="amap-container" :class="{ 'embed-mode-map': isEmbedMode }">
     <div ref="mapContainer" class="amap"></div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
@@ -162,6 +162,11 @@ const props = withDefaults(defineProps<Props>(), {
   mode: 'detail',
   mapScale: 100,
   trackOrientation: 'horizontal',
+})
+
+// 检测是否为嵌入模式
+const isEmbedMode = computed(() => {
+  return typeof window !== 'undefined' && window.location.search.includes('embed=true')
 })
 
 const configStore = useConfigStore()
@@ -1317,10 +1322,17 @@ function drawTracks() {
   }
 
   // 绘制路径段高亮（detail 模式）
+  console.log('[AMap] highlight check:', {
+    mode: props.mode,
+    highlightSegment: props.highlightSegment,
+    trackPathLength: trackPath.length,
+  })
   if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
+    console.log('[AMap] highlight indices:', { start, end, trackPathLength: trackPath.length })
     // 确保索引在有效范围内
     if (start >= 0 && end < trackPath.length && start <= end) {
+      console.log('[AMap] Drawing highlight polyline, segment length:', end - start + 1)
       const segmentPath = trackPath.slice(start, end + 1)
       // 转换为 AMap.LngLat 对象数组
       const lngLatPath = segmentPath.map(p => new AMap.LngLat(p.lng, p.lat))
@@ -1335,7 +1347,12 @@ function drawTracks() {
           bubble: true,
         })
         AMapInstance.add(highlightPolyline)
+        console.log('[AMap] highlightPolyline added to map')
+      } else {
+        console.log('[AMap] lngLatPath is empty!')
       }
+    } else {
+      console.log('[AMap] highlight condition failed:', { start, end, trackPathLength: trackPath.length })
     }
   }
 
@@ -1533,10 +1550,15 @@ function fitBounds(paddingPercent: number = 5) {
   const isMapOnlyMode = window.location.pathname.includes('/map-only')
   const mapScale = isMapOnlyMode ? (props.mapScale || 100) : 100
 
+  // 检查是否是嵌入模式（通过 URL 参数判断）
+  const isEmbedMode = window.location.search.includes('embed=true')
+
   const zoomBefore = AMapInstance.getZoom()
 
   try {
-    AMapInstance.setFitView(null, false, [padding, padding, padding, padding])
+    // 嵌入模式下增加底部 padding，避免版权信息被截断
+    const bottomPadding = isEmbedMode ? padding + 80 : padding
+    AMapInstance.setFitView(null, false, [padding, padding, bottomPadding, padding])
 
     // 如果是 map-only 模式且有缩放，根据边界框几何计算目标 zoom
     if (isMapOnlyMode && mapScale > 100 && bounds.length > 0) {
@@ -1744,5 +1766,14 @@ defineExpose({
   display: block;
   height: 1.4em;
   width: auto;
+}
+
+/* 调整高德地图版权信息位置 */
+:deep(.amap-copyright) {
+  bottom: 2px !important;
+}
+
+.embed-mode-map :deep(.amap-copyright) {
+  bottom: 2px !important;
 }
 </style>

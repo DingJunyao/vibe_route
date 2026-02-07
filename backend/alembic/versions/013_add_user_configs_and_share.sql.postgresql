@@ -1,0 +1,28 @@
+-- 013_add_user_configs_and_share.sql.postgresql
+-- 添加用户配置表和分享功能字段
+-- PostgreSQL 版本
+
+-- 创建用户配置表
+CREATE TABLE IF NOT EXISTS user_configs (
+    id SERIAL PRIMARY KEY,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_by INT,
+    updated_by INT,
+    is_valid BOOLEAN NOT NULL DEFAULT TRUE,
+
+    user_id INT NOT NULL UNIQUE,
+    map_provider VARCHAR(50),
+    map_layers JSONB,
+
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE INDEX ix_user_configs_user_id ON user_configs(user_id);
+
+-- 为 tracks 表添加分享相关字段
+ALTER TABLE tracks
+    ADD COLUMN IF NOT EXISTS share_token VARCHAR(36) UNIQUE,
+    ADD COLUMN IF NOT EXISTS is_shared BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS ix_tracks_share_token ON tracks(share_token);
