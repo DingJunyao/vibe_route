@@ -208,6 +208,9 @@ function initMap() {
   const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
   currentCRS.value = crs
 
+  // 检查是否为海报生成模式
+  const isPosterMode = (window as any).__posterMode === true
+
   // 创建地图
   map.value = L.map(mapContainer.value, {
     center: [39.9, 116.4],
@@ -216,6 +219,8 @@ function initMap() {
     zoomSnap: 1,              // 缩放级别为整数
     wheelPxPerZoomLevel: 240, // 滚轮每 240 像素改变一个级别（默认 120）
     crs: crs,
+    // 海报生成模式使用 Canvas 渲染（html2canvas 兼容性更好）
+    preferCanvas: isPosterMode,
   })
 
   // 添加默认底图（使用当前提供商）
@@ -969,6 +974,7 @@ function recreateMap() {
   // 获取当前视图状态
   const layerConfig = currentLayerConfig.value
   const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
+  const isPosterMode = (window as any).__posterMode === true
 
   // 创建新地图
   map.value = L.map(mapContainer.value, {
@@ -976,6 +982,7 @@ function recreateMap() {
     zoom: 10,
     zoomControl: true,
     crs: crs,
+    preferCanvas: isPosterMode,
   })
 
   // 添加底图
@@ -1547,6 +1554,12 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
     // 天地图、OSM 都使用 WGS84 坐标（天地图的插件会自动处理转换）
     lat = point.latitude_wgs84 ?? point.latitude
     lng = point.longitude_wgs84 ?? point.longitude
+    // 调试：检查第一个点的坐标
+    if (point.latitude_wgs84) {
+      console.log('[LeafletMap] 坐标来源: latitude_wgs84', { wgs84: [lat, lng], original: [point.latitude, point.longitude] })
+    } else {
+      console.log('[LeafletMap] 坐标来源: 回退到 latitude（可能不是 WGS84）', { lat, lng, hasWgs84: !!point.latitude_wgs84, hasGcj02: !!point.latitude_gcj02 })
+    }
   } else if (crs === 'gcj02') {
     lat = point.latitude_gcj02 ?? undefined
     lng = point.longitude_gcj02 ?? undefined

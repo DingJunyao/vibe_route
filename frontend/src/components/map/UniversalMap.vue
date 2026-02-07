@@ -41,6 +41,7 @@
       :highlight-segment="highlightSegment"
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
+      :default-layer-id="currentLayerId"
       :mode="mode"
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
@@ -294,11 +295,13 @@ const useAMapEngine = computed(() => {
   return !!(amapConfig?.api_key)
 })
 
-// 判断是否使用百度地图引擎
+// 判断是否使用百度地图引擎（包括 GL 版本和 Legacy 版本）
 const useBMapEngine = computed(() => {
   const layerId = currentLayerId.value
   if (layerId !== 'baidu' && !layerId.startsWith('baidu')) return false
-  const baiduConfig = configStore.getMapLayerById('baidu')
+  // baidu_legacy 使用百度地图的配置（api_key）
+  const configKey = layerId === 'baidu_legacy' ? 'baidu' : layerId
+  const baiduConfig = configStore.getMapLayerById(configKey)
   return !!(baiduConfig?.api_key || baiduConfig?.ak)
 })
 

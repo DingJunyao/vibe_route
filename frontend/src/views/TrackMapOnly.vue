@@ -1,11 +1,18 @@
 <template>
-  <div class="map-only-page">
+  <div
+    class="map-only-page"
+    :style="useExplicitSize ? { width: `${targetWidth}px`, height: `${targetHeight}px` } : {}"
+  >
     <div v-if="loading" class="map-only-loading">加载中...</div>
     <div v-else-if="error" class="map-only-error">{{ error }}</div>
     <div
       v-else
       class="map-wrapper-container"
-      :style="{ transform: `scale(${mapScale / 100})`, transformOrigin: 'center center' }"
+      :style="{
+        transform: `scale(${mapScale / 100})`,
+        transformOrigin: 'center center',
+        ...(useExplicitSize ? { width: `${targetWidth}px`, height: `${targetHeight}px` } : {})
+      }"
     >
       <UniversalMap
         v-if="track && points.length > 0"
@@ -41,8 +48,18 @@ const mapRef = ref()
 const provider = ref<string>((route.query.provider as string) || configStore.defaultMapLayer || 'osm')
 const posterSecret = ref<string>((route.query.secret as string) || '')
 const mapScale = ref<number>(parseInt(route.query.map_scale as string) || 100)
+// 获取显式指定的尺寸（用于 iframe 预览/导出）
+const targetWidth = ref<number>(parseInt(route.query.width as string) || 0)
+const targetHeight = ref<number>(parseInt(route.query.height as string) || 0)
 
-console.log('[MapOnly]', { provider: provider.value, mapScale: mapScale.value })
+// 是否使用显式尺寸（iframe 模式）
+const useExplicitSize = computed(() => targetWidth.value > 0 && targetHeight.value > 0)
+
+console.log('[MapOnly]', {
+  provider: provider.value,
+  mapScale: mapScale.value,
+  targetSize: useExplicitSize.value ? `${targetWidth.value}x${targetHeight.value}` : 'auto'
+})
 
 // 转换为 UniversalMap 需要的格式
 const trackData = computed(() => {
@@ -103,8 +120,17 @@ async function loadData() {
       mapRef.value.fitBounds()
     }
 
-    // 再等待地图调整完成
-    await new Promise(resolve => setTimeout(resolve, 2000))
+    // 等待缩放动画完成
+    // 基础等待时间 + 根据缩放比例增加额外时间
+    const baseWait = 2000
+    const scaleWait = (mapScale.value - 100) * 30  // 每 1% 缩放增加 30ms
+    const totalWait = baseWait + scaleWait
+
+    console.log(`[MapOnly] 等待缩放完成: ${totalWait}ms (scale: ${mapScale.value}%)`)
+    await new Promise(resolve => setTimeout(resolve, totalWait))
+
+    // 额外等待，确保所有动画和瓦片加载完成
+    await new Promise(resolve => setTimeout(resolve, 1000))
 
     // 通知 Playwright 地图已准备就绪
     ;(window as any).mapReady = true
@@ -122,6 +148,9 @@ onMounted(async () => {
     await configStore.fetchConfig()
   }
 
+  // 设置标志：海报生成模式，使用 Canvas 渲染（html2canvas 兼容性更好）
+  ;(window as any).__posterMode = true
+
   await loadData()
 })
 </script>
@@ -137,6 +166,22 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 确保没有额外的样式干扰 */
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* 全局重置，确保 body 没有默认 margin */
+:deep(body) {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+:deep(html) {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
 }
 
 .map-wrapper-container {
@@ -145,6 +190,12 @@ onMounted(async () => {
   height: 100vh;
   /* 缩放将通过 transform: scale() 应用 */
   transition: transform 0.3s ease;
+}
+
+/* 显式尺寸模式（iframe 预览/导出）：使用固定尺寸而非 vw/vh */
+.use-explicit-size .map-wrapper-container {
+  width: 100%;
+  height: 100%;
 }
 
 .map-only-loading,
@@ -179,6 +230,19 @@ onMounted(async () => {
 :deep(.tdt-zoom),
 :deep(.tdt-control),
 :deep(.tmap-zoom-control) {
+  display: none !important;
+}
+
+/* 隐藏百度地图 logo（避免 CORS 问题） */
+:deep(.BMap_cpyCtrl),
+:deep(.anchorBL),
+:deep(.BMap_scaleCtrl),
+:deep(.BMap_cpyCtrl) {
+  display: none !important;
+}
+
+/* 隐藏高德地图 logo（可选） */
+:deep(.amap-logo) {
   display: none !important;
 }
 

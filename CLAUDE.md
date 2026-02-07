@@ -633,6 +633,77 @@ https://route.a4ding.com/api/live-recordings/log/{TOKEN}?lat=%LAT&lon=%LON&time=
 - [`track_service.py`](backend/app/services/track_service.py) 的 `get_unified_list()` 方法填充这些字段
 - [`live_recording_service.py`](backend/app/services/live_recording_service.py) 提供 `get_last_point_time()` 方法
 
+### 海报生成功能
+
+支持将轨迹导出为海报图片，提供前端和后端两种生成方式。
+
+**功能特性**：
+
+- **两种生成方式**：
+  - 前端生成：浏览器本地生成，使用 iframe + html2canvas 截图
+  - 后端生成：服务器使用 Playwright 截图，适合复杂场景
+- **预览功能**：前端生成支持预览，确认无误后再导出
+- **多模板支持**：极简、简洁、丰富、地理四种模板
+- **尺寸预设**：竖版/横版 1080P/4K
+- **地图缩放**：100%-200% 可调，放大地图要素适应高分辨率
+
+**实现架构**：
+
+**前端生成**（[`frontendPosterGenerator.ts`](frontend/src/utils/frontendPosterGenerator.ts)）：
+1. 创建隐藏 iframe 加载 [`TrackMapOnly.vue`](frontend/src/views/TrackMapOnly.vue)
+2. 等待 `window.mapReady === true` 信号
+3. html2canvas 截取 `.map-only-page`
+4. Canvas 合成海报（背景 + 地图 + 信息覆盖层 + 水印）
+5. toBlob() → 下载
+
+**后端生成**（[`poster_service.py`](backend/app/services/poster_service.py)）：
+1. Playwright 访问 `/tracks/{id}/map-only` 页面
+2. 等待 `window.mapReady === true` 信号
+3. 使用 clip 参数截取指定区域
+4. PIL 合成海报
+
+**关键实现要点**：
+
+1. **TrackMapOnly.vue 显式尺寸支持**：
+   - 通过 URL 参数 `width`/`height` 传递目标尺寸
+   - 避免隐藏 iframe 中 `vw/vh` 计算不正确的问题
+
+2. **地图缩放等待时间**：
+   - 动态计算：`baseWait + (mapScale - 100) * multiplier`
+   - TrackMapOnly.vue: 2000 + scale*30 + 1000
+   - Frontend generator: 1000 + scale*50
+   - Backend: 2000 + scale*50
+
+3. **截图元素选择**：
+   - 截取 `.map-only-page`（整个页面）
+   - 不截取 `.map-wrapper-container`（有 transform，html2canvas 处理不正确）
+
+4. **Leaflet Canvas 渲染模式**：
+   - 海报生成模式下设置 `window.__posterMode = true`
+   - Leaflet 检测到该标志时启用 `preferCanvas: true`
+   - html2canvas 无法正确处理 Leaflet SVG 轨迹，Canvas 模式无偏移问题
+
+5. **百度地图 CORS 问题**：
+   - 在 TrackMapOnly.vue 中隐藏百度地图 logo（`.BMap_cpyCtrl`, `.anchorBL`）
+   - 避免 html2canvas 尝试加载无 CORS 头的图片
+
+6. **后端 Playwright 截图策略**：
+   - 使用原始 viewport 大小（如 1080x1920）
+   - 使用 `clip` 参数截取缩放后的完整区域
+   - `device_scale_factor: 1` 避免与 CSS scale 叠加
+
+7. **预览状态管理**：
+   - `canPreview` 计算属性：仅前端模式且未生成时启用
+   - 配置变更时清除预览（`onConfigChange` → `clearPreview`）
+   - 生成方式切换时也清除预览
+
+**涉及文件**：
+- [`frontendPosterGenerator.ts`](frontend/src/utils/frontendPosterGenerator.ts) - 前端海报生成器
+- [`PosterExportDialog.vue`](frontend/src/components/PosterExportDialog.vue) - 海报导出对话框
+- [`TrackMapOnly.vue`](frontend/src/views/TrackMapOnly.vue) - 专用地图页面
+- [`poster_service.py`](backend/app/services/poster_service.py) - 后端海报服务
+- [`LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Canvas 渲染模式支持
+
 ## File Structure
 
 ```text
@@ -1529,6 +1600,39 @@ setTimeout(() => {
 
 #### 百度地图 (BMap)
 
+百度地图有两个版本：**GL 版本**（WebGL）和 **Legacy 版本**（v3.0 JavaScript API）。海报导出使用 Legacy 版本以避免 WebGL 兼容性问题。
+
+**版本检测与兼容：**
+
+```typescript
+// 判断是否使用 Legacy 版本（通过 defaultLayerId prop）
+const isLegacyMode = computed(() => props.defaultLayerId === 'baidu_legacy')
+
+// 获取对应版本的 API 命名空间
+const BMapAPI = computed(() => {
+  return isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+})
+
+// 创建 Point 对象（兼容两个版本）
+function createPoint(lng: number, lat: number): any {
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  return new BMapClass.Point(lng, lat)
+}
+```
+
+**版本差异对照表：**
+
+| 功能 | GL 版本 | Legacy 版本 |
+|------|---------|-------------|
+| API 加载 | `type=webgl` | `v=3.0` |
+| 全局对象 | `BMapGL` | `BMap` |
+| 缩放控件 | `ZoomControl` | `NavigationControl` |
+| 滚轮缩放 | `enableScrollWheelZoom(true)` | 需手动添加事件监听器 |
+| getBounds | 返回 `.sw`/`.ne` 属性 | 需调用 `getSouthWest()`/`getNorthEast()` |
+| 像素转换 | `pointToOverlayPixel()` | `pointToPixel()` |
+
+**GL 版本缩放方式：**
+
 ```typescript
 // 1. 先 setViewport 让地图自动适应边界框
 BMapInstance.setViewport(bounds, { margins: [padding, padding, padding, padding] })
@@ -1556,9 +1660,70 @@ setTimeout(() => {
 }, 500)
 ```
 
+**Legacy 版本缩放方式（精细策略）：**
+
+Legacy 版本使用"先测量后调整"的几何方法，并采用智能舍入策略处理边界情况：
+
+```typescript
+// 1. 先设置 zoom=12 建立基准测量环境
+BMapInstance.setZoom(12)
+
+// 2. 等待缩放完成后测量边界框像素
+setTimeout(() => {
+  const swPixel = BMapInstance.pointToPixel(new BMap.Point(minLng, minLat))
+  const nePixel = BMapInstance.pointToPixel(new BMap.Point(maxLng, maxLat))
+  const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+  const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+  // 3. 计算 zoom delta
+  const scale = mapScale / 100
+  const targetContentWidth = containerWidth * 0.9 / scale
+  const targetContentHeight = containerHeight * 0.9 / scale
+  const widthZoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+  const heightZoomDelta = Math.log2(targetContentHeight / currentPixelHeight)
+  const zoomDelta = Math.min(widthZoomDelta, heightZoomDelta)
+
+  // 4. 计算 zoom 并应用精细策略
+  const rawZoom = 12 + zoomDelta
+  let targetZoom = Math.floor(rawZoom)
+
+  // 精细策略：当小数部分 ≥ 0.9 时，尝试 zoom+1 并验证边界框是否在容器 95% 内
+  const fractionalPart = rawZoom - targetZoom
+  if (fractionalPart >= 0.9 && targetZoom < 18) {
+    const nextZoom = targetZoom + 1
+    const zoomRatio = Math.pow(2, nextZoom - 12)
+    const nextPixelWidth = currentPixelWidth * zoomRatio
+    const nextPixelHeight = currentPixelHeight * zoomRatio
+
+    // 验证边界框在容器的 95% 内（允许略微超出）
+    const fitsWidth = nextPixelWidth <= targetContentWidth / 0.95
+    const fitsHeight = nextPixelHeight <= targetContentHeight / 0.95
+
+    if (fitsWidth && fitsHeight) {
+      targetZoom = nextZoom
+    }
+  }
+
+  BMapInstance.setZoom(Math.max(3, Math.min(18, targetZoom)))
+}, 400)
+```
+
+**精细策略原理：**
+
+- 使用 `Math.floor()` 确保边界框不会超出视野（保守策略）
+- 当小数部分 ≥ 0.9 时（如 9.96、11.97），尝试提升 1 级
+- 验证提升后的 zoom 是否仍在容器 95% 范围内
+- 如果验证通过，使用更高的 zoom，获得更好的显示效果
+
+**测试覆盖：** 12 种场景（横屏/竖屏 × 竖向/横向 × 100%/150%/200%）全部合格。
+
+**涉及文件：**
+- [`frontend/src/components/map/BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图组件
+- [`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 传递 `defaultLayerId` prop
+
 **API：**
-- 坐标转像素：`pointToPixel(Point)`
-- Zoom 范围：3-20
+- 坐标转像素：`pointToPixel(Point)`（Legacy）/ `pointToOverlayPixel()`（GL）
+- Zoom 范围：3-18（Legacy）、3-20（GL）
 
 #### 腾讯地图 (TencentMap)
 
@@ -1667,3 +1832,93 @@ L.map(mapContainer, {
 - [`frontend/src/components/map/BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图缩放
 - [`frontend/src/components/map/TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图缩放
 - [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图缩放
+
+---
+
+## 百度地图海报生成问题（浏览器端）
+
+### 问题描述
+
+百度地图 Legacy 版本在浏览器端使用 html2canvas 生成海报时，轨迹线无法正确捕获。
+
+### 根本原因
+
+1. **DOM 渲染方式**：百度地图 Legacy 版本使用 DOM 渲染
+   - 地图瓦片：`<img>` 元素（来自 `apimaponline*.bdimg.com`）
+   - 轨迹线：SVG 元素（位于深层 DOM 结构中）
+
+2. **html2canvas 限制**：
+   - 无法正确捕获 SVG 轨迹元素
+   - 百度地图瓦片图片没有正确的 CORS 头，导致 canvas 污染
+
+3. **CSS transform scale 影响**：
+   - `.map-wrapper-container` 使用 `transform: scale(2)` 实现视觉放大
+   - 导致 `getBoundingClientRect()` 返回错误的尺寸
+   - 百度地图内部坐标系统混乱
+
+### 解决方案
+
+**对于百度地图，强制使用服务器端生成（Playwright）**
+
+**实现方式**（[`PosterExportDialog.vue`](frontend/src/components/PosterExportDialog.vue)）：
+
+1. **检测百度地图**：
+```typescript
+const isBaiduMap = computed(() => {
+  const provider = getCurrentProvider()
+  return provider === 'baidu' || provider === 'baidu_legacy'
+})
+```
+
+2. **隐藏生成方式选择器**：
+```vue
+<el-form-item v-if="showGenerationMode" label="生成方式">
+  <!-- 百度地图时隐藏 -->
+</el-form-item>
+
+const showGenerationMode = computed(() => {
+  return !isMobileDeviceComputed.value && !isBaiduMap.value
+})
+```
+
+3. **对话框打开时强制设置**：
+```typescript
+watch(() => props.visible, (newVal) => {
+  if (newVal) {
+    const provider = getCurrentProvider()
+    const isBaidu = provider === 'baidu' || provider === 'baidu_legacy'
+    if (isBaidu) {
+      config.value.generationMode = 'backend'
+    }
+  }
+})
+```
+
+4. **前端生成自动切换**：
+```typescript
+// handlePreview 和 generatePosterFrontend 中
+if (isBaidu) {
+  config.value.generationMode = 'backend'
+  await generatePosterBackend()
+  return
+}
+```
+
+### 技术细节
+
+**百度地图 Legacy 版本 DOM 结构**：
+- `.bmap` 容器：包含控件元素（缩放、比例尺等）
+- 地图瓦片：44+ 个 `<img>` 元素，绝对定位
+- 轨迹 SVG：1 个 SVG 元素，位于深度 3 的嵌套结构中
+- SVG 属性示例：`viewBox="-500 -500 2080 2920" style="position: absolute; top: -500px; left: -500px; width: 2080px; height: 2920px;"`
+
+**坐标系统问题**（CSS transform scale(2)）：
+- `.bmap` getBoundingClientRect: `x: -540, y: -960, width: 2160, height: 3840`（2倍尺寸）
+- SVG getBoundingClientRect: `x: -1540, y: -1960, width: 4160, height: 5840`（偏移+放大）
+- 正确的相对位置需要考虑缩放和偏移
+
+### 相关文件
+
+- [`frontend/src/components/PosterExportDialog.vue`](frontend/src/components/PosterExportDialog.vue) - 导出对话框
+- [`frontend/src/utils/frontendPosterGenerator.ts`](frontend/src/utils/frontendPosterGenerator.ts) - 前端海报生成器
+- [`backend/app/services/poster_service.py`](backend/app/services/poster_service.py) - 后端海报服务（Playwright）

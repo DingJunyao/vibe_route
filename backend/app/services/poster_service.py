@@ -32,7 +32,7 @@ class PosterService:
                 try:
                     self._playwright = sync_playwright().start()
                     self._browser = self._playwright.chromium.launch(
-                        headless=False,
+                        headless=True,
                         slow_mo=1000,
                         args=[
                             '--no-sandbox',
@@ -41,6 +41,11 @@ class PosterService:
                             '--disable-web-security',
                             '--allow-file-access-from-files',
                             '--allow-running-insecure-content',
+                            # 启用 WebGL 和硬件加速，支持百度地图 GL 版本
+                            '--enable-gpu',
+                            '--enable-zero-copy',
+                            '--ignore-gpu-blocklist',
+                            '--use-angle=default',
                         ],
                         ignore_default_args=['--enable-automation']
                     )
@@ -88,23 +93,24 @@ class PosterService:
             base_url: 前端基础 URL
             poster_secret: 海报生成密钥，用于验证公开 API 访问
             map_scale: 地图缩放百分比（100-200）
+
+        Note:
+            百度地图 (baidu) 会自动转换为 Legacy 版本 (baidu_legacy) 以避免 WebGL 兼容性问题
         """
+        # 百度地图统一使用 Legacy 版本（非 WebGL，避免截图问题）
+        if provider == 'baidu':
+            provider = 'baidu_legacy'
+            logger.info("百度地图自动转换为 Legacy 版本用于海报生成")
         browser = self.get_browser()
         if not browser:
             raise Exception("浏览器未可用，请确保 Playwright 已正确安装")
 
-        # 计算 CSS 缩放后的 viewport 大小
-        # TrackMapOnly.vue 使用 transform: scale(mapScale/100) 缩放
-        # 需要相应增大 viewport，否则截图会只捕获缩放后的一小部分
-        scale_factor = map_scale / 100
-        adjusted_width = int(width * scale_factor)
-        adjusted_height = int(height * scale_factor)
-        logger.info(f"原始尺寸: {width}x{height}, CSS scale: {map_scale}%, 调整后 viewport: {adjusted_width}x{adjusted_height}")
+        # 使用原始尺寸作为 viewport，让 CSS transform scale 作用在正确的基础上
+        logger.info(f"原始尺寸: {width}x{height}, CSS scale: {map_scale}%")
 
-        # 创建浏览器上下文（设置视口大小和设备像素比，确保截图清晰）
-        # 使用 device_scale_factor=2 保证截图清晰度，同时避免内存占用过大
+        # 创建浏览器上下文（使用原始 viewport 大小）
         context = browser.new_context(
-            viewport={'width': adjusted_width, 'height': adjusted_height, 'device_scale_factor': 2}
+            viewport={'width': width, 'height': height, 'device_scale_factor': 3}
         )
 
         # 创建页面
@@ -124,8 +130,25 @@ class PosterService:
             url = f"{base_url}/tracks/{track_id}/map-only?provider={provider}&secret={poster_secret}&map_scale={map_scale}"
             logger.info(f"访问地图专用页面: {url}")
 
-            page.goto(url, wait_until='networkidle', timeout=30000)
-            logger.info("页面加载完成")
+            page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            logger.info("页面 DOM 加载完成")
+
+            # 对于百度地图，需要额外等待确保脚本加载
+            if provider in ['baidu', 'baidu_legacy']:
+                page.wait_for_timeout(5000)
+                # 检查百度地图是否加载成功
+                # baidu (GL 版本) 检查 BMapGL，baidu_legacy (非 WebGL) 检查 BMap
+                if provider == 'baidu_legacy':
+                    bmap_loaded = page.evaluate("!!(window.BMap && window.BMap.Map)")
+                    logger.info(f"百度地图 Legacy API 加载状态: {bmap_loaded}")
+                else:
+                    bmap_loaded = page.evaluate("!!(window.BMapGL && window.BMapGL.Map)")
+                    logger.info(f"百度地图 GL API 加载状态: {bmap_loaded}")
+                if not bmap_loaded:
+                    raise Exception(f"百度地图 API ({provider}) 加载失败")
+
+            page.wait_for_load_state('networkidle', timeout=30000)
+            logger.info("页面完全加载完成")
 
             # 等待地图准备就绪（前端设置 window.mapReady = true）
             try:
@@ -135,24 +158,42 @@ class PosterService:
                 logger.warning(f"等待地图准备就绪超时: {e}")
 
             # 额外等待地图渲染完成
-            page.wait_for_timeout(2000)
+            # 百度地图 GL 版本和高德地图使用 WebGL，需要更长等待时间
+            # baidu_legacy 是非 WebGL 版本，等待时间与其他地图相同
+            is_webgl_map = provider in ['baidu', 'amap']
+            base_wait = 5000 if is_webgl_map else 2000  # WebGL 地图需要更长等待
+            scale_wait = (map_scale - 100) * (80 if is_webgl_map else 50)
+            total_wait = base_wait + scale_wait
+            logger.info(f"等待缩放完成: {total_wait}ms (scale: {map_scale}%, webgl: {is_webgl_map})")
+            page.wait_for_timeout(total_wait)
+
+            # 等待底图瓦片加载完成
+            if provider == 'baidu':
+                page.wait_for_timeout(5000)
+                logger.info("等待百度地图底图瓦片加载完成")
+            elif provider == 'baidu_legacy':
+                page.wait_for_timeout(3000)
+                logger.info("等待百度地图 Legacy 底图瓦片加载完成")
+            elif provider == 'amap':
+                page.wait_for_timeout(3000)
+                logger.info("等待高德地图地名图层加载完成")
 
             # 打印控制台消息
             if console_messages:
                 logger.info(f"浏览器控制台消息: {console_messages}")
 
-            # 查找地图容器（专用页面使用 .map-only-page）
-            map_element = page.query_selector('.map-only-page')
-            if map_element:
-                # 截取整个地图容器（已经是全屏）
-                screenshot = map_element.screenshot(type='png')
-                logger.info(f"地图容器截图成功: {len(screenshot)} bytes")
-                return screenshot
-            else:
-                # 降级：截取整个页面
-                screenshot = page.screenshot(full_page=False, type='png')
-                logger.info(f"整页截图: {len(screenshot)} bytes")
-                return screenshot
+            # 计算缩放后的截图尺寸
+            scale_factor = map_scale / 100
+            clip_width = int(width * scale_factor)
+            clip_height = int(height * scale_factor)
+
+            # 截取整个页面（CSS scale 会超出 viewport，使用 clip 指定区域）
+            screenshot = page.screenshot(
+                type='png',
+                clip={'x': 0, 'y': 0, 'width': clip_width, 'height': clip_height}
+            )
+            logger.info(f"地图截图成功: {len(screenshot)} bytes, 尺寸: {clip_width}x{clip_height}")
+            return screenshot
 
         except Exception as e:
             logger.error(f"地图截图生成失败: {e}")

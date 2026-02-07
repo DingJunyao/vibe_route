@@ -10,6 +10,7 @@ import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
+import { wgs84ToBd09, gcj02ToBd09 } from '@/utils/coordTransform'
 
 // 类型定义
 interface Point {
@@ -180,6 +181,7 @@ let trackPath: { lng: number; lat: number }[] = []
 let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 let latestPointMarkerAdded = false  // 标记是否已添加到地图
 let lastHoverIndex = -1
+let wheelEventHandler: ((e: WheelEvent) => void) | null = null  // 滚轮事件处理器引用
 // home 模式：按轨迹分开存储
 const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
 
@@ -198,15 +200,42 @@ async function init() {
   await initMap()
 }
 
-// 加载百度地图 JS API GL
+// 判断是否使用 Legacy 版本（非 WebGL）
+const isLegacyMode = computed(() => props.defaultLayerId === 'baidu_legacy')
+
+// 获取当前使用的百度地图 API 命名空间（GL 或 Legacy）
+const BMapAPI = computed(() => {
+  return isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+})
+
+// 辅助函数：创建 Point 对象（兼容两个版本）
+function createPoint(lng: number, lat: number): any {
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  return new BMapClass.Point(lng, lat)
+}
+
+// 辅助函数：创建 Polyline 对象（兼容两个版本）
+function createPolyline(points: any[], options: any): any {
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  return new BMapClass.Polyline(points, options)
+}
+
+// 加载百度地图 JS API（支持 GL 版本和 Legacy 版本）
 async function loadBMapScript(): Promise<void> {
   return new Promise((resolve, reject) => {
-    if ((window as any).BMapGL) {
+    const useLegacy = isLegacyMode.value
+
+    // 检查对应的 API 是否已加载
+    if (useLegacy && (window as any).BMap) {
+      resolve()
+      return
+    }
+    if (!useLegacy && (window as any).BMapGL) {
       resolve()
       return
     }
 
-    const layerConfig = configStore.getMapLayerById('baidu')
+    const layerConfig = configStore.getMapLayerById(useLegacy ? 'baidu' : props.defaultLayerId || 'baidu')
     const apiKey = layerConfig?.ak || layerConfig?.api_key || ''
 
     if (!apiKey) {
@@ -215,7 +244,7 @@ async function loadBMapScript(): Promise<void> {
     }
 
     // 设置全局回调函数
-    const callbackName = 'bmapInitCallback'
+    const callbackName = useLegacy ? 'bmapLegacyInitCallback' : 'bmapInitCallback'
     ;(window as any)[callbackName] = () => {
       resolve()
       delete (window as any)[callbackName]
@@ -223,7 +252,14 @@ async function loadBMapScript(): Promise<void> {
 
     const script = document.createElement('script')
     script.type = 'text/javascript'
-    script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${apiKey}&callback=${callbackName}`
+    // Legacy 版本使用 v=3.0，GL 版本使用 type=webgl
+    if (useLegacy) {
+      script.src = `https://api.map.baidu.com/api?v=3.0&ak=${apiKey}&callback=${callbackName}`
+      console.log('[BMap] 加载百度地图 Legacy 版本')
+    } else {
+      script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${apiKey}&callback=${callbackName}`
+      console.log('[BMap] 加载百度地图 GL 版本')
+    }
     script.onerror = () => {
       reject(new Error('Failed to load Baidu Map API'))
       delete (window as any)[callbackName]
@@ -253,12 +289,12 @@ function closestPointOnSegment(p: [number, number], v: [number, number], w: [num
   ]
 }
 
-// 创建自定义覆盖物类（蓝色圆点标记）
+// 创建自定义覆盖物类（蓝色圆点标记）- 支持两个版本
 function createMouseMarkerOverlay() {
-  const BMapGL = (window as any).BMapGL
+  const useLegacy = isLegacyMode.value
+  const BMapClass = useLegacy ? (window as any).BMap : (window as any).BMapGL
 
-  // 百度地图 GL 版本自定义覆盖物需要继承 BMapGL.Overlay
-  class MouseMarkerOverlay extends BMapGL.Overlay {
+  class MouseMarkerOverlay extends BMapClass.Overlay {
     private point: any = null
     private element: HTMLElement | null = null
     private map: any = null
@@ -269,11 +305,9 @@ function createMouseMarkerOverlay() {
       this.point = point
     }
 
-    // 百度地图 GL 覆盖物必须实现 initialize 方法
     initialize(map: any): HTMLElement {
       this.map = map
 
-      // 创建 DOM 元素
       this.element = document.createElement('div')
       this.element.style.cssText = `
         width: 12px;
@@ -287,10 +321,8 @@ function createMouseMarkerOverlay() {
         pointer-events: none;
       `
 
-      // 添加到地图浮层面
       map.getPanes().floatPane.appendChild(this.element)
 
-      // 监听地图移动事件，自动重绘标记位置
       this._mapMoveHandler = () => this.draw()
       map.addEventListener('moveend', this._mapMoveHandler)
       map.addEventListener('zoomend', this._mapMoveHandler)
@@ -298,30 +330,29 @@ function createMouseMarkerOverlay() {
       return this.element
     }
 
-    // 百度地图 GL 覆盖物必须实现 draw 方法
     draw() {
       if (!this.element || !this.point || !this.map) return
 
-      const position = this.map.pointToOverlayPixel(this.point)
+      // Legacy 版本使用 pointToPixel，GL 版本使用 pointToOverlayPixel
+      const position = this.map.pointToPixel
+        ? this.map.pointToPixel(this.point)
+        : this.map.pointToOverlayPixel(this.point)
       if (position) {
         this.element.style.left = position.x + 'px'
         this.element.style.top = position.y + 'px'
       }
     }
 
-    // 设置覆盖物的地理位置
     setPosition(point: any) {
       this.point = point
       this.draw()
     }
 
-    // 清理资源
     remove() {
       if (this.element && this.element.parentNode) {
         this.element.parentNode.removeChild(this.element)
       }
 
-      // 移除地图事件监听
       if (this.map && this._mapMoveHandler) {
         this.map.removeEventListener('moveend', this._mapMoveHandler)
         this.map.removeEventListener('zoomend', this._mapMoveHandler)
@@ -336,11 +367,12 @@ function createMouseMarkerOverlay() {
   return MouseMarkerOverlay
 }
 
-// 创建绿色自定义覆盖物类（用于实时轨迹最新点）
+// 创建绿色自定义覆盖物类（用于实时轨迹最新点）- 支持两个版本
 function createLatestPointMarkerOverlay() {
-  const BMapGL = (window as any).BMapGL
+  const useLegacy = isLegacyMode.value
+  const BMapClass = useLegacy ? (window as any).BMap : (window as any).BMapGL
 
-  class LatestPointMarkerOverlay extends BMapGL.Overlay {
+  class LatestPointMarkerOverlay extends BMapClass.Overlay {
     private point: any = null
     private element: HTMLElement | null = null
     private map: any = null
@@ -379,7 +411,10 @@ function createLatestPointMarkerOverlay() {
     draw() {
       if (!this.element || !this.point || !this.map) return
 
-      const position = this.map.pointToOverlayPixel(this.point)
+      // Legacy 版本使用 pointToPixel，GL 版本使用 pointToOverlayPixel
+      const position = this.map.pointToPixel
+        ? this.map.pointToPixel(this.point)
+        : this.map.pointToOverlayPixel(this.point)
       if (position) {
         this.element.style.left = position.x + 'px'
         this.element.style.top = position.y + 'px'
@@ -414,20 +449,16 @@ function createLatestPointMarkerOverlay() {
 function createMouseMarker() {
   if (!BMapInstance) return
 
-  const BMapGL = (window as any).BMapGL
   const MouseMarkerOverlay = createMouseMarkerOverlay()
-
-  mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(0, 0))
+  mouseMarker = new MouseMarkerOverlay(createPoint(0, 0))
 }
 
 // 创建最新点标记
 function createLatestPointMarker() {
   if (!BMapInstance) return
 
-  const BMapGL = (window as any).BMapGL
   const LatestPointMarkerOverlay = createLatestPointMarkerOverlay()
-
-  latestPointMarker = new LatestPointMarkerOverlay(new BMapGL.Point(0, 0))
+  latestPointMarker = new LatestPointMarkerOverlay(createPoint(0, 0))
 }
 
 // 创建自定义 tooltip 元素
@@ -457,9 +488,9 @@ function createCustomTooltip() {
 function lngLatToContainerPoint(lng: number, lat: number): { x: number; y: number } | null {
   if (!BMapInstance || !mapContainer.value) return null
 
-  const BMapGL = (window as any).BMapGL
-  const point = new BMapGL.Point(lng, lat)
-  const pixel = BMapInstance.pointToOverlayPixel(point)
+  const point = createPoint(lng, lat)
+  // Legacy 版本使用 pointToPixel，GL 版本使用 pointToOverlayPixel
+  const pixel = BMapInstance.pointToPixel ? BMapInstance.pointToPixel(point) : BMapInstance.pointToOverlayPixel(point)
 
   if (!pixel) return null
 
@@ -565,11 +596,11 @@ function highlightPoint(index: number) {
 
   if (!BMapInstance || !mouseMarker || !point || !position) return
 
-  const BMapGL = (window as any).BMapGL
+  // Legacy mode handled by BMapAPI
 
   // 检查点是否在视野内，如果不在则平移地图到该点
   const bounds = BMapInstance.getBounds()
-  const pointBMapPoint = new BMapGL.Point(position.lng, position.lat)
+  const pointBMapPoint = createPoint(position.lng, position.lat)
   if (bounds && !bounds.containsPoint(pointBMapPoint)) {
     BMapInstance.panTo(pointBMapPoint)
   }
@@ -583,7 +614,7 @@ function highlightPoint(index: number) {
 
   // 创建新的覆盖物实例
   const MouseMarkerOverlay = createMouseMarkerOverlay()
-  mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(position.lng, position.lat))
+  mouseMarker = new MouseMarkerOverlay(createPoint(position.lng, position.lat))
   BMapInstance.addOverlay(mouseMarker)
 
   showTooltip(index, point, position)
@@ -624,29 +655,63 @@ async function initMap() {
   try {
     await loadBMapScript()
 
-    const BMapGL = (window as any).BMapGL
+    const useLegacy = isLegacyMode.value
+    // Legacy mode handled by BMapAPI
+    const BMapLegacy = (window as any).BMap
 
     // 创建地图实例
-    BMapInstance = new BMapGL.Map(mapContainer.value, {
-      enableDblclickZoom: true,
-      enableMapClick: false,
-      enableRotate: false,
-      enableTilt: false,
-    })
+    if (useLegacy) {
+      // Legacy 版本（非 WebGL）
+      // 检查 map-only 模式下的容器尺寸
+      const isMapOnlyMode = window.location.pathname.includes('/map-only')
+      if (isMapOnlyMode) {
+        const containerRect = mapContainer.value.getBoundingClientRect()
+        console.log('[BMap] Legacy 地图初始化 - map-only 模式', {
+          clientWidth: mapContainer.value.clientWidth,
+          clientHeight: mapContainer.value.clientHeight,
+          getBoundingClientRect: `${containerRect.width.toFixed(0)}x${containerRect.height.toFixed(0)}`,
+          offsetWidth: mapContainer.value.offsetWidth,
+          offsetHeight: mapContainer.value.offsetHeight
+        })
+      }
 
-    const point = new BMapGL.Point(116.404, 39.915)
-    BMapInstance.centerAndZoom(point, 12)
+      BMapInstance = new BMapLegacy.Map(mapContainer.value)
+      const point = new BMapLegacy.Point(116.404, 39.915)
+      BMapInstance.centerAndZoom(point, 12)
 
-    // 启用鼠标滚轮缩放
-    BMapInstance.enableScrollWheelZoom(true)
+      // 启用滚轮缩放（Legacy 版本）
+      BMapInstance.enableScrollWheelZoom(true)
 
-    // 添加缩放控件
-    const zoomCtrl = new BMapGL.ZoomControl()
-    BMapInstance.addControl(zoomCtrl)
+      // 添加缩放和比例尺控件（Legacy v3.0 使用 NavigationControl）
+      BMapInstance.addControl(new BMapLegacy.NavigationControl())
+      BMapInstance.addControl(new BMapLegacy.ScaleControl())
 
-    // 添加比例尺
-    const scaleCtrl = new BMapGL.ScaleControl()
-    BMapInstance.addControl(scaleCtrl)
+      // 启用双击缩放
+      BMapInstance.enableDoubleClickZoom()
+
+      // 启用键盘操作
+      BMapInstance.enableKeyboard()
+
+      console.log('[BMap] Legacy 地图初始化完成')
+    } else {
+      // GL 版本（WebGL）
+      BMapInstance = new BMapAPI.value.Map(mapContainer.value, {
+        enableDblclickZoom: true,
+        enableMapClick: false,
+        enableRotate: false,
+        enableTilt: false,
+      })
+      const point = createPoint(116.404, 39.915)
+      BMapInstance.centerAndZoom(point, 12)
+      BMapInstance.enableScrollWheelZoom(true)
+
+      // 添加缩放和比例尺控件
+      const zoomCtrl = new BMapAPI.value.ZoomControl()
+      BMapInstance.addControl(zoomCtrl)
+      const scaleCtrl = new BMapAPI.value.ScaleControl()
+      BMapInstance.addControl(scaleCtrl)
+      console.log('[BMap] GL 地图初始化完成')
+    }
 
     // 创建标记和自定义 tooltip
     createMouseMarker()
@@ -692,12 +757,15 @@ async function initMap() {
       const center = BMapInstance.getCenter()
       const zoom = BMapInstance.getZoom()
       const bounds = BMapInstance.getBounds()
+      // Legacy 版本使用 getSouthWest()/getNorthEast() 方法
+      const sw = bounds.getSouthWest ? bounds.getSouthWest() : bounds.sw
+      const ne = bounds.getNorthEast ? bounds.getNorthEast() : bounds.ne
       console.log('[BMap] 缩放结束:', {
         缩放级别: zoom,
         中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
         边界: {
-          sw: `${bounds.sw.lng.toFixed(4)}, ${bounds.sw.lat.toFixed(4)}`,
-          ne: `${bounds.ne.lng.toFixed(4)}, ${bounds.ne.lat.toFixed(4)}`
+          sw: `${sw.lng.toFixed(4)}, ${sw.lat.toFixed(4)}`,
+          ne: `${ne.lng.toFixed(4)}, ${ne.lat.toFixed(4)}`
         }
       })
     })
@@ -781,7 +849,7 @@ async function initMap() {
 
         // 创建新覆盖物实例并添加到地图
         const MouseMarkerOverlay = createMouseMarkerOverlay()
-        mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+        mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
         BMapInstance.addOverlay(mouseMarker)
 
         // 显示 tooltip（每次创建新实例）
@@ -839,7 +907,7 @@ async function initMap() {
 
         lastHoverIndex = nearestTrackId
 
-        const BMapGL = (window as any).BMapGL
+        // Legacy mode handled by BMapAPI
 
         // 先移除旧覆盖物
         if (mouseMarker) {
@@ -852,7 +920,7 @@ async function initMap() {
 
         // 创建新覆盖物实例并添加到地图
         const MouseMarkerOverlay = createMouseMarkerOverlay()
-        mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+        mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
         BMapInstance.addOverlay(mouseMarker)
 
         // 格式化时间和里程
@@ -1001,7 +1069,7 @@ async function initMap() {
 
             // 创建新覆盖物实例并添加到地图
             const MouseMarkerOverlay = createMouseMarkerOverlay()
-            mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+            mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
             BMapInstance.addOverlay(mouseMarker)
 
             // 格式化时间和里程
@@ -1126,7 +1194,7 @@ async function initMap() {
 
             // 创建新覆盖物实例并添加到地图
             const MouseMarkerOverlay = createMouseMarkerOverlay()
-            mouseMarker = new MouseMarkerOverlay(new BMapGL.Point(nearestPosition.lng, nearestPosition.lat))
+            mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
             BMapInstance.addOverlay(mouseMarker)
 
             // 显示 tooltip（每次创建新实例）
@@ -1141,6 +1209,40 @@ async function initMap() {
       })
     }
 
+    // Legacy 版本：手动添加滚轮缩放支持
+    if (isLegacyMode.value && mapContainer.value) {
+      let wheelTimeout: any = null
+      wheelEventHandler = (e: WheelEvent) => {
+        if (!BMapInstance) return
+        e.preventDefault()
+
+        // 清除之前的定时器
+        if (wheelTimeout) {
+          clearTimeout(wheelTimeout)
+        }
+
+        // 计算缩放方向
+        const delta = e.deltaY
+        const currentZoom = BMapInstance.getZoom()
+
+        // 设置新的缩放级别（延迟执行，避免频繁调用）
+        wheelTimeout = setTimeout(() => {
+          if (delta < 0) {
+            // 向上滚动，放大
+            BMapInstance.setZoom(Math.min(18, currentZoom + 1))
+          } else {
+            // 向下滚动，缩小
+            BMapInstance.setZoom(Math.max(3, currentZoom - 1))
+          }
+        }, 50)
+
+        console.log('[BMap] 滚轮事件:', delta, '当前缩放:', currentZoom)
+      }
+      mapContainer.value.addEventListener('wheel', wheelEventHandler, { passive: false })
+
+      console.log('[BMap] Legacy 版本已添加滚轮缩放支持')
+    }
+
     // 绘制轨迹
     drawTracks()
   } catch (error) {
@@ -1150,11 +1252,33 @@ async function initMap() {
 
 // 根据坐标系获取经纬度（BD09）
 function getBD09Coords(point: Point): { lng: number; lat: number } | null {
-  const lat = point.latitude_bd09 ?? point.latitude_wgs84 ?? point.latitude
-  const lng = point.longitude_bd09 ?? point.longitude_wgs84 ?? point.longitude
-  if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
-    return { lng, lat }
+  // 如果已有 BD09 坐标，直接使用
+  if (point.latitude_bd09 !== undefined && point.longitude_bd09 !== undefined &&
+      !isNaN(point.latitude_bd09) && !isNaN(point.longitude_bd09)) {
+    return { lng: point.longitude_bd09, lat: point.latitude_bd09 }
   }
+
+  // 如果有 GCJ02 坐标，转换为 BD09
+  if (point.latitude_gcj02 !== undefined && point.longitude_gcj02 !== undefined &&
+      !isNaN(point.latitude_gcj02) && !isNaN(point.longitude_gcj02)) {
+    const [bdLng, bdLat] = gcj02ToBd09(point.longitude_gcj02, point.latitude_gcj02)
+    return { lng: bdLng, lat: bdLat }
+  }
+
+  // 如果有 WGS84 坐标，转换为 BD09
+  if (point.latitude_wgs84 !== undefined && point.longitude_wgs84 !== undefined &&
+      !isNaN(point.latitude_wgs84) && !isNaN(point.longitude_wgs84)) {
+    const [bdLng, bdLat] = wgs84ToBd09(point.longitude_wgs84, point.latitude_wgs84)
+    return { lng: bdLng, lat: bdLat }
+  }
+
+  // 最后回退到原始坐标（假设是 WGS84，转换到 BD09）
+  if (point.latitude !== undefined && point.longitude !== undefined &&
+      !isNaN(point.latitude) && !isNaN(point.longitude)) {
+    const [bdLng, bdLat] = wgs84ToBd09(point.longitude, point.latitude)
+    return { lng: bdLng, lat: bdLat }
+  }
+
   return null
 }
 
@@ -1170,8 +1294,14 @@ function drawTracks() {
   trackPath = []
   tracksData.clear()
 
-  const BMapGL = (window as any).BMapGL
+  // Legacy mode handled by BMapAPI
   const bounds: any[] = []
+
+  // 调试：检查 map-only 模式
+  const isMapOnlyMode = window.location.pathname.includes('/map-only')
+  if (isMapOnlyMode) {
+    console.log('[BMap] drawTracks - map-only 模式，开始绘制轨迹')
+  }
 
   for (const track of props.tracks) {
     if (!track.points || track.points.length === 0) continue
@@ -1180,13 +1310,25 @@ function drawTracks() {
     const trackPathData: { lng: number; lat: number }[] = []
     const trackPointsData: Point[] = []
 
+    // 调试：记录第一个点的坐标转换
+    if (isMapOnlyMode && track.points.length > 0) {
+      const firstPoint = track.points[0]
+      const coords = getBD09Coords(firstPoint)
+      console.log('[BMap] drawTracks - 第一个点坐标转换:', {
+        原始: { lng: firstPoint.longitude, lat: firstPoint.latitude },
+        BD09: coords,
+        has_bd09: !!(firstPoint.latitude_bd09 && firstPoint.longitude_bd09),
+        has_wgs84: !!(firstPoint.latitude_wgs84 && firstPoint.longitude_wgs84)
+      })
+    }
+
     for (const point of track.points) {
       const coords = getBD09Coords(point)
       if (!coords) continue
 
       const { lng, lat } = coords
-      points.push(new BMapGL.Point(lng, lat))
-      bounds.push(new BMapGL.Point(lng, lat))
+      points.push(createPoint(lng, lat))
+      bounds.push(createPoint(lng, lat))
 
       // detail 模式：合并所有轨迹
       trackPoints.push(point)
@@ -1208,19 +1350,31 @@ function drawTracks() {
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
-    const polyline = new BMapGL.Polyline(points, {
+    const polyline = createPolyline(points, {
       strokeColor: '#FF0000',
       strokeWeight: isHighlighted ? 5 : 3,
       strokeOpacity: 0.8,
     })
 
     // 桌面端：点击轨迹直接跳转
-    polyline.addEventListener('click', () => {
-      const isMobile = window.innerWidth <= 1366
-      if (!isMobile) {
-        emit('track-click', track.id)
-      }
-    })
+    // Legacy 版本的事件监听方式
+    if (isLegacyMode.value) {
+      // Legacy 版本：使用 addEventListener
+      polyline.addEventListener('click', () => {
+        const isMobile = window.innerWidth <= 1366
+        if (!isMobile) {
+          emit('track-click', track.id)
+        }
+      })
+    } else {
+      // GL 版本
+      polyline.addEventListener('click', () => {
+        const isMobile = window.innerWidth <= 1366
+        if (!isMobile) {
+          emit('track-click', track.id)
+        }
+      })
+    }
 
     BMapInstance.addOverlay(polyline)
     polylines.push(polyline)
@@ -1232,10 +1386,10 @@ function drawTracks() {
     // 确保索引在有效范围内
     if (start >= 0 && end < trackPath.length && start <= end) {
       const segmentPath = trackPath.slice(start, end + 1)
-      // 转换为 BMapGL.Point 对象数组
-      const pointPath = segmentPath.map(p => new BMapGL.Point(p.lng, p.lat))
+      // 转换为 Point 对象数组（兼容 GL 和 Legacy 版本）
+      const pointPath = segmentPath.map(p => createPoint(p.lng, p.lat))
       if (pointPath.length > 0) {
-        highlightPolyline = new BMapGL.Polyline(pointPath, {
+        highlightPolyline = createPolyline(pointPath, {
           strokeColor: '#409eff',  // 蓝色高亮
           strokeWeight: 7,
           strokeOpacity: 0.9,
@@ -1245,15 +1399,62 @@ function drawTracks() {
     }
   }
 
-  // 自动适应视图
-  if (bounds.length > 0) {
-    try {
-      BMapInstance.setViewport(bounds)
-    } catch (e) {
-      if (bounds.length > 0) {
-        BMapInstance.setCenter(bounds[0])
+  // 自动适应视图（仅在非 map-only 模式下）
+  if (bounds.length > 0 && !isMapOnlyMode) {
+    // 延迟执行，确保地图已完全渲染
+    setTimeout(() => {
+      if (isLegacyMode.value) {
+        // Legacy 版本：使用二分查找法找到合适的缩放级别
+        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+        for (const pt of bounds) {
+          if (pt.lng < minLng) minLng = pt.lng
+          if (pt.lng > maxLng) maxLng = pt.lng
+          if (pt.lat < minLat) minLat = pt.lat
+          if (pt.lat > maxLat) maxLat = pt.lat
+        }
+        const centerLng = (minLng + maxLng) / 2
+        const centerLat = (minLat + maxLat) / 2
+
+        // 先设置中心点
+        BMapInstance.centerAndZoom(createPoint(centerLng, centerLat), 12)
+
+        // 使用二分查找法找到合适的缩放级别（需要等待缩放完成）
+        setTimeout(async () => {
+          let low = 3, high = 18
+          while (low < high) {
+            const mid = Math.floor((low + high + 1) / 2)
+            BMapInstance.setZoom(mid)
+
+            // Legacy 版本需要等待缩放完成后再检查边界（使用更长的等待时间）
+            await new Promise(resolve => setTimeout(resolve, 200))
+
+            // 检查当前视野是否包含所有点
+            const currentBounds = BMapInstance.getBounds()
+            const sw = currentBounds.getSouthWest ? currentBounds.getSouthWest() : currentBounds.sw
+            const ne = currentBounds.getNorthEast ? currentBounds.getNorthEast() : currentBounds.ne
+
+            let allVisible = true
+            for (const pt of bounds) {
+              if (pt.lng < sw.lng || pt.lng > ne.lng || pt.lat < sw.lat || pt.lat > ne.lat) {
+                allVisible = false
+                break
+              }
+            }
+
+            if (allVisible) {
+              low = mid
+            } else {
+              high = mid - 1
+            }
+          }
+          BMapInstance.setZoom(low)
+          console.log('[BMap] drawTracks 自动适应完成，缩放级别:', low)
+        }, 400)
+      } else {
+        // GL 版本：使用 setViewport
+        BMapInstance.setViewport(bounds)
       }
-    }
+    }, 300)
   }
 
   // 更新最新点标记
@@ -1308,9 +1509,18 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 清理滚轮事件监听器
+  if (wheelEventHandler && mapContainer.value) {
+    mapContainer.value.removeEventListener('wheel', wheelEventHandler)
+    wheelEventHandler = null
+  }
+
   if (BMapInstance) {
     try {
-      BMapInstance.destroy()
+      // Legacy 版本可能没有 destroy 方法，先检查
+      if (typeof BMapInstance.destroy === 'function') {
+        BMapInstance.destroy()
+      }
     } catch (e) {
       // ignore
     }
@@ -1330,8 +1540,10 @@ function resize() {
 function fitBounds(paddingPercent: number = 5) {
   if (!BMapInstance) return
 
+  // 获取当前使用的地图 API 命名空间（GL 或 Legacy）
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+
   // 计算所有轨迹的边界
-  const BMapGL = (window as any).BMapGL
   const bounds: any[] = []
 
   for (const track of props.tracks) {
@@ -1341,35 +1553,172 @@ function fitBounds(paddingPercent: number = 5) {
       if (!coords) continue
       const { lng, lat } = coords
       if (!isNaN(lat) && !isNaN(lng)) {
-        bounds.push(new BMapGL.Point(lng, lat))
+        bounds.push(new BMapClass.Point(lng, lat))
       }
     }
   }
 
   if (bounds.length === 0) return
 
+  console.log('[BMap] fitBounds - 使用 API:', isLegacyMode.value ? 'BMap (Legacy)' : 'BMapGL', '边界点数:', bounds.length, '第一个点:', bounds[0])
+
   try {
     // 获取容器尺寸
     const container = mapContainer.value
     if (!container) {
-      BMapInstance.setViewport(bounds)
+      // 没有容器时，使用默认方式
+      if (isLegacyMode.value) {
+        // Legacy 版本：计算中心点和缩放级别
+        let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+        for (const pt of bounds) {
+          if (pt.lng < minLng) minLng = pt.lng
+          if (pt.lng > maxLng) maxLng = pt.lng
+          if (pt.lat < minLat) minLat = pt.lat
+          if (pt.lat > maxLat) maxLat = pt.lat
+        }
+        const centerLng = (minLng + maxLng) / 2
+        const centerLat = (minLat + maxLat) / 2
+        BMapInstance.centerAndZoom(new BMapClass.Point(centerLng, centerLat), 12)
+      } else {
+        BMapInstance.setViewport(bounds)
+      }
       return
     }
-    const containerWidth = container.clientWidth || 800
-    const containerHeight = container.clientHeight || 600
-    const padding = Math.round(Math.max(containerWidth, containerHeight) * (paddingPercent / 100))
-
     // 检查是否是 map-only 模式（通过 URL 判断）
     const isMapOnlyMode = window.location.pathname.includes('/map-only')
     const mapScale = isMapOnlyMode ? (props.mapScale || 100) : 100
 
-    // BMapGL setViewport 的 margins 参数: [上, 右, 下, 左]
-    BMapInstance.setViewport(bounds, {
-      margins: [padding, padding, padding, padding]
-    })
+    // 在 map-only 模式下，从 URL 参数读取目标尺寸（而非 clientWidth/clientHeight）
+    // 因为 iframe 模式下容器使用 100vw/100vh，clientWidth 返回的值可能不正确
+    let containerWidth = container.clientWidth || 800
+    let containerHeight = container.clientHeight || 600
+    if (isMapOnlyMode) {
+      const urlParams = new URLSearchParams(window.location.search)
+      const urlWidth = parseInt(urlParams.get('width') || '')
+      const urlHeight = parseInt(urlParams.get('height') || '')
+      if (urlWidth > 0 && urlHeight > 0) {
+        containerWidth = urlWidth
+        containerHeight = urlHeight
+        console.log('[BMap] map-only 模式：使用 URL 参数尺寸', `${containerWidth}x${containerHeight}`)
+      }
+    }
 
-    // 如果是 map-only 模式且有缩放，根据边界框几何计算目标 zoom
-    if (isMapOnlyMode && mapScale > 100 && bounds.length > 0) {
+    if (isLegacyMode.value) {
+      // Legacy 版本：计算边界框中心点和缩放级别
+      let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+      for (const pt of bounds) {
+        if (pt.lng < minLng) minLng = pt.lng
+        if (pt.lng > maxLng) maxLng = pt.lng
+        if (pt.lat < minLat) minLat = pt.lat
+        if (pt.lat > maxLat) maxLat = pt.lat
+      }
+      const centerLng = (minLng + maxLng) / 2
+      const centerLat = (minLat + maxLat) / 2
+
+      // 先设置中心点
+      BMapInstance.centerAndZoom(new BMapClass.Point(centerLng, centerLat), 12)
+
+      // 延迟确保中心点设置完成
+      setTimeout(() => {
+        // 计算边界框的经纬度范围
+        let minLng2 = Infinity, maxLng2 = -Infinity, minLat2 = Infinity, maxLat2 = -Infinity
+        for (const pt of bounds) {
+          if (pt.lng < minLng2) minLng2 = pt.lng
+          if (pt.lng > maxLng2) maxLng2 = pt.lng
+          if (pt.lat < minLat2) minLat2 = pt.lat
+          if (pt.lat > maxLat2) maxLat2 = pt.lat
+        }
+        const boundsLng = maxLng2 - minLng2
+        const boundsLat = maxLat2 - minLat2
+
+        // 在 map-only 模式下，通过调整 zoom 级别实现视觉缩放（而非 CSS transform）
+        // 因为 CSS transform 会导致 getBoundingClientRect() 返回错误的尺寸
+        const scale = isMapOnlyMode ? (mapScale / 100) : 1
+
+        // 目标：边界框占据容器的 90%（留 10% 边距）
+        // 当 scale > 1 时，目标内容尺寸变小，从而实现更高的 zoom（放大效果）
+        const targetContentWidth = containerWidth * 0.9 / scale
+        const targetContentHeight = containerHeight * 0.9 / scale
+
+        // 先设置一个初始 zoom，然后测量边界框的像素尺寸，再调整
+        BMapInstance.setZoom(12)
+
+        // 等待缩放完成后进行几何调整
+        setTimeout(() => {
+          // 在当前 zoom 下，将边界框转换为像素
+          const swPixel = BMapInstance.pointToPixel ? BMapInstance.pointToPixel(new BMapClass.Point(minLng2, minLat2)) : null
+          const nePixel = BMapInstance.pointToPixel ? BMapInstance.pointToPixel(new BMapClass.Point(maxLng2, maxLat2)) : null
+
+          if (!swPixel || !nePixel) {
+            // 如果 pointToPixel 不可用，使用简单估算
+            console.warn('[BMap] Legacy pointToPixel 不可用，使用估算方法')
+            return
+          }
+
+          const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
+          const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
+
+          // CSS scale 会放大地图显示，但不改变容器尺寸
+          // 目标：边界框在放大后占据容器 90%，即放大前应占据 90% / scale
+          const targetContentWidth = containerWidth * 0.9 / scale
+          const targetContentHeight = containerHeight * 0.9 / scale
+
+          // 计算需要调整的 zoom delta
+          // 如果 currentPixel < targetPixel，需要放大（delta > 0）
+          // 如果 currentPixel > targetPixel，需要缩小（delta < 0）
+          const widthZoomDelta = Math.log2(targetContentWidth / currentPixelWidth)
+          const heightZoomDelta = Math.log2(targetContentHeight / currentPixelHeight)
+
+          // 取较小的 delta，确保边界框完全在视野内
+          const zoomDelta = Math.min(widthZoomDelta, heightZoomDelta)
+          const rawZoom = 12 + zoomDelta
+          let targetZoom = Math.floor(rawZoom)
+
+          // 精细策略：当小数部分 ≥ 0.9 时，尝试 zoom+1 并验证边界框是否仍在容器 95% 内
+          const fractionalPart = rawZoom - targetZoom
+          if (fractionalPart >= 0.9 && targetZoom < 18) {
+            // 计算在 zoom+1 下的边界框像素尺寸
+            const nextZoom = targetZoom + 1
+            const zoomRatio = Math.pow(2, nextZoom - 12)  // 相对于 zoom 12 的倍数
+            const nextPixelWidth = currentPixelWidth * zoomRatio
+            const nextPixelHeight = currentPixelHeight * zoomRatio
+
+            // 检查边界框是否在容器的 95% 内（允许略微超出）
+            const fitsWidth = nextPixelWidth <= targetContentWidth / 0.95
+            const fitsHeight = nextPixelHeight <= targetContentHeight / 0.95
+
+            if (fitsWidth && fitsHeight) {
+              targetZoom = nextZoom
+            }
+          }
+
+          targetZoom = Math.max(3, Math.min(18, targetZoom))
+
+          console.log('[BMap] Legacy fitBounds 几何调整:', {
+            边界框: `(${minLng2.toFixed(4)}, ${minLat2.toFixed(4)}) → (${maxLng2.toFixed(4)}, ${maxLat2.toFixed(4)})`,
+            边界尺寸: `lng=${boundsLng.toFixed(4)}°, lat=${boundsLat.toFixed(4)}°`,
+            当前像素: `${currentPixelWidth.toFixed(0)}x${currentPixelHeight.toFixed(0)}`,
+            容器尺寸: `${containerWidth}x${containerHeight}`,
+            CSS缩放: `${scale}`,
+            目标内容: `${targetContentWidth.toFixed(0)}x${targetContentHeight.toFixed(0)}`,
+            widthDelta: widthZoomDelta.toFixed(2),
+            heightDelta: heightZoomDelta.toFixed(2),
+            最终zoom: targetZoom
+          })
+
+          BMapInstance.setZoom(targetZoom)
+        }, 400)
+      }, 400)
+    } else {
+      // GL 版本：使用 setViewport
+      const padding = Math.round(Math.max(containerWidth, containerHeight) * (paddingPercent / 100))
+      BMapInstance.setViewport(bounds, {
+        margins: [padding, padding, padding, padding]
+      })
+    }
+
+    // 如果是 map-only 模式且有缩放，根据边界框几何计算目标 zoom（仅 GL 版本）
+    if (!isLegacyMode.value && isMapOnlyMode && mapScale > 100 && bounds.length > 0) {
       setTimeout(() => {
         const zoomAfter = BMapInstance.getZoom()
 
@@ -1384,8 +1733,8 @@ function fitBounds(paddingPercent: number = 5) {
         }
 
         // 在当前 zoom 下，将边界框转换为像素
-        const swPixel = BMapInstance.pointToPixel(new BMapGL.Point(minLng, minLat))
-        const nePixel = BMapInstance.pointToPixel(new BMapGL.Point(maxLng, maxLat))
+        const swPixel = BMapInstance.pointToPixel(new BMapClass.Point(minLng, minLat))
+        const nePixel = BMapInstance.pointToPixel(new BMapClass.Point(maxLng, maxLat))
         const currentPixelWidth = Math.abs(nePixel.x - swPixel.x)
         const currentPixelHeight = Math.abs(nePixel.y - swPixel.y)
 
@@ -1468,8 +1817,8 @@ function updateLatestPointMarker() {
     return
   }
 
-  const BMapGL = (window as any).BMapGL
-  latestPointMarker.setPosition(new BMapGL.Point(position.lng, position.lat))
+  // Legacy mode handled by BMapAPI
+  latestPointMarker.setPosition(createPoint(position.lng, position.lat))
 
   // 如果还没添加到地图，先添加
   if (!latestPointMarkerAdded) {
