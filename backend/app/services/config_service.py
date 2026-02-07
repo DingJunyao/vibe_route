@@ -27,6 +27,7 @@ class ConfigService:
         "geocoding_provider": "gdf",  # 默认使用本地地理编码
         "show_road_sign_in_region_tree": True,
         "spatial_backend": "auto",  # 空间计算后端: auto | python | postgis
+        "allow_server_poster": True,  # 是否允许服务器生成海报
         "geocoding_config": {
             "nominatim": {
                 "url": "http://localhost:8080",

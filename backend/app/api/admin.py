@@ -318,6 +318,7 @@ async def get_config(
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
+        allow_server_poster=configs.get("allow_server_poster", True),
     )
 
 
@@ -353,6 +354,7 @@ async def update_config(
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
+        allow_server_poster=configs.get("allow_server_poster", True),
     )
 
 

@@ -8,8 +8,8 @@
     @close="handleClose"
   >
     <!-- 配置区域 -->
-    <div class="poster-config">
-      <!-- 生成方式（移动设备隐藏，百度地图也隐藏） -->
+    <div v-if="!exportDisabled" class="poster-config">
+      <!-- 生成方式（移动设备隐藏，百度地图也隐藏，配置禁用服务器生成时也隐藏） -->
       <el-form-item v-if="showGenerationMode" label="生成方式">
         <el-radio-group v-model="config.generationMode" @change="onConfigChange">
           <el-radio value="frontend">浏览器生成</el-radio>
@@ -65,6 +65,22 @@
       </el-form-item>
     </div>
 
+    <!-- 禁用导出时的提示 -->
+    <div v-else class="poster-disabled-hint">
+      <div class="map-adjust-hint">
+        如果要导出海报，你可以
+        <el-link
+          :href="mapOnlyUrl"
+          target="_blank"
+          type="primary"
+          :underline="false"
+        >
+          打开地图
+        </el-link>
+        手动调整截图。
+      </div>
+    </div>
+
     <!-- 预览区域 -->
     <div v-if="previewUrl" class="poster-preview">
       <div class="preview-header">
@@ -88,37 +104,46 @@
     <!-- 按钮区域 -->
     <template #footer>
       <div class="dialog-footer">
-        <div class="map-adjust-hint">
-          <template v-if="config.generationMode === 'frontend'">
-            预览地图效果，确认无误后再导出。或者
-          </template>
-          <template v-else>
-            如果对生成效果不满意，也可以
-          </template>
-          <el-link
-            :href="mapOnlyUrl"
-            target="_blank"
-            type="primary"
-            :underline="false"
-          >
-            打开地图
-          </el-link>
-          手动调整。
-        </div>
-        <div class="dialog-footer-buttons">
-          <el-button
-            v-if="config.generationMode === 'frontend'"
-            @click="handlePreview"
-            :loading="isPreviewing"
-            :disabled="!canPreview"
-          >
-            预览
-          </el-button>
-          <el-button @click="handleClose" :disabled="isGenerating">取消</el-button>
-          <el-button type="primary" @click="handleExport" :loading="isGenerating">
-            导出
-          </el-button>
-        </div>
+        <!-- 未禁用时显示完整按钮区域 -->
+        <template v-if="!exportDisabled">
+          <div class="map-adjust-hint">
+            <template v-if="config.generationMode === 'frontend'">
+              预览地图效果，确认无误后再导出。或者
+            </template>
+            <template v-else>
+              如果对生成效果不满意，也可以
+            </template>
+            <el-link
+              :href="mapOnlyUrl"
+              target="_blank"
+              type="primary"
+              :underline="false"
+            >
+              打开地图
+            </el-link>
+            手动调整截图。
+          </div>
+          <div class="dialog-footer-buttons">
+            <el-button
+              v-if="config.generationMode === 'frontend'"
+              @click="handlePreview"
+              :loading="isPreviewing"
+              :disabled="!canPreview"
+            >
+              预览
+            </el-button>
+            <el-button @click="handleClose" :disabled="isGenerating">取消</el-button>
+            <el-button type="primary" @click="handleExport" :loading="isGenerating">
+              导出
+            </el-button>
+          </div>
+        </template>
+        <!-- 禁用时只显示取消按钮 -->
+        <template v-else>
+          <div class="dialog-footer-buttons dialog-footer-buttons-center">
+            <el-button @click="handleClose">取消</el-button>
+          </div>
+        </template>
       </div>
     </template>
   </el-dialog>
@@ -185,9 +210,24 @@ const isBaiduMap = computed(() => {
   return provider === 'baidu' || provider === 'baidu_legacy'
 })
 
-// 是否显示生成方式选择（百度地图隐藏，移动设备也隐藏）
+// 当前地图提供商（用于监听变化）
+const currentProvider = computed(() => getCurrentProvider())
+
+// 监听地图切换，清除预览
+watch(currentProvider, () => {
+  clearPreview()
+})
+
+// 是否显示生成方式选择（百度地图隐藏，移动设备也隐藏，配置禁用服务器生成时也隐藏）
 const showGenerationMode = computed(() => {
-  return !isMobileDeviceComputed.value && !isBaiduMap.value
+  const allowServerPoster = configStore.publicConfig?.allow_server_poster ?? true
+  return !isMobileDeviceComputed.value && !isBaiduMap.value && allowServerPoster
+})
+
+// 是否禁用导出（配置禁用服务器生成 且 (百度地图 或 移动设备)）
+const exportDisabled = computed(() => {
+  const allowServerPoster = configStore.publicConfig?.allow_server_poster ?? true
+  return !allowServerPoster && (isBaiduMap.value || isMobileDeviceComputed.value)
 })
 
 // 预览相关
@@ -252,11 +292,17 @@ watch(() => props.visible, (newVal) => {
     // 对话框打开时，检测当前地图提供商
     const provider = getCurrentProvider()
     const isBaidu = provider === 'baidu' || provider === 'baidu_legacy'
+    const allowServerPoster = configStore.publicConfig?.allow_server_poster ?? true
 
     // 百度地图强制使用服务器端生成
     if (isBaidu) {
       config.value.generationMode = 'backend'
       console.log('[PosterExportDialog] 百度地图强制使用服务器端生成')
+    }
+    // 配置禁用服务器生成时，强制使用浏览器生成
+    else if (!allowServerPoster) {
+      config.value.generationMode = 'frontend'
+      console.log('[PosterExportDialog] 配置禁用服务器生成，强制使用浏览器生成')
     }
   } else {
     progress.value = { stage: 'idle', message: '', percent: 0 }
@@ -422,6 +468,10 @@ async function generatePosterBackend(): Promise<void> {
 async function handlePreview(): Promise<void> {
   if (!props.track) {
     ElMessage.error('轨迹数据不存在')
+    return
+  }
+
+  if (exportDisabled.value) {
     return
   }
 
@@ -616,6 +666,10 @@ async function handleExport(): Promise<void> {
     return
   }
 
+  if (exportDisabled.value) {
+    return
+  }
+
   isGenerating.value = true
   progress.value = { stage: 'idle', message: '', percent: 0 }
 
@@ -744,6 +798,14 @@ async function handleExport(): Promise<void> {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.dialog-footer-buttons-center {
+  justify-content: center;
+}
+
+.poster-disabled-hint {
+  margin-bottom: 20px;
 }
 
 /* 移动端样式 */

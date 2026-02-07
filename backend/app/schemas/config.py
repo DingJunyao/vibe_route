@@ -71,6 +71,7 @@ class ConfigResponse(BaseModel):
     font_config: FontConfig = Field(default_factory=FontConfig)
     show_road_sign_in_region_tree: bool = True
     spatial_backend: str = "auto"
+    allow_server_poster: bool = True  # 是否允许服务器生成海报
 
     class Config:
         from_attributes = True
@@ -87,6 +88,7 @@ class ConfigUpdate(BaseModel):
     font_config: Optional[FontConfig] = None
     show_road_sign_in_region_tree: Optional[bool] = None
     spatial_backend: Optional[str] = None
+    allow_server_poster: Optional[bool] = None  # 是否允许服务器生成海报
 
 
 class PublicConfigResponse(BaseModel):
@@ -97,6 +99,7 @@ class PublicConfigResponse(BaseModel):
     registration_enabled: bool
     font_config: FontConfig = Field(default_factory=FontConfig)
     show_road_sign_in_region_tree: bool = True
+    allow_server_poster: bool = True  # 是否允许服务器生成海报
 
 
 class InviteCodeCreate(BaseModel):

@@ -72,6 +72,15 @@
                     </el-form-item>
                   </div>
 
+                  <!-- 海报生成设置 -->
+                  <div class="form-section">
+                    <div class="section-title">海报生成设置</div>
+                    <el-form-item label="允许服务器生成">
+                      <el-switch v-model="config.allow_server_poster" />
+                      <span class="form-tip">允许用户使用服务器生成海报。关闭后，用户只能使用浏览器生成，且无法在百度地图或移动设备上导出海报</span>
+                    </el-form-item>
+                  </div>
+
                   <!-- 地图设置 -->
                   <div class="form-section">
                     <div class="section-title">地图设置</div>
@@ -1241,6 +1250,7 @@ const config = reactive<SystemConfig>({
   },
   map_layers: {},
   spatial_backend: 'auto',
+  allow_server_poster: true,  // 默认允许服务器生成海报
 })
 
 // 所有地图层列表（按固定顺序）

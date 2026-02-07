@@ -47,6 +47,7 @@ export interface SystemConfig {
   font_config?: FontConfig
   show_road_sign_in_region_tree: boolean
   spatial_backend: string  // 空间计算后端: auto | python | postgis
+  allow_server_poster: boolean  // 是否允许服务器生成海报
 }
 
 // 字体配置
@@ -94,6 +95,7 @@ export interface ConfigUpdateData {
   font_config?: FontConfig
   show_road_sign_in_region_tree?: boolean
   spatial_backend?: string
+  allow_server_poster?: boolean
 }
 
 // 分页响应
