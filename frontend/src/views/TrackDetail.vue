@@ -40,6 +40,25 @@
             <el-icon><Link /></el-icon>
             记录配置
           </el-button>
+          <!-- 编辑轨迹下拉菜单 -->
+          <el-dropdown @command="handleEditCommand" trigger="click" class="desktop-only">
+            <el-button type="primary">
+              编辑轨迹
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
+            </el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="geo-editor">
+                  <el-icon><Edit /></el-icon>
+                  编辑地理信息
+                </el-dropdown-item>
+                <el-dropdown-item command="interpolation">
+                  <el-icon><Link /></el-icon>
+                  路径插值
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button type="primary" @click="showEditDialog" class="desktop-only">
             <el-icon><Edit /></el-icon>
             编辑
@@ -866,6 +885,14 @@
       :initial-status="shareStatus"
       @update:status="shareStatus = $event"
     />
+
+    <!-- 插值对话框 -->
+    <InterpolationDialog
+      v-model:visible="showInterpolationDialog"
+      :track-id="trackId"
+      :points="points"
+      @applied="handleInterpolationApplied"
+    />
   </div>
 </template>
 
@@ -911,6 +938,7 @@ import { getWebSocketOrigin } from '@/utils/origin'
 import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
 import PosterExportDialog from '@/components/PosterExportDialog.vue'
 import ShareDialog from '@/components/ShareDialog.vue'
+import InterpolationDialog from '@/components/interpolation/InterpolationDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1047,6 +1075,9 @@ const posterDialogVisible = ref(false)
 // 分享相关
 const shareDialogVisible = ref(false)
 const shareStatus = ref<ShareStatus | null>(null)
+
+// 插值对话框相关
+const showInterpolationDialog = ref(false)
 
 const importFile = ref<File | null>(null)
 const importMatchMode = ref<'index' | 'time'>('index')
@@ -1712,6 +1743,30 @@ function handleOpenGeoEditor() {
   editDialogVisible.value = false
   // 导航到地理编辑器页面
   router.push(`/tracks/${trackId.value}/geo-editor`)
+}
+
+// 打开插值对话框
+function handleOpenInterpolation() {
+  showInterpolationDialog.value = true
+}
+
+// 插值应用后刷新
+async function handleInterpolationApplied() {
+  // 重新加载轨迹数据
+  await fetchTrackDetail()
+  await fetchTrackPoints()
+}
+
+// 处理编辑命令（下拉菜单）
+function handleEditCommand(command: string) {
+  switch (command) {
+    case 'geo-editor':
+      router.push(`/tracks/${trackId.value}/geo-editor`)
+      break
+    case 'interpolation':
+      handleOpenInterpolation()
+      break
+  }
 }
 
 // 停止填充地理信息
