@@ -12,6 +12,7 @@ from app.models.live_recording import LiveRecording
 from app.models.admin_division import AdminDivision
 from app.models.admin_division_spatial import AdminDivisionSpatial
 from app.models.user_config import UserConfig
+from app.models.interpolation import TrackInterpolation
 
 __all__ = [
     "Base",
@@ -27,4 +28,5 @@ __all__ = [
     "AdminDivision",
     "AdminDivisionSpatial",
     "UserConfig",
+    "TrackInterpolation",
 ]

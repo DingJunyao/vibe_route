@@ -49,6 +49,7 @@ class Track(Base, AuditMixin):
     user = relationship("User", back_populates="tracks")
     points = relationship("TrackPoint", back_populates="track", cascade="all, delete-orphan")
     live_recordings = relationship("LiveRecording", foreign_keys="LiveRecording.current_track_id")
+    interpolations = relationship("TrackInterpolation", back_populates="track", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Track(id={self.id}, name='{self.name}', user_id={self.user_id})>"
@@ -95,8 +96,13 @@ class TrackPoint(Base, AuditMixin):
     # 备注
     memo = Column(Text, nullable=True)
 
+    # 插值相关字段
+    is_interpolated = Column(Boolean, nullable=False, default=False, comment="是否为插值点")
+    interpolation_id = Column(Integer, ForeignKey("track_interpolations.id"), nullable=True, comment="关联的插值ID")
+
     # 关系
     track = relationship("Track", back_populates="points")
+    interpolation_source = relationship("TrackInterpolation", foreign_keys=[interpolation_id])
 
     def get_coords(self, crs: str = "wgs84") -> tuple[float, float]:
         """
