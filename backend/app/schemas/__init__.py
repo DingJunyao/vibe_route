@@ -27,6 +27,17 @@ from app.schemas.task import (
     TaskResponse,
     TaskCreate,
 )
+from app.schemas.interpolation import (
+    ControlPointHandle,
+    ControlPoint,
+    AvailableSegment,
+    InterpolatedPoint,
+    InterpolationCreateRequest,
+    InterpolationUpdateRequest,
+    InterpolationResponse,
+    InterpolationPreviewRequest,
+    InterpolationPreviewResponse,
+)
 
 __all__ = [
     # User
@@ -51,4 +62,14 @@ __all__ = [
     # Task
     "TaskResponse",
     "TaskCreate",
+    # Interpolation
+    "ControlPointHandle",
+    "ControlPoint",
+    "AvailableSegment",
+    "InterpolatedPoint",
+    "InterpolationCreateRequest",
+    "InterpolationUpdateRequest",
+    "InterpolationResponse",
+    "InterpolationPreviewRequest",
+    "InterpolationPreviewResponse",
 ]
