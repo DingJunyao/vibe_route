@@ -7,14 +7,19 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :colored-segments="coloredSegments"
+      :available-segments="availableSegments"
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :mode="mode"
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
+      :disable-point-hover="disablePointHover"
+      :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
+      @map-click="handleMapClick"
     />
     <!-- 高德地图引擎 -->
     <AMap
@@ -23,14 +28,19 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :colored-segments="coloredSegments"
+      :available-segments="availableSegments"
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :mode="mode"
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
+      :disable-point-hover="disablePointHover"
+      :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
+      @map-click="handleMapClick"
     />
     <!-- 百度地图引擎 -->
     <BMap
@@ -39,15 +49,20 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :colored-segments="coloredSegments"
+      :available-segments="availableSegments"
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :default-layer-id="currentLayerId"
       :mode="mode"
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
+      :disable-point-hover="disablePointHover"
+      :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
+      @map-click="handleMapClick"
     />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
@@ -56,6 +71,8 @@
       :tracks="tracks"
       :highlight-track-id="highlightTrackId"
       :highlight-segment="highlightSegment"
+      :colored-segments="coloredSegments"
+      :available-segments="availableSegments"
       :highlight-point-index="highlightPointIndex"
       :latest-point-index="latestPointIndex"
       :default-layer-id="currentLayerId"
@@ -63,9 +80,12 @@
       :mode="mode"
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
+      :disable-point-hover="disablePointHover"
+      :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
+      @map-click="handleMapClick"
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
@@ -174,14 +194,43 @@ interface Point {
 }
 
 interface Track {
-  id: number
+  id: number | string
   points: Point[]
+  opacity?: number  // 轨迹透明度（0-1）
+  color?: string   // 轨迹颜色
+}
+
+// 自定义覆盖层类型（用于绘制路径模式的控制点和曲线）
+interface CustomOverlay {
+  type: 'marker' | 'polyline'
+  position?: [number, number]  // [lat, lng] for marker (默认 WGS84，优先使用下面的多坐标系字段)
+  positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  // 多坐标系支持（优先使用这些字段）
+  latitude_wgs84?: number
+  longitude_wgs84?: number
+  latitude_gcj02?: number | null
+  longitude_gcj02?: number | null
+  latitude_bd09?: number | null
+  longitude_bd09?: number | null
+  icon?: {
+    type: 'circle'
+    radius: number
+    fillColor: string
+    fillOpacity: number
+    strokeColor: string
+    strokeWidth: number
+  }
+  label?: string  // marker label
+  color?: string  // polyline color
+  weight?: number  // polyline weight
+  opacity?: number  // polyline opacity
+  dashArray?: string  // polyline dashArray
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
-  highlightSegments?: Array<{ start: number; end: number }> | null
+  highlightSegments?: Array<{ start: number; end: number; color?: string }> | null
   highlightPointIndex?: number  // 新增：高亮指定索引的点
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
@@ -190,6 +239,9 @@ interface Props {
   liveUpdateTime?: string | null  // 实时更新时间
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   viewDetailsUrl?: string  // 嵌入模式：查看详情链接
+  availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表（用于插值页面）
+  disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -204,6 +256,9 @@ const props = withDefaults(defineProps<Props>(), {
   liveUpdateTime: null,
   mapScale: 100,
   viewDetailsUrl: '',
+  availableSegments: null,
+  disablePointHover: false,
+  customOverlays: () => [],
 })
 
 // 定义 emit 事件
@@ -212,6 +267,7 @@ const emit = defineEmits<{
   (e: 'track-hover', trackId: number | null): void
   (e: 'track-click', trackId: number): void
   (e: 'clear-segment-highlight'): void
+  (e: 'map-click', lng: number, lat: number): void  // 地图点击事件（用于添加控制点）
 }>()
 
 const configStore = useConfigStore()
@@ -236,16 +292,48 @@ const formattedLiveUpdateTime = computed(() => {
 // 合并多段高亮为一个区域（兼容现有实现）
 const highlightSegment = computed(() => {
   const segments = props.highlightSegments
-  console.log('[UniversalMap] highlightSegment computed, segments:', segments)
+
+  // 如果是旧格式（单个对象 { start, end }），直接返回
+  if (segments && !Array.isArray(segments)) {
+    return segments as { start: number; end: number }
+  }
+
   if (!segments || segments.length === 0) return null
 
-  // 找到最小起始和最大结束
-  const minStart = Math.min(...segments.map(s => s.start))
-  const maxEnd = Math.max(...segments.map(s => s.end))
+  const first = segments[0]
 
-  const result = { start: minStart, end: maxEnd }
-  console.log('[UniversalMap] highlightSegment result:', result)
-  return result
+  // 新格式：支持颜色
+  if (first && 'color' in first) {
+    // 返回第一个非绿色的区段作为主高亮（蓝色或选中色）
+    const primarySegment = segments.find(s => s.color !== '#67c23a')
+    if (primarySegment) {
+      return { start: primarySegment.start, end: primarySegment.end }
+    }
+    // 如果全是绿色，不返回 highlightSegment（让 coloredSegments 处理）
+    return null
+  }
+
+  // 旧格式兼容（数组格式）
+  if (Array.isArray(segments)) {
+    const minStart = Math.min(...segments.map((s: any) => s.start))
+    const maxEnd = Math.max(...segments.map((s: any) => s.end))
+    return { start: minStart, end: maxEnd }
+  }
+
+  return null
+})
+
+// 用于地图的多段高亮（带颜色）
+const coloredSegments = computed(() => {
+  const segments = props.highlightSegments
+  if (!segments || segments.length === 0) return null
+
+  // 检查是否是新格式（带颜色）
+  const first = segments[0]
+  if (first && 'color' in first) {
+    return segments as Array<{ start: number; end: number; color: string }>
+  }
+  return null
 })
 
 // 计算轨迹方向（用于海报生成时的 zoom 调整）
@@ -301,8 +389,21 @@ const trackOrientation = computed(() => {
   return orientation
 })
 
+// 调试：检查 customOverlays
+const customOverlaysDebug = computed(() => {
+  const overlays = props.customOverlays || []
+  console.log('[UniversalMap] customOverlays computed - 数量:', overlays.length)
+  return overlays
+})
+
 // 当前选择的地图层 ID
 const currentLayerId = ref<string>('')
+
+// 保存的地图视角（用于切换地图时保持视角）
+const savedViewState = ref<{
+  center: { lat: number; lng: number } | null
+  zoom: number | null
+}>({ center: null, zoom: null })
 
 // 判断是否使用高德地图引擎
 const useAMapEngine = computed(() => {
@@ -336,11 +437,94 @@ const enabledMapLayers = computed<MapLayerConfig[]>(() => {
   return allLayers.filter((l: MapLayerConfig) => l.enabled).sort((a, b) => a.order - b.order)
 })
 
+// 获取当前地图的视角状态
+function getCurrentViewState(): { center: { lat: number; lng: number } | null; zoom: number | null } {
+  let center = null
+  let zoom = null
+
+  if (useAMapEngine.value && amapRef.value) {
+    const instance = (amapRef.value as any).getMapInstance?.()
+    if (instance) {
+      const c = instance.getCenter()
+      center = { lat: c.lat, lng: c.lng }
+      zoom = instance.getZoom()
+    }
+  } else if (useBMapEngine.value && bmapRef.value) {
+    const instance = (bmapRef.value as any).getMapInstance?.()
+    if (instance) {
+      const c = instance.getCenter?.() || instance.getCenter()
+      if (c && c.lat && c.lng) {
+        center = { lat: c.lat, lng: c.lng }
+      }
+      zoom = instance.getZoom?.()
+    }
+  } else if (useTencentEngine.value && tencentRef.value) {
+    const instance = (tencentRef.value as any).getMapInstance?.()
+    if (instance) {
+      const c = instance.getCenter()
+      center = { lat: c.lat, lng: c.lng }
+      zoom = instance.getZoom()
+    }
+  } else if (leafletRef.value) {
+    const instance = (leafletRef.value as any).getMapInstance?.()
+    if (instance) {
+      const c = instance.getCenter()
+      center = { lat: c.lat, lng: c.lng }
+      zoom = instance.getZoom()
+    }
+  }
+
+  return { center, zoom }
+}
+
+// 设置地图的视角状态
+function setMapViewState(center: { lat: number; lng: number }, zoom: number) {
+  if (useAMapEngine.value && amapRef.value) {
+    const instance = (amapRef.value as any).getMapInstance?.()
+    if (instance) {
+      instance.setZoomAndCenter(zoom, [center.lng, center.lat])
+    }
+  } else if (useBMapEngine.value && bmapRef.value) {
+    const instance = (bmapRef.value as any).getMapInstance?.()
+    if (instance) {
+      const BMap = (window as any).BMap || (window as any).BMapGL
+      instance.centerAndZoom(new BMap.Point(center.lng, center.lat), zoom)
+    }
+  } else if (useTencentEngine.value && tencentRef.value) {
+    const instance = (tencentRef.value as any).getMapInstance?.()
+    if (instance) {
+      const TMap = (window as any).TMap
+      instance.setCenter(new TMap.LatLng(center.lat, center.lng))
+      instance.setZoom(zoom)
+    }
+  } else if (leafletRef.value) {
+    const instance = (leafletRef.value as any).getMapInstance?.()
+    if (instance) {
+      instance.setView([center.lat, center.lng], zoom)
+    }
+  }
+}
+
 // 切换地图层
 function switchLayer(layerId: string) {
+  // 在切换前保存当前视角
+  const currentState = getCurrentViewState()
+  if (currentState.center && currentState.zoom !== null) {
+    savedViewState.value = currentState
+  }
+
   currentLayerId.value = layerId
   // 注意：我们不需要更新 configStore，因为 map_layers 是存储在数据库中的配置
   // 我们只需要在本地切换即可
+
+  // 等待新地图初始化后恢复视角
+  nextTick(() => {
+    setTimeout(() => {
+      if (savedViewState.value.center && savedViewState.value.zoom !== null) {
+        setMapViewState(savedViewState.value.center, savedViewState.value.zoom)
+      }
+    }, 300)  // 给地图组件一些初始化时间
+  })
 }
 
 // 处理下拉选择变化
@@ -371,6 +555,19 @@ function fitBounds(customPadding?: number) {
     tencentRef.value.fitBounds(paddingPercent)
   } else if (leafletRef.value?.fitBounds) {
     leafletRef.value.fitBounds(paddingPercent)
+  }
+}
+
+// 根据边界框直接设置地图视野（用于聚焦到特定区段）
+function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }, paddingPercent: number = 15) {
+  if (useAMapEngine.value && (amapRef.value as any)?.fitToBounds) {
+    (amapRef.value as any).fitToBounds(bounds, paddingPercent)
+  } else if (useBMapEngine.value && (bmapRef.value as any)?.fitToBounds) {
+    (bmapRef.value as any).fitToBounds(bounds, paddingPercent)
+  } else if (useTencentEngine.value && (tencentRef.value as any)?.fitToBounds) {
+    (tencentRef.value as any).fitToBounds(bounds, paddingPercent)
+  } else if (leafletRef.value && (leafletRef.value as any)?.fitToBounds) {
+    (leafletRef.value as any).fitToBounds(bounds, paddingPercent)
   }
 }
 
@@ -446,6 +643,11 @@ function handleTrackHover(trackId: number | null) {
 // 处理轨迹点击事件（用于跳转到详情页）
 function handleTrackClick(trackId: number) {
   emit('track-click', trackId)
+}
+
+// 处理地图点击事件（用于添加控制点）
+function handleMapClick(lng: number, lat: number) {
+  emit('map-click', lng, lat)
 }
 
 // 高亮指定点（由图表触发）
@@ -539,12 +741,18 @@ watch(() => props.liveUpdateTime, (newVal) => {
   }
 })
 
+// 监听 customOverlays 变化（用于调试绘制路径模式）
+watch(() => props.customOverlays, (newVal) => {
+  console.log('[UniversalMap] customOverlays prop 变化:', newVal?.length || 0, '个覆盖层')
+}, { deep: true })
+
 // 暴露方法给父组件
 defineExpose({
   highlightPoint,
   hideMarker,
   resize,
   fitBounds,
+  fitToBounds,
   getCurrentLayerId: () => currentLayerId.value,
   getMapElement: () => {
     if (useAMapEngine.value && amapRef.value) {

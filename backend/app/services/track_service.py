@@ -797,17 +797,17 @@ class TrackService:
         )
         track_total = track_count_result.scalar() or 0
 
-        # 获取所有正在进行的实时记录
-        recording_conditions = [
+        # 获取所有活跃的实时记录（用于计数和虚拟轨迹处理）
+        active_recording_conditions = [
             LiveRecording.user_id == user_id,
             LiveRecording.is_valid == True,
             LiveRecording.status == 'active',
         ]
         if search:
-            recording_conditions.append(LiveRecording.name.ilike(f"%{search}%"))
+            active_recording_conditions.append(LiveRecording.name.ilike(f"%{search}%"))
 
         recording_count_result = await db.execute(
-            select(func.count(LiveRecording.id)).where(and_(*recording_conditions))
+            select(func.count(LiveRecording.id)).where(and_(*active_recording_conditions))
         )
         recording_total = recording_count_result.scalar() or 0
 
@@ -829,37 +829,44 @@ class TrackService:
         # 计算去重后的总数：普通轨迹 + 未关联的实时记录
         total = track_total + (recording_total - linked_recording_count)
 
-        # 获取所有轨迹
-        sort_field = Track.created_at
-        if sort_by == "start_time":
-            sort_field = Track.start_time
-        elif sort_by == "distance":
-            sort_field = Track.distance
-        elif sort_by == "duration":
-            sort_field = Track.duration
-
-        if sort_order == "asc":
-            order_by_clause = sort_field.asc()
-        else:
-            order_by_clause = sort_field.desc()
-
+        # 获取所有轨迹（不在数据库排序，在内存中按统一规则排序）
         track_result = await db.execute(
             select(Track)
             .where(and_(*track_conditions))
-            .order_by(order_by_clause)
         )
         all_tracks = list(track_result.scalars().all())
 
-        # 获取所有正在进行的实时记录
+        # 获取所有活跃的实时记录（用于列表显示和虚拟轨迹）
         recording_result = await db.execute(
             select(LiveRecording)
-            .where(and_(*recording_conditions))
-            .order_by(LiveRecording.created_at.desc())
+            .where(and_(*active_recording_conditions))
         )
         all_recordings = list(recording_result.scalars().all())
 
-        # 构建 track_id -> recording 的映射
-        recording_map = {r.current_track_id: r for r in all_recordings if r.current_track_id}
+        # 获取所有已结束但仍关联的实时记录（用于显示正确的统计数据）
+        # 只获取当前用户下已结束且关联了轨迹的记录
+        ended_recording_result = await db.execute(
+            select(LiveRecording)
+            .where(
+                and_(
+                    LiveRecording.user_id == user_id,
+                    LiveRecording.is_valid == True,
+                    LiveRecording.status == 'ended',
+                    LiveRecording.current_track_id.isnot(None)
+                )
+            )
+        )
+        ended_recordings = list(ended_recording_result.scalars().all())
+
+        # 构建 track_id -> recording 的映射（包含活跃和已结束的记录）
+        # 活跃记录优先，如果没有活跃则使用已结束的
+        recording_map = {}
+        for r in all_recordings:
+            if r.current_track_id:
+                recording_map[r.current_track_id] = r
+        for r in ended_recordings:
+            if r.current_track_id and r.current_track_id not in recording_map:
+                recording_map[r.current_track_id] = r
 
         # 转换为响应格式
         unified_items = []
@@ -961,6 +968,19 @@ class TrackService:
 
         # 合并：正在记录的轨迹在前，普通轨迹在后
         unified_items = recording_tracks + normal_tracks
+
+        # 按时间排序：
+        # - 对于已有轨迹点的（start_time 不为 None），用 start_time 排序
+        # - 对于没有轨迹点的（start_time 为 None），用 created_at 排序
+        def get_sort_time(item):
+            # 如果有 start_time（已记录轨迹点），使用 start_time
+            if item.get('start_time') is not None:
+                return item.get('start_time')
+            # 否则使用 created_at（未记录轨迹点的实时记录）
+            return item.get('created_at')
+
+        reverse = (sort_order == "desc")
+        unified_items.sort(key=get_sort_time, reverse=reverse)
 
         # 应用分页
         items = unified_items[skip:skip + limit]

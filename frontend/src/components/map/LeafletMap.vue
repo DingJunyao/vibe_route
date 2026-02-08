@@ -71,19 +71,42 @@ interface Point {
 }
 
 interface Track {
-  id: number
+  id: number | string
   points: Point[]
   name?: string
   start_time?: string | null
   end_time?: string | null
   distance?: number
   duration?: number
+  opacity?: number  // 轨迹透明度
+}
+
+// 自定义覆盖层类型（用于绘制路径模式的控制点和曲线）
+interface CustomOverlay {
+  type: 'marker' | 'polyline'
+  position?: [number, number]  // [lat, lng] for marker
+  positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  icon?: {
+    type: 'circle'
+    radius: number
+    fillColor: string
+    fillOpacity: number
+    strokeColor: string
+    strokeWidth: number
+  }
+  label?: string  // marker label
+  color?: string  // polyline color
+  weight?: number  // polyline weight
+  opacity?: number  // polyline opacity
+  dashArray?: string  // polyline dashArray
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  coloredSegments?: Array<{ start: number; end: number; color: string }> | null  // 多段彩色高亮
+  availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表
   highlightPointIndex?: number
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
@@ -91,12 +114,16 @@ interface Props {
   mode?: 'home' | 'detail'
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
+  disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  coloredSegments: null,
+  availableSegments: null,
   highlightPointIndex: undefined,
   latestPointIndex: null,
   defaultLayerId: undefined,
@@ -104,6 +131,8 @@ const props = withDefaults(defineProps<Props>(), {
   mode: 'detail',
   mapScale: 100,
   trackOrientation: 'horizontal',
+  disablePointHover: false,
+  customOverlays: () => [],
 })
 
 const emit = defineEmits<{
@@ -111,6 +140,7 @@ const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
   (e: 'track-click', trackId: number): void
+  (e: 'map-click', lng: number, lat: number): void  // 地图点击事件
 }>()
 
 const configStore = useConfigStore()
@@ -121,6 +151,9 @@ const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
 const markers = ref<L.Marker[]>([])
 const highlightPolyline = ref<L.Polyline | null>(null)  // 路径段高亮图层
+const coloredPolylines = ref<L.Polyline[]>([])  // 多段彩色高亮图层
+const customOverlayMarkers = ref<L.Marker[]>([])  // 自定义覆盖层标记
+const customOverlayPolylines = ref<L.Polyline[]>([])  // 自定义覆盖层折线
 
 // 轨迹数据 - detail 模式使用（合并所有轨迹）
 const trackPoints: Ref<Point[]> = ref([])
@@ -275,6 +308,12 @@ function initMap() {
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
+    // 绘制路径模式：禁用 tooltip
+    if (props.disablePointHover) {
+      hideMarker()
+      return
+    }
+
     if (props.mode === 'home') {
       // home 模式：显示轨迹信息
       handleHomeModeMouseMove(lng, lat)
@@ -509,6 +548,17 @@ function initMap() {
     handleMouseMove(e.latlng.lng, e.latlng.lat)
   })
 
+  // 地图点击事件（桌面端和移动端都需要）
+  map.value.on('click', (e: L.LeafletMouseEvent) => {
+    const lng = e.latlng.lng
+    const lat = e.latlng.lat
+
+    // 绘制路径模式：直接发射点击事件
+    if (props.disablePointHover) {
+      emit('map-click', lng, lat)
+    }
+  })
+
   // 地图移动时更新 tooltip 位置（保持 tooltip 与点同步）
   map.value.on('move', () => {
     if (props.mode === 'home') {
@@ -580,6 +630,12 @@ function initMap() {
     map.value.on('click', (e: L.LeafletMouseEvent) => {
       const lng = e.latlng.lng
       const lat = e.latlng.lat
+
+      // 绘制路径模式：直接发射点击事件
+      if (props.disablePointHover) {
+        emit('map-click', lng, lat)
+        return
+      }
 
       if (props.mode === 'home') {
         // home 模式：显示轨迹信息
@@ -1037,6 +1093,12 @@ function recreateMap() {
 
   // 统一的鼠标处理函数
   const handleMouseMove = (lng: number, lat: number) => {
+    // 绘制路径模式：禁用 tooltip
+    if (props.disablePointHover) {
+      hideMarker()
+      return
+    }
+
     if (props.mode === 'home') {
       // home 模式：显示轨迹信息
       handleHomeModeMouseMove(lng, lat)
@@ -1271,6 +1333,17 @@ function recreateMap() {
     handleMouseMove(e.latlng.lng, e.latlng.lat)
   })
 
+  // 地图点击事件（桌面端和移动端都需要）
+  map.value.on('click', (e: L.LeafletMouseEvent) => {
+    const lng = e.latlng.lng
+    const lat = e.latlng.lat
+
+    // 绘制路径模式：直接发射点击事件
+    if (props.disablePointHover) {
+      emit('map-click', lng, lat)
+    }
+  })
+
   // 地图移动时更新 tooltip 位置（保持 tooltip 与点同步）
   map.value.on('move', () => {
     if (props.mode === 'home') {
@@ -1342,6 +1415,12 @@ function recreateMap() {
     map.value.on('click', (e: L.LeafletMouseEvent) => {
       const lng = e.latlng.lng
       const lat = e.latlng.lat
+
+      // 绘制路径模式：直接发射点击事件
+      if (props.disablePointHover) {
+        emit('map-click', lng, lat)
+        return
+      }
 
       if (props.mode === 'home') {
         // home 模式：显示轨迹信息
@@ -2066,10 +2145,14 @@ function drawTracks() {
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
+    // 使用 track.opacity 或默认值 0.8
+    const trackOpacity = track.opacity !== undefined ? track.opacity : 0.8
+    // 使用 track.color 或默认红色
+    const trackColor = track.color || '#ff0000'
     const polyline = L.polyline(latLngs, {
-      color: '#ff0000',
+      color: trackColor,
       weight: isHighlighted ? 5 : 3,
-      opacity: 0.8,
+      opacity: trackOpacity,
     })
 
     polyline.on('click', () => {
@@ -2085,7 +2168,27 @@ function drawTracks() {
   }
 
   // 绘制路径段高亮（detail 模式）
-  if (props.mode === 'detail' && props.highlightSegment && trackPoints.value.length > 0) {
+  // 多段彩色高亮（插值页面）
+  if (props.mode === 'detail' && props.coloredSegments && trackPath.value.length > 0) {
+    for (const seg of props.coloredSegments) {
+      const { start, end, color } = seg
+      if (start >= 0 && end < trackPath.value.length && start <= end) {
+        const segmentPath = trackPath.value.slice(start, end + 1)
+        if (segmentPath.length > 0) {
+          const segmentLatLngs: L.LatLngExpression[] = segmentPath.map(([lng, lat]) => [lat, lng])
+          const coloredPolyline = L.polyline(segmentLatLngs, {
+            color: color,
+            weight: 7,
+            opacity: 0.9,
+          })
+          coloredPolyline.addTo(map.value as L.Map)
+          coloredPolylines.value.push(coloredPolyline)
+        }
+      }
+    }
+  }
+  // 单段高亮（兼容旧逻辑）
+  else if (props.mode === 'detail' && props.highlightSegment && trackPath.value.length > 0) {
     const { start, end } = props.highlightSegment
     // 确保索引在有效范围内
     if (start >= 0 && end < trackPath.value.length && start <= end) {
@@ -2093,7 +2196,7 @@ function drawTracks() {
       if (segmentPath.length > 0) {
         const segmentLatLngs: L.LatLngExpression[] = segmentPath.map(([lng, lat]) => [lat, lng])
         highlightPolyline.value = L.polyline(segmentLatLngs, {
-          color: '#409eff',  // 蓝色高亮
+          color: '#ff4d4f',  // 红色高亮（插值轨迹）
           weight: 7,
           opacity: 0.9,
         })
@@ -2102,13 +2205,16 @@ function drawTracks() {
     }
   }
 
-  // 自动适应视图
-  if (bounds.isValid()) {
+  // 自动适应视图（绘制路径模式禁用）
+  if (bounds.isValid() && !props.disablePointHover) {
     map.value.fitBounds(bounds, { padding: [0, 0] })
   }
 
   // 更新最新点标记
   updateLatestPointMarker()
+
+  // 绘制自定义覆盖层（控制点和虚线）
+  drawCustomOverlays()
 }
 
 // 清除轨迹
@@ -2124,6 +2230,12 @@ function clearTracks() {
     highlightPolyline.value = null
   }
 
+  // 清除多段彩色高亮
+  coloredPolylines.value.forEach((polyline) => {
+    map.value!.removeLayer(polyline)
+  })
+  coloredPolylines.value = []
+
   markers.value.forEach((marker) => {
     map.value!.removeLayer(marker)
   })
@@ -2133,6 +2245,90 @@ function clearTracks() {
 // 更新轨迹（当底图切换或数据变化时）
 function updateTracks() {
   drawTracks()
+  drawCustomOverlays()
+}
+
+// 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
+function drawCustomOverlays() {
+  if (!map.value) {
+    console.log('[LeafletMap] drawCustomOverlays - map 未初始化')
+    return
+  }
+
+  console.log('[LeafletMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0)
+
+  // 清除现有的自定义覆盖层
+  customOverlayMarkers.value.forEach(marker => {
+    try { map.value!.removeLayer(marker) } catch { /* ignore */ }
+  })
+  customOverlayMarkers.value = []
+  customOverlayPolylines.value.forEach(polyline => {
+    try { map.value!.removeLayer(polyline) } catch { /* ignore */ }
+  })
+  customOverlayPolylines.value = []
+
+  if (!props.customOverlays || props.customOverlays.length === 0) {
+    console.log('[LeafletMap] drawCustomOverlays - 没有覆盖层需要绘制')
+    return
+  }
+
+  for (const overlay of props.customOverlays) {
+    if (overlay.type === 'marker' && overlay.position && overlay.icon) {
+      const [lat, lng] = overlay.position
+      const radius = overlay.icon.radius || 6
+      const fillColor = overlay.icon.fillColor || '#f56c6c'
+      const fillOpacity = overlay.icon.fillOpacity !== undefined ? overlay.icon.fillOpacity : 0.9
+      const strokeColor = overlay.icon.strokeColor || '#fff'
+      const strokeWidth = overlay.icon.strokeWidth || 2
+
+      // 使用 DivIcon 创建自定义标记
+      const divIcon = L.divIcon({
+        className: 'custom-marker',
+        html: `<div style="
+          width: ${radius * 2}px;
+          height: ${radius * 2}px;
+          border-radius: 50%;
+          background-color: ${fillColor};
+          opacity: ${fillOpacity};
+          border: ${strokeWidth}px solid ${strokeColor};
+          box-sizing: border-box;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: #fff;
+          font-size: ${radius * 0.8}px;
+          font-weight: bold;
+        ">${overlay.label || ''}</div>`,
+        iconSize: [radius * 2, radius * 2],
+        iconAnchor: [radius, radius],
+      })
+
+      const marker = L.marker([lat, lng], { icon: divIcon })
+      marker.addTo(map.value)
+      customOverlayMarkers.value.push(marker)
+    } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
+      const latLngs = overlay.positions.map(([lat, lng]) => [lat, lng] as L.LatLngExpression)
+      const color = overlay.color || '#409eff'
+      const weight = overlay.weight || 3
+      const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+      const dashArray = overlay.dashArray
+
+      // 解析 dashArray 字符串（如 "5, 5"）为数组 [5, 5]
+      const dashArrayParsed = dashArray
+        ? dashArray.split(',').map(s => parseFloat(s.trim()))
+        : undefined
+
+      const polyline = L.polyline(latLngs, {
+        color: color,
+        weight: weight,
+        opacity: opacity,
+        dashArray: dashArrayParsed,
+      })
+
+      polyline.addTo(map.value)
+      customOverlayPolylines.value.push(polyline)
+    }
+  }
 }
 
 // 监听变化
@@ -2147,6 +2343,14 @@ watch(() => props.highlightTrackId, () => {
 watch(() => props.highlightSegment, () => {
   updateTracks()
 })
+
+watch(() => props.coloredSegments, () => {
+  updateTracks()
+})
+
+watch(() => props.customOverlays, () => {
+  drawCustomOverlays()
+}, { deep: true })
 
 // 更新实时轨迹最新点标记
 function updateLatestPointMarker() {
@@ -2214,6 +2418,33 @@ watch(() => props.defaultLayerId, (newId) => {
     switchLayer(newId)
   }
 })
+
+// 根据边界框直接设置地图视野（用于聚焦到特定区段）
+function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }, paddingPercent: number = 15) {
+  if (!map.value) return
+
+  const { minLat, maxLat, minLon, maxLon } = bounds
+  const L = (window as any).L
+
+  const boundsObj = L.latLngBounds([
+    [minLat, minLon],
+    [maxLat, maxLon]
+  ])
+
+  // 计算 padding（像素）
+  const container = mapContainer.value
+  if (!container) return
+
+  const containerWidth = container.clientWidth || 800
+  const containerHeight = container.clientHeight || 600
+  const paddingX = (containerWidth * paddingPercent) / 100
+  const paddingY = (containerHeight * paddingPercent) / 100
+
+  map.value.fitBounds(boundsObj, {
+    padding: [paddingY, paddingX],
+    animate: false
+  })
+}
 
 // 调整地图大小（用于响应式布局）
 function resize() {
@@ -2328,7 +2559,9 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  fitToBounds,
   getMapElement: () => mapContainer.value || null,
+  getMapInstance: () => map.value,
   /**
    * 捕获地图截图
    * 对于 Leaflet，返回 null 需要使用 html2canvas 处理

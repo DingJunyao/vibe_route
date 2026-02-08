@@ -1,0 +1,28 @@
+-- 014_add_interpolations.sql.mysql
+-- 添加轨迹插值功能相关表结构
+-- MySQL 版本
+
+-- 创建轨迹插值表
+CREATE TABLE IF NOT EXISTS track_interpolations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_by INT,
+    updated_by INT,
+    is_valid BOOLEAN NOT NULL DEFAULT TRUE,
+
+    track_id INT NOT NULL,
+    start_point_index INT NOT NULL,
+    end_point_index INT NOT NULL,
+    path_geometry TEXT NOT NULL,
+    interpolation_interval_seconds INT NOT NULL DEFAULT 1,
+    point_count INT NOT NULL,
+    algorithm VARCHAR(50) NOT NULL DEFAULT 'cubic_bezier',
+
+    INDEX ix_track_interpolations_track_id (track_id),
+    INDEX ix_track_interpolations_is_valid (is_valid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 为 track_points 表添加插值相关字段
+ALTER TABLE track_points ADD COLUMN is_interpolated BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE track_points ADD COLUMN interpolation_id INT;

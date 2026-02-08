@@ -11,6 +11,7 @@ import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
+import { gcj02ToWgs84 } from '@/utils/coordTransform'
 
 // 类型定义
 interface Point {
@@ -130,40 +131,70 @@ const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
   (e: 'track-click', trackId: number): void
+  (e: 'map-click', lng: number, lat: number): void  // 地图点击事件
 }>()
 
 interface Track {
-  id: number
+  id: number | string
   points: Point[]
   name?: string
   start_time?: string | null
   end_time?: string | null
   distance?: number
   duration?: number
+  opacity?: number  // 轨迹透明度
+}
+
+// 自定义覆盖层类型（用于绘制路径模式的控制点和曲线）
+interface CustomOverlay {
+  type: 'marker' | 'polyline'
+  position?: [number, number]  // [lat, lng] for marker
+  positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  icon?: {
+    type: 'circle'
+    radius: number
+    fillColor: string
+    fillOpacity: number
+    strokeColor: string
+    strokeWidth: number
+  }
+  label?: string  // marker label
+  color?: string  // polyline color
+  weight?: number  // polyline weight
+  opacity?: number  // polyline opacity
+  dashArray?: string  // polyline dashArray
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  coloredSegments?: Array<{ start: number; end: number; color: string }> | null  // 多段彩色高亮
+  availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表
   highlightPointIndex?: number
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
+  disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  coloredSegments: null,
+  availableSegments: null,
   highlightPointIndex: undefined,
   latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
   mapScale: 100,
   trackOrientation: 'horizontal',
+  disablePointHover: false,
+  customOverlays: () => [],
 })
 
 const configStore = useConfigStore()
@@ -173,7 +204,10 @@ const mapContainer = ref<HTMLElement>()
 const customTooltip = ref<HTMLElement>()
 let TMapInstance: any = null
 let polylineLayer: any = null
+let coloredPolylineLayers: any[] = []  // 多段彩色高亮图层
 let highlightPolylineLayer: any = null  // 路径段高亮图层
+let customOverlayMarkers: any = null  // 自定义覆盖层标记 (MultiMarker)
+let customOverlayPolylines: any[] = []  // 自定义覆盖层折线
 let mouseMarker: any = null  // 腾讯地图 Marker 实例
 let lastTooltipPosition: any = null  // 上次 tooltip 显示的位置
 let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
@@ -187,6 +221,7 @@ const tracksData = new Map<number, { points: Point[]; path: any[]; track: Track 
 // 节流和缓存
 let lastHoverIndex = -1  // 上次悬停的点索引
 let isClickProcessing = false  // 防止移动端 touchend 和 click 重复触发
+let mouseDownPos: { x: number; y: number } | null = null  // 记录鼠标按下位置，用于区分点击和拖动
 
 // 道路标志 SVG 缓存
 const roadSignSvgCache = new Map<string, string>()
@@ -726,6 +761,12 @@ async function initMap() {
 
     // 统一的鼠标处理函数
     const handleMouseMove = (lat: number, lng: number) => {
+      // 绘制路径模式：禁用 tooltip
+      if (props.disablePointHover) {
+        hideMarker()
+        return
+      }
+
       if (props.mode === 'home') {
         handleHomeModeMouseMove(lat, lng)
       } else {
@@ -961,6 +1002,14 @@ async function initMap() {
         const lng = sw.lng + lngRange * xRatio
         const lat = ne.lat - latRange * yRatio
 
+        // 绘制路径模式：直接发射点击事件（转换为 WGS84）
+        if (props.disablePointHover) {
+          // 腾讯地图使用 GCJ02 坐标，需要转换为 WGS84
+          const [wgsLng, wgsLat] = gcj02ToWgs84(lng, lat)
+          emit('map-click', wgsLng, wgsLat)
+          return
+        }
+
         const zoom = TMapInstance.getZoom()
         const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
 
@@ -1136,10 +1185,28 @@ async function initMap() {
         }
       }
 
+      // 监听鼠标按下事件（记录位置，用于区分点击和拖动）
+      mapContainer.value.addEventListener('mousedown', (e: MouseEvent) => {
+        mouseDownPos = { x: e.clientX, y: e.clientY }
+      }, true)
+
       // 监听点击事件（桌面端）
       mapContainer.value.addEventListener('click', (e: Event) => {
         // 移动端：如果刚处理完 touchend，跳过 click 事件
         if (isClickProcessing) return
+
+        // 检查是否是拖动操作（鼠标按下和抬起位置超过 5px 视为拖动）
+        if (mouseDownPos && e instanceof MouseEvent) {
+          const deltaX = Math.abs(e.clientX - mouseDownPos.x)
+          const deltaY = Math.abs(e.clientY - mouseDownPos.y)
+          if (deltaX > 5 || deltaY > 5) {
+            // 这是拖动操作，不处理点击
+            mouseDownPos = null
+            return
+          }
+        }
+        mouseDownPos = null
+
         clickHandler(e)
       }, true)
 
@@ -1198,8 +1265,8 @@ async function initMap() {
     })
     }
 
-    // 绘制轨迹
-    drawTracks()
+    // 更新轨迹（包括自定义覆盖层）
+    updateTracks()
   } catch (error) {
     // 静默处理初始化错误
   }
@@ -1233,6 +1300,16 @@ function drawTracks() {
     highlightPolylineLayer = null
   }
 
+  // 清除多段彩色高亮图层
+  coloredPolylineLayers.forEach(layer => {
+    try {
+      layer.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+  })
+  coloredPolylineLayers = []
+
   // 重置轨迹点数据
   trackPoints = []
   trackPath = []
@@ -1241,6 +1318,8 @@ function drawTracks() {
   // 准备轨迹数据
   const geometries: any[] = []
   const bounds: any[] = []
+  // 为每个 track 动态创建 styles
+  const styles: any = {}
 
   for (const track of props.tracks) {
     if (!track.points || track.points.length === 0) continue
@@ -1278,9 +1357,34 @@ function drawTracks() {
 
     const isHighlighted = track.id === props.highlightTrackId
 
+    // 根据 track.opacity 和 track.color 计算 RGBA 颜色
+    const opacity = track.opacity !== undefined ? track.opacity : 0.8
+    const baseColor = track.color || '#FF0000'
+    // 解析 hex 颜色转为 RGB
+    const r = parseInt(baseColor.slice(1, 3), 16)
+    const g = parseInt(baseColor.slice(3, 5), 16)
+    const b = parseInt(baseColor.slice(5, 7), 16)
+    const color = `rgba(${r}, ${g}, ${b}, ${opacity})`
+
+    // 为每个 track 创建唯一的 style ID
+    const normalStyleId = `track_${track.id}_normal`
+    const highlightStyleId = `track_${track.id}_highlight`
+
+    // 添加到 styles 对象
+    styles[normalStyleId] = new TMap.PolylineStyle({
+      color,
+      width: 4,
+      borderWidth: 0,
+    })
+    styles[highlightStyleId] = new TMap.PolylineStyle({
+      color,
+      width: 6,
+      borderWidth: 0,
+    })
+
     geometries.push({
       id: `track_${track.id}`,
-      styleId: isHighlighted ? 'style_highlight' : 'style_normal',
+      styleId: isHighlighted ? highlightStyleId : normalStyleId,
       paths: paths,
     })
   }
@@ -1291,23 +1395,42 @@ function drawTracks() {
   polylineLayer = new TMap.MultiPolyline({
     id: 'polyline-layer',
     map: TMapInstance,
-    styles: {
-      style_normal: new TMap.PolylineStyle({
-        color: '#FF0000',
-        width: 4,
-        borderWidth: 0,
-      }),
-      style_highlight: new TMap.PolylineStyle({
-        color: '#FF0000',
-        width: 6,
-        borderWidth: 0,
-      }),
-    },
+    styles: styles,
     geometries: geometries,
   })
 
-  // 绘制路径段高亮（detail 模式）
-  if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
+  // 绘制多段彩色高亮（插值页面）
+  if (props.mode === 'detail' && props.coloredSegments && trackPath.length > 0) {
+    // 使用索引确保 ID 唯一性（避免相同 start/end 的区段导致 ID 重复）
+    props.coloredSegments.forEach((seg, index) => {
+      const { start, end, color } = seg
+      if (start >= 0 && end < trackPath.length && start <= end) {
+        const segmentPath = trackPath.slice(start, end + 1)
+        if (segmentPath.length > 0) {
+          const coloredLayer = new TMap.MultiPolyline({
+            id: `colored-segment-${start}-${end}-${index}`,
+            map: TMapInstance,
+            styles: {
+              style_colored: new TMap.PolylineStyle({
+                color: color,
+                width: 8,
+                borderWidth: 0,
+              }),
+            },
+            geometries: [{
+              id: `colored-segment-${index}`,
+              styleId: 'style_colored',
+              paths: segmentPath,
+            }],
+          })
+          coloredPolylineLayers.push(coloredLayer)
+        }
+      }
+    })
+  }
+  // 绘制路径段高亮（detail 模式，兼容旧逻辑）
+  // 红色高亮用于插值轨迹
+  else if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
     // 确保索引在有效范围内
     if (start >= 0 && end < trackPath.length && start <= end) {
@@ -1318,7 +1441,7 @@ function drawTracks() {
           map: TMapInstance,
           styles: {
             style_highlight: new TMap.PolylineStyle({
-              color: '#409eff',  // 蓝色高亮
+              color: '#ff4d4f',  // 红色高亮（插值轨迹）
               width: 8,
               borderWidth: 0,
             }),
@@ -1333,8 +1456,8 @@ function drawTracks() {
     }
   }
 
-  // 自动适应视图
-  if (bounds.length > 0) {
+  // 自动适应视图（绘制路径模式禁用）
+  if (bounds.length > 0 && !props.disablePointHover) {
     try {
       // 计算边界
       let minLat = bounds[0].lat
@@ -1366,6 +1489,141 @@ function drawTracks() {
 // 更新轨迹
 function updateTracks() {
   drawTracks()
+  drawCustomOverlays()
+}
+
+// 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
+function drawCustomOverlays() {
+  if (!TMapInstance) {
+    console.log('[TencentMap] drawCustomOverlays - TMapInstance 未初始化')
+    return
+  }
+
+  const TMap = (window as any).TMap
+  console.log('[TencentMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0)
+
+  // 清除现有的自定义覆盖层
+  if (customOverlayMarkers) {
+    customOverlayMarkers.setMap(null)
+    customOverlayMarkers = null
+  }
+  customOverlayPolylines.forEach(layer => {
+    try { layer.setMap(null) } catch { /* ignore */ }
+  })
+  customOverlayPolylines = []
+
+  if (!props.customOverlays || props.customOverlays.length === 0) {
+    console.log('[TencentMap] drawCustomOverlays - 没有覆盖层需要绘制')
+    return
+  }
+
+  // 收集标记几何体
+  const markerGeometries: any[] = []
+  const markerStyles: any = {}
+
+  for (const overlay of props.customOverlays) {
+    if (overlay.type === 'marker') {
+      // 优先使用 GCJ02 坐标（腾讯地图坐标系），否则使用 position 字段（WGS84）
+      let lat: number, lng: number
+      if (overlay.latitude_gcj02 != null && overlay.longitude_gcj02 != null) {
+        lat = overlay.latitude_gcj02
+        lng = overlay.longitude_gcj02
+      } else if (overlay.position) {
+        [lat, lng] = overlay.position
+      } else {
+        continue
+      }
+
+      if (!overlay.icon) continue
+
+      const radius = overlay.icon.radius || 6
+      const fillColor = overlay.icon.fillColor || '#f56c6c'
+      const fillOpacity = overlay.icon.fillOpacity !== undefined ? overlay.icon.fillOpacity : 0.9
+      const strokeColor = overlay.icon.strokeColor || '#fff'
+      const strokeWidth = overlay.icon.strokeWidth || 2
+
+      // 使用 Canvas 绘制圆形标记
+      const canvas = document.createElement('canvas')
+      const size = radius * 2
+      canvas.width = size
+      canvas.height = size
+      const ctx = canvas.getContext('2d')!
+
+      // 绘制填充圆
+      ctx.fillStyle = fillColor
+      ctx.globalAlpha = fillOpacity
+      ctx.beginPath()
+      ctx.arc(radius, radius, radius - strokeWidth / 2, 0, Math.PI * 2)
+      ctx.fill()
+
+      // 绘制边框
+      ctx.strokeStyle = strokeColor
+      ctx.lineWidth = strokeWidth
+      ctx.globalAlpha = 1
+      ctx.stroke()
+
+      // 绘制标签
+      if (overlay.label) {
+        ctx.fillStyle = '#fff'
+        ctx.font = `bold ${radius * 0.8}px sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(overlay.label, radius, radius)
+      }
+
+      const dataUrl = canvas.toDataURL()
+      const styleId = `marker-${fillColor.replace('#', '')}-${radius}`
+
+      if (!markerStyles[styleId]) {
+        markerStyles[styleId] = new TMap.MarkerStyle({
+          width: size,
+          height: size,
+          anchor: { x: radius, y: radius },
+          src: dataUrl,
+        })
+      }
+
+      markerGeometries.push({
+        id: `marker-${markerGeometries.length}`,
+        styleId: styleId,
+        position: new TMap.LatLng(lat, lng),
+      })
+    } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
+      // 优先使用 GCJ02 坐标，回退到 WGS84
+      const positions = overlay.positions_gcj02 || overlay.positions
+      const paths = positions.map(([lat, lng]) => new TMap.LatLng(lat, lng))
+      const color = overlay.color || '#409eff'
+      const weight = overlay.weight || 3
+      const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+
+      const layer = new TMap.MultiPolyline({
+        map: TMapInstance,
+        styles: {
+          style: new TMap.PolylineStyle({
+            color: color,
+            width: weight,
+            borderWidth: 0,
+          }),
+        },
+        geometries: [{
+          id: `polyline-${customOverlayPolylines.length}`,
+          styleId: 'style',
+          paths: paths,
+        }],
+      })
+
+      customOverlayPolylines.push(layer)
+    }
+  }
+
+  // 创建标记层
+  if (markerGeometries.length > 0) {
+    customOverlayMarkers = new TMap.MultiMarker({
+      map: TMapInstance,
+      styles: markerStyles,
+      geometries: markerGeometries,
+    })
+  }
 }
 
 // 监听 tracks 变化
@@ -1380,6 +1638,14 @@ watch(() => props.highlightTrackId, () => {
 watch(() => props.highlightSegment, () => {
   updateTracks()
 })
+
+watch(() => props.coloredSegments, () => {
+  updateTracks()
+})
+
+watch(() => props.customOverlays, () => {
+  drawCustomOverlays()
+}, { deep: true })
 
 // 生命周期
 onMounted(async () => {
@@ -1404,6 +1670,25 @@ onUnmounted(() => {
     TMapInstance = null
   }
 })
+
+// 根据边界框直接设置地图视野（用于聚焦到特定区段）
+function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }, paddingPercent: number = 15) {
+  if (!TMapInstance) return
+
+  const TMap = (window as any).TMap
+  const { minLat, maxLat, minLon, maxLon } = bounds
+
+  const boundsObj = new TMap.LatLngBounds(
+    new TMap.LatLng(minLat, minLon),
+    new TMap.LatLng(maxLat, maxLon)
+  )
+
+  const padding = {
+    padding: paddingPercent
+  }
+
+  TMapInstance.fitBounds(boundsObj, padding)
+}
 
 // 调整地图大小（用于响应式布局）
 function resize() {
@@ -1631,7 +1916,9 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  fitToBounds,
   getMapElement: () => mapContainer.value || null,
+  getMapInstance: () => TMapInstance,
   async captureMap(): Promise<string | null> {
     if (!TMapInstance || !mapContainer.value) return null
 

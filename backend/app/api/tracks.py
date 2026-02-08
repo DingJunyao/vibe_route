@@ -322,13 +322,16 @@ async def get_track(
             detail="轨迹不存在",
         )
 
-    # 从预加载的数据中查找活跃的实时记录
+    # 从预加载的数据中查找关联的实时记录（活跃或已结束）
     recording = None
     if hasattr(track, 'live_recordings') and track.live_recordings:
         for rec in track.live_recordings:
-            if rec.is_valid and rec.status == "active" and rec.current_track_id == track_id:
-                recording = rec
-                break
+            if rec.is_valid and rec.current_track_id == track_id:
+                # 优先使用活跃记录，如果没有则使用已结束的记录
+                if recording is None or rec.status == "active":
+                    recording = rec
+                    if rec.status == "active":
+                        break
 
     # 获取实时记录的时间信息和统计数据
     last_point_time = None
@@ -338,11 +341,13 @@ async def get_track(
         from app.services.live_recording_service import live_recording_service
         last_point_time = await live_recording_service.get_last_point_time(db, recording)
         last_point_created_at = await live_recording_service.get_last_point_created_at(db, recording)
-        # 实时计算统计数据（从点重新计算，确保准确性）
+        # 对于实时记录轨迹，总是从点重新计算统计数据（确保准确性）
+        # 因为实时记录过程中不累加距离，停止后虽然 fix_point_index 会更新，
+        # 但可能有竞态条件，前端查询时 fix 可能还没完成
         calculated_stats = await live_recording_service.calculate_track_stats_from_points(db, track.id)
 
     # 构建响应
-    # 对于实时记录，使用实时计算的统计值；否则使用数据库中的值
+    # 对于实时记录轨迹，使用实时计算的统计值；否则使用数据库中的值
     if recording and calculated_stats:
         distance = calculated_stats["distance"]
         duration = calculated_stats["duration"]

@@ -3,7 +3,7 @@
 """
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class ControlPointHandle(BaseModel):
@@ -29,6 +29,13 @@ class AvailableSegment(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
 
+    @field_serializer('start_time', 'end_time')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        if dt is None:
+            return None
+        return dt.isoformat() + '+00:00'
+
 
 class InterpolatedPoint(BaseModel):
     """插值点数据"""
@@ -43,6 +50,11 @@ class InterpolatedPoint(BaseModel):
     speed: float
     course: float
     elevation: Optional[float] = None
+
+    @field_serializer('time')
+    def serialize_datetime(self, dt: datetime) -> str:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        return dt.isoformat() + '+00:00'
 
 
 class InterpolationCreateRequest(BaseModel):
@@ -72,6 +84,11 @@ class InterpolationResponse(BaseModel):
     algorithm: str
     created_at: datetime
 
+    @field_serializer('created_at')
+    def serialize_datetime(self, dt: datetime) -> str:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        return dt.isoformat() + '+00:00'
+
 
 class InterpolationPreviewRequest(BaseModel):
     """插值预览请求"""
@@ -88,3 +105,8 @@ class InterpolationPreviewResponse(BaseModel):
     total_count: int
     start_time: datetime
     end_time: datetime
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_datetime(self, dt: datetime) -> str:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        return dt.isoformat() + '+00:00'

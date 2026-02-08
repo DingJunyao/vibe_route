@@ -799,12 +799,36 @@ class LiveRecordingService:
         """
         删除记录（软删除）
 
+        同时软删除关联的 Track，避免留下孤儿轨迹。
+
         Args:
             db: 数据库会话
             recording: 记录对象
         """
+        from sqlalchemy import update
+
+        # 软删除记录
         recording.is_valid = False
         recording.updated_by = recording.user_id
+
+        # 如果有关联的轨迹，同时软删除轨迹
+        if recording.current_track_id:
+            await db.execute(
+                update(Track)
+                .where(
+                    and_(
+                        Track.id == recording.current_track_id,
+                        Track.is_valid == True
+                    )
+                )
+                .values(
+                    is_valid=False,
+                    updated_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                    updated_by=recording.user_id
+                )
+            )
+            logger.info(f"删除实时记录 {recording.id} 时，同时软删除关联轨迹 {recording.current_track_id}")
+
         await db.commit()
 
     async def update_fill_geocoding(

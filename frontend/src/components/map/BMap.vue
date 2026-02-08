@@ -5,12 +5,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, watchEffect } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
-import { wgs84ToBd09, gcj02ToBd09 } from '@/utils/coordTransform'
+import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84 } from '@/utils/coordTransform'
 
 // 类型定义
 interface Point {
@@ -130,6 +130,7 @@ const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
   (e: 'track-click', trackId: number): void
+  (e: 'map-click', lng: number, lat: number): void  // 地图点击事件（用于添加控制点）
 }>()
 
 interface Track {
@@ -142,28 +143,63 @@ interface Track {
   duration?: number
 }
 
+// 自定义覆盖层类型（用于绘制路径模式的控制点和曲线）
+interface CustomOverlay {
+  type: 'marker' | 'polyline'
+  position?: [number, number]  // [lat, lng] for marker
+  positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  positions_gcj02?: [number, number][]  // GCJ02 坐标（高德、腾讯）
+  positions_bd09?: [number, number][]  // BD09 坐标（百度）
+  icon?: {
+    type: 'circle'
+    radius?: number
+    fillColor?: string
+    fillOpacity?: number
+    strokeColor?: string
+    strokeWidth?: number
+  }
+  label?: string
+  color?: string
+  weight?: number
+  opacity?: number
+  dashArray?: string
+  // 多坐标系支持（用于标记）
+  latitude_wgs84?: number
+  longitude_wgs84?: number
+  latitude_gcj02?: number | null
+  longitude_gcj02?: number | null
+  latitude_bd09?: number | null
+  longitude_bd09?: number | null
+}
+
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  coloredSegments?: Array<{ start: number; end: number; color?: string }> | null  // 多段彩色高亮（用于插值选择区段）
   highlightPointIndex?: number
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
+  disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  coloredSegments: null,
   highlightPointIndex: undefined,
   latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
   mapScale: 100,
   trackOrientation: 'horizontal',
+  disablePointHover: false,
+  customOverlays: () => [],
 })
 
 const configStore = useConfigStore()
@@ -173,6 +209,7 @@ const mapContainer = ref<HTMLElement>()
 let BMapInstance: any = null
 let polylines: any[] = []
 let highlightPolyline: any = null  // 路径段高亮图层
+let coloredPolylineLayers: any[] = []  // 多段彩色高亮图层（用于插值选择区段）
 let mouseMarker: any = null
 let customTooltip: HTMLElement | null = null  // 自定义 tooltip 元素
 let currentHighlightPoint: { index: number; position: { lng: number; lat: number }; point: Point } | null = null
@@ -182,6 +219,9 @@ let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 let latestPointMarkerAdded = false  // 标记是否已添加到地图
 let lastHoverIndex = -1
 let wheelEventHandler: ((e: WheelEvent) => void) | null = null  // 滚轮事件处理器引用
+let customOverlayMarkers: any[] = []  // 自定义覆盖层标记（用于绘制路径模式）
+let customOverlayPolylines: any[] = []  // 自定义覆盖层折线（用于绘制路径模式）
+let hasAutoFocused = false  // 标记是否已自动聚焦过（避免用户编辑时重复聚焦）
 // home 模式：按轨迹分开存储
 const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
 
@@ -217,7 +257,10 @@ function createPoint(lng: number, lat: number): any {
 // 辅助函数：创建 Polyline 对象（兼容两个版本）
 function createPolyline(points: any[], options: any): any {
   const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
-  return new BMapClass.Polyline(points, options)
+  console.log('[BMap] createPolyline - options:', options)
+  const polyline = new BMapClass.Polyline(points, options)
+  console.log('[BMap] createPolyline - 创建后，获取颜色:', polyline.getStrokeColor?.() || 'N/A')
+  return polyline
 }
 
 // 加载百度地图 JS API（支持 GL 版本和 Legacy 版本）
@@ -445,6 +488,75 @@ function createLatestPointMarkerOverlay() {
   return LatestPointMarkerOverlay
 }
 
+// 创建自定义标记覆盖类（用于绘制路径模式的控制点）- 支持两个版本
+function createCustomMarkerOverlay() {
+  const useLegacy = isLegacyMode.value
+  const BMapClass = useLegacy ? (window as any).BMap : (window as any).BMapGL
+
+  class CustomMarkerOverlay extends BMapClass.Overlay {
+    private _position: any = null
+    private _div: HTMLElement | null = null
+    private _radius: number = 6
+    private map: any = null
+    private _mapMoveHandler: any = null
+
+    constructor(position: any, div: HTMLElement, radius: number) {
+      super()
+      this._position = position
+      this._div = div
+      this._radius = radius
+    }
+
+    initialize(map: any): HTMLElement {
+      this.map = map
+      map.getPanes().markerPane.appendChild(this._div!)
+
+      this._mapMoveHandler = () => this.draw()
+      map.addEventListener('moveend', this._mapMoveHandler)
+      map.addEventListener('zoomend', this._mapMoveHandler)
+
+      return this._div!
+    }
+
+    draw() {
+      if (!this._div || !this._position || !this.map) return
+
+      // Legacy 版本使用 pointToPixel，GL 版本使用 pointToOverlayPixel
+      const position = this.map.pointToPixel
+        ? this.map.pointToPixel(this._position)
+        : this.map.pointToOverlayPixel(this._position)
+
+      if (position) {
+        this._div.style.left = (position.x - this._radius) + 'px'
+        this._div.style.top = (position.y - this._radius) + 'px'
+        console.log('[BMap] CustomMarkerOverlay draw:', {
+          position: this._position,
+          pixel: position,
+          style: { left: this._div.style.left, top: this._div.style.top },
+          divContent: this._div.textContent
+        })
+      }
+    }
+
+    remove() {
+      if (this._div && this._div.parentNode) {
+        this._div.parentNode.removeChild(this._div)
+      }
+
+      if (this.map && this._mapMoveHandler) {
+        this.map.removeEventListener('moveend', this._mapMoveHandler)
+        this.map.removeEventListener('zoomend', this._mapMoveHandler)
+      }
+
+      this._div = null
+      this.map = null
+      this._mapMoveHandler = null
+    }
+  }
+
+  return CustomMarkerOverlay
+}
+
 // 创建鼠标位置标记
 function createMouseMarker() {
   if (!BMapInstance) return
@@ -650,6 +762,7 @@ function hideMarker() {
 
 // 初始化地图
 async function initMap() {
+  console.log('[BMap] initMap 开始 - customOverlays:', props.customOverlays?.length || 0)
   if (!mapContainer.value) return
 
   try {
@@ -988,11 +1101,12 @@ async function initMap() {
     // 百度地图 mousemove 监听
     BMapInstance.addEventListener('mousemove', handleMouseMove)
 
-    // 移动端：点击地图显示轨迹信息
-    const isMobile = window.innerWidth <= 1366
-    if (isMobile) {
-      BMapInstance.addEventListener('click', (e: any) => {
-        // 百度地图事件对象可能有多种属性名，尝试不同的方式获取坐标
+    // 定义点击处理函数（绘制路径模式和移动端都需要）
+    const handleMapClick = (e: any) => {
+      console.log('[BMap] handleMapClick - 触发点击事件:', e)
+
+      // 绘制路径模式：直接发射点击事件（转换为 WGS84）
+      if (props.disablePointHover) {
         let lng: number | undefined
         let lat: number | undefined
 
@@ -1010,204 +1124,240 @@ async function initMap() {
           lat = e.lnglat.lat
         }
 
-        if (lng === undefined || lat === undefined) return
-
-        // 根据模式处理不同的逻辑
-        if (props.mode === 'home') {
-          // home 模式：显示轨迹信息
-          if (tracksData.size === 0) {
-            hideMarker()
-            return
-          }
-
-          const zoom = BMapInstance.getZoom()
-          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
-
-          let minDistance = Infinity
-          let nearestTrackId: number | null = null
-          let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
-
-          // 遍历所有轨迹，找到最近的轨迹
-          for (const [trackId, data] of tracksData) {
-            if (data.path.length < 2) continue
-
-            for (let i = 0; i < data.path.length - 1; i++) {
-              const p1: [number, number] = [data.path[i].lng, data.path[i].lat]
-              const p2: [number, number] = [data.path[i + 1].lng, data.path[i + 1].lat]
-              const closest = closestPointOnSegment([lng, lat], p1, p2)
-              const dist = distance([lng, lat], closest)
-
-              if (dist < minDistance) {
-                minDistance = dist
-                nearestPosition = { lng: closest[0], lat: closest[1] }
-                nearestTrackId = trackId
-              }
-            }
-          }
-
-          const triggered = minDistance < dynamicDistance
-
-          if (triggered && nearestTrackId !== null) {
-            const trackData = tracksData.get(nearestTrackId)
-            if (!trackData) return
-
-            const track = trackData.track
-
-            // 如果是同一条轨迹，跳过更新
-            if (nearestTrackId === lastHoverIndex) return
-
-            lastHoverIndex = nearestTrackId
-
-            // 先移除旧覆盖物
-            if (mouseMarker) {
-              try {
-                BMapInstance.removeOverlay(mouseMarker)
-              } catch (e) {
-                // ignore
-              }
-            }
-
-            // 创建新覆盖物实例并添加到地图
-            const MouseMarkerOverlay = createMouseMarkerOverlay()
-            mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
-            BMapInstance.addOverlay(mouseMarker)
-
-            // 格式化时间和里程
-            const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
-              if (!time) return '-'
-              const date = new Date(time)
-              if (endDate) {
-                return date.toLocaleString('zh-CN', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              }
-              return date.toLocaleString('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            }
-
-            const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
-              if (!start || !end) return false
-              const startDate = new Date(start)
-              const endDate = new Date(end)
-              return startDate.getFullYear() === endDate.getFullYear() &&
-                     startDate.getMonth() === endDate.getMonth() &&
-                     startDate.getDate() === endDate.getDate()
-            }
-
-            const formatTimeRange = () => {
-              const startTime = formatTime(track.start_time, false)
-              const endTime = isSameDay(track.start_time, track.end_time)
-                ? formatTime(track.end_time, true)
-                : formatTime(track.end_time, false)
-              return `${startTime} ~ ${endTime}`
-            }
-
-            const formatDistance = (meters: number | undefined) => {
-              if (meters === undefined) return '-'
-              if (meters < 1000) return `${meters.toFixed(1)} m`
-              return `${(meters / 1000).toFixed(2)} km`
-            }
-
-            const formatDuration = (seconds: number | undefined) => {
-              if (seconds === undefined) return '-'
-              const hours = Math.floor(seconds / 3600)
-              const minutes = Math.floor((seconds % 3600) / 60)
-              if (hours > 0) {
-                return `${hours}小时${minutes}分钟`
-              }
-              return `${minutes}分钟`
-            }
-
-            const content = `
-              <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer; pointer-events: auto;">
-                <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
-                <div style="color: #666;">时间: ${formatTimeRange()}</div>
-                <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
-                <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
-                <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
-              </div>
-            `
-
-            // 使用自定义 tooltip
-            if (customTooltip && mapContainer.value) {
-              const pointPixel = lngLatToContainerPoint(nearestPosition.lng, nearestPosition.lat)
-              if (pointPixel) {
-                const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
-                updateCustomTooltip(content, pointPixel, containerSize)
-              }
-            }
-
-            // 发射事件
-            emit('track-hover', nearestTrackId)
-          } else {
-            hideMarker()
-          }
+        if (lng !== undefined && lat !== undefined) {
+          // 百度地图使用 BD09 坐标，需要转换为 WGS84
+          const [wgsLng, wgsLat] = bd09ToWgs84(lng, lat)
+          console.log('[BMap] handleMapClick - 绘制路径模式，发射 map-click:', wgsLng, wgsLat)
+          emit('map-click', wgsLng, wgsLat)
         } else {
-          // detail 模式：显示点信息
-          if (trackPath.length < 2) {
-            hideMarker()
-            return
-          }
+          console.warn('[BMap] handleMapClick - 无法获取坐标:', e)
+        }
+        return
+      }
 
-          const zoom = BMapInstance.getZoom()
-          const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+      // 移动端：点击地图显示轨迹信息
+      const isMobile = window.innerWidth <= 1366
+      if (!isMobile) return  // 桌面端不处理点击显示信息
 
-          let minDistance = Infinity
-          let nearestIndex = -1
-          let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
+      // 百度地图事件对象可能有多种属性名，尝试不同的方式获取坐标
+      let lng: number | undefined
+      let lat: number | undefined
 
-          // 查找最近的点
-          for (let i = 0; i < trackPath.length - 1; i++) {
-            const p1: [number, number] = [trackPath[i].lng, trackPath[i].lat]
-            const p2: [number, number] = [trackPath[i + 1].lng, trackPath[i + 1].lat]
+      if (e.latLng) {
+        lng = e.latLng.lng
+        lat = e.latLng.lat
+      } else if (e.latlng) {
+        lng = e.latlng.lng
+        lat = e.latlng.lat
+      } else if (e.point) {
+        lng = e.point.lng
+        lat = e.point.lat
+      } else if (e.lnglat) {
+        lng = e.lnglat.lng
+        lat = e.lnglat.lat
+      }
+
+      if (lng === undefined || lat === undefined) return
+
+      // 根据模式处理不同的逻辑
+      if (props.mode === 'home') {
+        // home 模式：显示轨迹信息
+        if (tracksData.size === 0) {
+          hideMarker()
+          return
+        }
+
+        const zoom = BMapInstance.getZoom()
+        const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+        let minDistance = Infinity
+        let nearestTrackId: number | null = null
+        let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
+
+        // 遍历所有轨迹，找到最近的轨迹
+        for (const [trackId, data] of tracksData) {
+          if (data.path.length < 2) continue
+
+          for (let i = 0; i < data.path.length - 1; i++) {
+            const p1: [number, number] = [data.path[i].lng, data.path[i].lat]
+            const p2: [number, number] = [data.path[i + 1].lng, data.path[i + 1].lat]
             const closest = closestPointOnSegment([lng, lat], p1, p2)
             const dist = distance([lng, lat], closest)
 
             if (dist < minDistance) {
               minDistance = dist
               nearestPosition = { lng: closest[0], lat: closest[1] }
-              const distToP1 = distance(closest, p1)
-              const distToP2 = distance(closest, p2)
-              nearestIndex = distToP1 < distToP2 ? i : i + 1
+              nearestTrackId = trackId
             }
-          }
-
-          const triggered = minDistance < dynamicDistance
-
-          if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
-            const point = trackPoints[nearestIndex]
-
-            // 先移除旧覆盖物
-            if (mouseMarker) {
-              try {
-                BMapInstance.removeOverlay(mouseMarker)
-              } catch (e) {
-                // ignore
-              }
-            }
-
-            // 创建新覆盖物实例并添加到地图
-            const MouseMarkerOverlay = createMouseMarkerOverlay()
-            mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
-            BMapInstance.addOverlay(mouseMarker)
-
-            // 显示 tooltip（每次创建新实例）
-            showTooltip(nearestIndex, point, nearestPosition)
-
-            lastHoverIndex = nearestIndex
-            emit('point-hover', point, nearestIndex)
-          } else {
-            hideMarker()
           }
         }
-      })
+
+        const triggered = minDistance < dynamicDistance
+
+        if (triggered && nearestTrackId !== null) {
+          const trackData = tracksData.get(nearestTrackId)
+          if (!trackData) return
+
+          const track = trackData.track
+
+          // 如果是同一条轨迹，跳过更新
+          if (nearestTrackId === lastHoverIndex) return
+
+          lastHoverIndex = nearestTrackId
+
+          // 先移除旧覆盖物
+          if (mouseMarker) {
+            try {
+              BMapInstance.removeOverlay(mouseMarker)
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          // 创建新覆盖物实例并添加到地图
+          const MouseMarkerOverlay = createMouseMarkerOverlay()
+          mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
+          BMapInstance.addOverlay(mouseMarker)
+
+          // 格式化时间和里程
+          const formatTime = (time: string | null | undefined, endDate: boolean = false) => {
+            if (!time) return '-'
+            const date = new Date(time)
+            if (endDate) {
+              return date.toLocaleString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            }
+            return date.toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+          }
+
+          const isSameDay = (start: string | null | undefined, end: string | null | undefined) => {
+            if (!start || !end) return false
+            const startDate = new Date(start)
+            const endDate = new Date(end)
+            return startDate.getFullYear() === endDate.getFullYear() &&
+                   startDate.getMonth() === endDate.getMonth() &&
+                   startDate.getDate() === endDate.getDate()
+          }
+
+          const formatTimeRange = () => {
+            const startTime = formatTime(track.start_time, false)
+            const endTime = isSameDay(track.start_time, track.end_time)
+              ? formatTime(track.end_time, true)
+              : formatTime(track.end_time, false)
+            return `${startTime} ~ ${endTime}`
+          }
+
+          const formatDistance = (meters: number | undefined) => {
+            if (meters === undefined) return '-'
+            if (meters < 1000) return `${meters.toFixed(1)} m`
+            return `${(meters / 1000).toFixed(2)} km`
+          }
+
+          const formatDuration = (seconds: number | undefined) => {
+            if (seconds === undefined) return '-'
+            const hours = Math.floor(seconds / 3600)
+            const minutes = Math.floor((seconds % 3600) / 60)
+            if (hours > 0) {
+              return `${hours}小时${minutes}分钟`
+            }
+            return `${minutes}分钟`
+          }
+
+          const content = `
+            <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); font-size: 12px; line-height: 1.6; cursor: pointer; pointer-events: auto;">
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="color: #666;">时间: ${formatTimeRange()}</div>
+              <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
+              <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
+              <div style="font-size: 10px; color: #409eff; margin-top: 4px;">点击查看详情</div>
+            </div>
+          `
+
+          // 使用自定义 tooltip
+          if (customTooltip && mapContainer.value) {
+            const pointPixel = lngLatToContainerPoint(nearestPosition.lng, nearestPosition.lat)
+            if (pointPixel) {
+              const containerSize = { x: mapContainer.value.clientWidth, y: mapContainer.value.clientHeight }
+              updateCustomTooltip(content, pointPixel, containerSize)
+            }
+          }
+
+          // 发射事件
+          emit('track-hover', nearestTrackId)
+        } else {
+          hideMarker()
+        }
+      } else {
+        // detail 模式：显示点信息
+        if (trackPath.length < 2) {
+          hideMarker()
+          return
+        }
+
+        const zoom = BMapInstance.getZoom()
+        const dynamicDistance = Math.pow(2, 12 - zoom) * 0.008
+
+        let minDistance = Infinity
+        let nearestIndex = -1
+        let nearestPosition: { lng: number; lat: number } = { lng: 0, lat: 0 }
+
+        // 查找最近的点
+        for (let i = 0; i < trackPath.length - 1; i++) {
+          const p1: [number, number] = [trackPath[i].lng, trackPath[i].lat]
+          const p2: [number, number] = [trackPath[i + 1].lng, trackPath[i + 1].lat]
+          const closest = closestPointOnSegment([lng, lat], p1, p2)
+          const dist = distance([lng, lat], closest)
+
+          if (dist < minDistance) {
+            minDistance = dist
+            nearestPosition = { lng: closest[0], lat: closest[1] }
+            const distToP1 = distance(closest, p1)
+            const distToP2 = distance(closest, p2)
+            nearestIndex = distToP1 < distToP2 ? i : i + 1
+          }
+        }
+
+        const triggered = minDistance < dynamicDistance
+
+        if (triggered && nearestIndex >= 0 && nearestIndex < trackPoints.length) {
+          const point = trackPoints[nearestIndex]
+
+          // 先移除旧覆盖物
+          if (mouseMarker) {
+            try {
+              BMapInstance.removeOverlay(mouseMarker)
+            } catch (e) {
+              // ignore
+            }
+          }
+
+          // 创建新覆盖物实例并添加到地图
+          const MouseMarkerOverlay = createMouseMarkerOverlay()
+          mouseMarker = new MouseMarkerOverlay(createPoint(nearestPosition.lng, nearestPosition.lat))
+          BMapInstance.addOverlay(mouseMarker)
+
+          // 显示 tooltip（每次创建新实例）
+          showTooltip(nearestIndex, point, nearestPosition)
+
+          lastHoverIndex = nearestIndex
+          emit('point-hover', point, nearestIndex)
+        } else {
+          hideMarker()
+        }
+      }
     }
+
+    // 注册点击事件监听器
+    BMapInstance.addEventListener('click', handleMapClick)
+    console.log('[BMap] 已注册点击事件监听器（绘制路径模式和移动端）')
 
     // Legacy 版本：手动添加滚轮缩放支持
     if (isLegacyMode.value && mapContainer.value) {
@@ -1245,6 +1395,80 @@ async function initMap() {
 
     // 绘制轨迹
     drawTracks()
+    // 绘制自定义覆盖层（用于绘制路径模式）
+    // 延迟调用，确保 customOverlays prop 已传递
+    // 百度地图脚本加载需要时间，可能需要多次尝试
+    nextTick(() => {
+      setTimeout(() => {
+        console.log('[BMap] initMap - 延迟后检查 customOverlays:', props.customOverlays?.length || 0)
+        drawCustomOverlays()
+
+        // 绘制路径模式：仅在首次加载时自动聚焦到覆盖物区域
+        if (props.disablePointHover && props.customOverlays && props.customOverlays.length > 0 && !hasAutoFocused) {
+          // 计算所有标记点的边界
+          let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+          let hasValidPoint = false
+
+          for (const overlay of props.customOverlays) {
+            if (overlay.type === 'marker') {
+              let lat: number | undefined, lng: number | undefined
+              // 优先使用 BD09 坐标
+              if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+                lat = overlay.latitude_bd09
+                lng = overlay.longitude_bd09
+              } else if (overlay.position) {
+                // WGS84 坐标，需要转换
+                const [bdLng, bdLat] = wgs84ToBd09(overlay.position[1], overlay.position[0])
+                lat = bdLat
+                lng = bdLng
+              }
+
+              if (lat !== undefined && lng !== undefined) {
+                hasValidPoint = true
+                minLat = Math.min(minLat, lat)
+                maxLat = Math.max(maxLat, lat)
+                minLon = Math.min(minLon, lng)
+                maxLon = Math.max(maxLon, lng)
+              }
+            }
+          }
+
+          // 如果有有效的标记点，聚焦到它们
+          if (hasValidPoint && BMapInstance) {
+            const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+            const boundsPoints = [
+              new BMapClass.Point(minLon, minLat),
+              new BMapClass.Point(maxLon, maxLat)
+            ]
+
+            // 计算合适的 padding
+            const container = mapContainer.value
+            let padding = 50
+            if (container) {
+              const size = Math.max(container.clientWidth, container.clientHeight)
+              padding = Math.round(size * 0.15) // 15% padding
+            }
+
+            // 延迟执行，确保覆盖物绘制完成和地图初始化稳定
+            setTimeout(() => {
+              BMapInstance.setViewport(boundsPoints, {
+                margins: [padding, padding, padding, padding]
+              })
+              console.log('[BMap] initMap - 自动聚焦到覆盖物区域')
+              hasAutoFocused = true  // 标记已自动聚焦
+            }, 800)
+          }
+        }
+
+        // 如果仍然没有覆盖层，再次尝试
+        if (!props.customOverlays || props.customOverlays.length === 0) {
+          setTimeout(() => {
+            console.log('[BMap] initMap - 二次检查 customOverlays:', props.customOverlays?.length || 0)
+            drawCustomOverlays()
+          }, 200)
+        }
+      }, 100)
+    })
   } catch (error) {
     console.error('[BMap] Failed to initialize:', error)
   }
@@ -1303,6 +1527,17 @@ function drawTracks() {
     console.log('[BMap] drawTracks - map-only 模式，开始绘制轨迹')
   }
 
+  // 调试：记录 tracks 信息
+  console.log('[BMap] drawTracks - 开始绘制, tracks 数量:', props.tracks?.length || 0)
+  if (props.tracks && props.tracks.length > 0) {
+    console.log('[BMap] drawTracks - 第一个 track:', {
+      id: props.tracks[0].id,
+      opacity: props.tracks[0].opacity,
+      color: props.tracks[0].color,
+      pointsCount: props.tracks[0].points?.length
+    })
+  }
+
   for (const track of props.tracks) {
     if (!track.points || track.points.length === 0) continue
 
@@ -1350,10 +1585,21 @@ function drawTracks() {
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
+    // 使用 track.color 或默认红色
+    const strokeColor = track.color || '#FF0000'
+    // 使用 track.opacity 或默认 0.8
+    const strokeOpacity = track.opacity !== undefined ? track.opacity : 0.8
+    console.log('[BMap] drawTracks - 绘制轨迹:', {
+      trackId: track.id,
+      trackColor: track.color,
+      strokeColor,
+      trackOpacity: track.opacity,
+      strokeOpacity
+    })
     const polyline = createPolyline(points, {
-      strokeColor: '#FF0000',
+      strokeColor,
       strokeWeight: isHighlighted ? 5 : 3,
-      strokeOpacity: 0.8,
+      strokeOpacity,
     })
 
     // 桌面端：点击轨迹直接跳转
@@ -1380,7 +1626,27 @@ function drawTracks() {
     polylines.push(polyline)
   }
 
-  // 绘制路径段高亮（detail 模式）
+  // 绘制多段彩色高亮（插值选择区段）
+  if (props.mode === 'detail' && props.coloredSegments && trackPath.length > 0) {
+    for (const seg of props.coloredSegments) {
+      const { start, end, color } = seg
+      if (start >= 0 && end < trackPath.length && start <= end) {
+        const segmentPath = trackPath.slice(start, end + 1)
+        const pointPath = segmentPath.map(p => createPoint(p.lng, p.lat))
+        if (pointPath.length > 0) {
+          const coloredPolyline = createPolyline(pointPath, {
+            strokeColor: color || '#67c23a',  // 默认绿色
+            strokeWeight: 7,
+            strokeOpacity: 0.9,
+          })
+          BMapInstance.addOverlay(coloredPolyline)
+          coloredPolylineLayers.push(coloredPolyline)
+        }
+      }
+    }
+  }
+
+  // 绘制路径段高亮（detail 模式，兼容旧逻辑）
   if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
     // 确保索引在有效范围内
@@ -1399,8 +1665,8 @@ function drawTracks() {
     }
   }
 
-  // 自动适应视图（仅在非 map-only 模式下）
-  if (bounds.length > 0 && !isMapOnlyMode) {
+  // 自动适应视图（绘制路径模式下禁用，仅在非 map-only 模式下）
+  if (bounds.length > 0 && !isMapOnlyMode && !props.disablePointHover) {
     // 延迟执行，确保地图已完全渲染
     setTimeout(() => {
       if (isLegacyMode.value) {
@@ -1483,11 +1749,129 @@ function clearTracks() {
     }
     highlightPolyline = null
   }
+
+  // 清除多段彩色高亮图层
+  coloredPolylineLayers.forEach(polyline => {
+    try {
+      BMapInstance.removeOverlay(polyline)
+    } catch (e) {
+      // ignore
+    }
+  })
+  coloredPolylineLayers = []
 }
 
 // 更新轨迹
 function updateTracks() {
   drawTracks()
+}
+
+// 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
+function drawCustomOverlays() {
+  if (!BMapInstance) {
+    console.log('[BMap] drawCustomOverlays - BMapInstance 未初始化')
+    return
+  }
+
+  const BMap = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  console.log('[BMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0, 'isLegacyMode:', isLegacyMode.value)
+
+  // 清除现有的自定义覆盖层
+  customOverlayMarkers.forEach(marker => {
+    try { BMapInstance.removeOverlay(marker) } catch { /* ignore */ }
+  })
+  customOverlayMarkers = []
+  customOverlayPolylines.forEach(polyline => {
+    try { BMapInstance.removeOverlay(polyline) } catch { /* ignore */ }
+  })
+  customOverlayPolylines = []
+
+  if (!props.customOverlays || props.customOverlays.length === 0) {
+    console.log('[BMap] drawCustomOverlays - 没有覆盖层需要绘制')
+    return
+  }
+
+  // 使用工厂函数创建的自定义覆盖类
+  const CustomMarkerOverlay = createCustomMarkerOverlay()
+
+  for (const overlay of props.customOverlays) {
+    if (overlay.type === 'marker') {
+      // 优先使用 BD09 坐标（百度地图坐标系），否则使用 position 字段（WGS84）
+      let lat: number, lng: number
+      if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+        lat = overlay.latitude_bd09
+        lng = overlay.longitude_bd09
+        console.log('[BMap] 使用 BD09 坐标:', { label: overlay.label, lat, lng })
+      } else if (overlay.position) {
+        [lat, lng] = overlay.position
+        console.log('[BMap] 使用 position (WGS84):', { label: overlay.label, lat, lng })
+      } else {
+        console.log('[BMap] 跳过标记: 无有效坐标', overlay)
+        continue
+      }
+
+      if (!overlay.icon) {
+        console.log('[BMap] 跳过标记: 无 icon', overlay)
+        continue
+      }
+
+      const radius = overlay.icon.radius || 6
+      const fillColor = overlay.icon.fillColor || '#f56c6c'
+      const fillOpacity = overlay.icon.fillOpacity !== undefined ? overlay.icon.fillOpacity : 0.9
+      const strokeColor = overlay.icon.strokeColor || '#fff'
+      const strokeWidth = overlay.icon.strokeWidth || 2
+
+      // 创建自定义内容
+      const div = document.createElement('div')
+      div.style.cssText = `
+        position: absolute;
+        width: ${radius * 2}px;
+        height: ${radius * 2}px;
+        border-radius: 50%;
+        background-color: ${fillColor};
+        opacity: ${fillOpacity};
+        border: ${strokeWidth}px solid ${strokeColor};
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: ${radius * 0.8}px;
+        font-weight: bold;
+      `
+
+      if (overlay.label) {
+        div.textContent = overlay.label
+      }
+
+      // 使用工厂函数创建的自定义覆盖类
+      const point = new BMap.Point(lng, lat)
+      console.log('[BMap] 创建标记覆盖物:', { label: overlay.label, point, radius })
+      const marker = new CustomMarkerOverlay(point, div, radius)
+      BMapInstance.addOverlay(marker)
+      customOverlayMarkers.push(marker)
+      console.log('[BMap] 标记覆盖物已添加, 当前数量:', customOverlayMarkers.length)
+    } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
+      // 优先使用 BD09 坐标，回退到 WGS84
+      const positions = overlay.positions_bd09 || overlay.positions
+      const points = positions.map(([lat, lng]) => new BMap.Point(lng, lat))
+      const color = overlay.color || '#409eff'
+      const weight = overlay.weight || 3
+      const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+      const dashArray = overlay.dashArray
+
+      const PolylineClass = BMap.Polyline
+      const polyline = new PolylineClass(points, {
+        strokeColor: color,
+        strokeWeight: weight,
+        strokeOpacity: opacity,
+        strokeStyle: dashArray ? 'dashed' : 'solid',
+      })
+
+      BMapInstance.addOverlay(polyline)
+      customOverlayPolylines.push(polyline)
+    }
+  }
 }
 
 // 监听 tracks 变化
@@ -1503,9 +1887,85 @@ watch(() => props.highlightSegment, () => {
   updateTracks()
 })
 
+watch(() => props.coloredSegments, () => {
+  updateTracks()
+})
+
+// 监听 customOverlays 变化（用于绘制路径模式）
+watch(() => props.customOverlays, (newVal) => {
+  console.log('[BMap] watch customOverlays - 覆盖层数量:', newVal?.length || 0)
+  drawCustomOverlays()
+}, { deep: true })
+
 // 生命周期
 onMounted(async () => {
   await init()
+})
+
+// 使用 watchEffect 监听 customOverlays 变化，确保在地图初始化后也能绘制
+watchEffect(() => {
+  // 只在地图实例存在且 customOverlays 有数据时才绘制
+  if (BMapInstance && props.customOverlays && props.customOverlays.length > 0) {
+    console.log('[BMap] watchEffect - 检测到 customOverlays 变化:', props.customOverlays.length)
+    drawCustomOverlays()
+
+    // 绘制路径模式：仅在首次加载时自动聚焦到覆盖物区域
+    if (props.disablePointHover && props.customOverlays.length > 0 && !hasAutoFocused) {
+      // 计算所有标记点的边界
+      let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+      let hasValidPoint = false
+
+      for (const overlay of props.customOverlays) {
+        if (overlay.type === 'marker') {
+          let lat: number | undefined, lng: number | undefined
+          // 优先使用 BD09 坐标
+          if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+            lat = overlay.latitude_bd09
+            lng = overlay.longitude_bd09
+          } else if (overlay.position) {
+            // WGS84 坐标，需要转换
+            const [bdLng, bdLat] = wgs84ToBd09(overlay.position[1], overlay.position[0])
+            lat = bdLat
+            lng = bdLng
+          }
+
+          if (lat !== undefined && lng !== undefined) {
+            hasValidPoint = true
+            minLat = Math.min(minLat, lat)
+            maxLat = Math.max(maxLat, lat)
+            minLon = Math.min(minLon, lng)
+            maxLon = Math.max(maxLon, lng)
+          }
+        }
+      }
+
+      // 如果有有效的标记点，聚焦到它们
+      if (hasValidPoint) {
+        const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+        const boundsPoints = [
+          new BMapClass.Point(minLon, minLat),
+          new BMapClass.Point(maxLon, maxLat)
+        ]
+
+        // 计算合适的 padding
+        const container = mapContainer.value
+        let padding = 50
+        if (container) {
+          const size = Math.max(container.clientWidth, container.clientHeight)
+          padding = Math.round(size * 0.15) // 15% padding
+        }
+
+        // 延迟执行，确保覆盖物绘制完成
+        setTimeout(() => {
+          BMapInstance.setViewport(boundsPoints, {
+            margins: [padding, padding, padding, padding]
+          })
+          console.log('[BMap] watchEffect - 自动聚焦到覆盖物区域')
+          hasAutoFocused = true  // 标记已自动聚焦，后续不再重复
+        }, 200)
+      }
+    }
+  }
 })
 
 onUnmounted(() => {
@@ -1768,6 +2228,53 @@ function fitBounds(paddingPercent: number = 5) {
   }
 }
 
+// 根据边界框直接设置地图视野（用于聚焦到特定区段）
+function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }, paddingPercent: number = 15) {
+  if (!BMapInstance) {
+    console.log('[BMap] fitToBounds - BMapInstance 未初始化')
+    return
+  }
+
+  // 获取当前使用的地图 API 命名空间（GL 或 Legacy）
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  const { minLat, maxLat, minLon, maxLon } = bounds
+
+  // 将 WGS84 坐标转换为 BD09（百度地图坐标系）
+  const [bdMinLon, bdMinLat] = wgs84ToBd09(minLon, minLat)
+  const [bdMaxLon, bdMaxLat] = wgs84ToBd09(maxLon, maxLat)
+
+  console.log('[BMap] fitToBounds - WGS84边界:', { minLat, maxLat, minLon, maxLon },
+              'BD09边界:', { minLat: bdMinLat, maxLat: bdMaxLat, minLon: bdMinLon, maxLon: bdMaxLon })
+
+  // 创建边界点数组
+  const boundsPoints = [
+    new BMapClass.Point(bdMinLon, bdMinLat),
+    new BMapClass.Point(bdMaxLon, bdMaxLat)
+  ]
+
+  // 获取容器尺寸计算 padding 像素值
+  const container = mapContainer.value
+  let padding = 50 // 默认 50px
+  if (container) {
+    const size = Math.max(container.clientWidth, container.clientHeight)
+    padding = Math.round(size * (paddingPercent / 100))
+  }
+
+  if (isLegacyMode.value) {
+    // Legacy 版本：使用 setViewport
+    BMapInstance.setViewport(boundsPoints, {
+      margins: [padding, padding, padding, padding]
+    })
+    console.log('[BMap] fitToBounds - Legacy版本 setViewport called, padding:', padding)
+  } else {
+    // GL 版本：使用 setViewport
+    BMapInstance.setViewport(boundsPoints, {
+      margins: [padding, padding, padding, padding]
+    })
+    console.log('[BMap] fitToBounds - GL版本 setViewport called, padding:', padding)
+  }
+}
+
 // 更新实时轨迹最新点标记
 function updateLatestPointMarker() {
   if (!latestPointMarker) return
@@ -1906,6 +2413,7 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  fitToBounds,
   getMapElement: () => mapContainer.value || null,
   async captureMap(): Promise<string | null> {
     if (!BMapInstance || !mapContainer.value) return null

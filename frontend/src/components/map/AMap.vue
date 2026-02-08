@@ -9,6 +9,7 @@ import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { gcj02ToWgs84 } from '@/utils/coordTransform'
 
 // 类型定义
 interface Point {
@@ -128,40 +129,70 @@ const emit = defineEmits<{
   (e: 'point-hover', point: Point | null, pointIndex: number): void
   (e: 'track-hover', trackId: number | null): void
   (e: 'track-click', trackId: number): void
+  (e: 'map-click', lng: number, lat: number): void  // 地图点击事件
 }>()
 
 interface Track {
-  id: number
+  id: number | string
   points: Point[]
   name?: string
   start_time?: string | null
   end_time?: string | null
   distance?: number
   duration?: number
+  opacity?: number  // 轨迹透明度
+}
+
+// 自定义覆盖层类型（用于绘制路径模式的控制点和曲线）
+interface CustomOverlay {
+  type: 'marker' | 'polyline'
+  position?: [number, number]  // [lat, lng] for marker
+  positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  icon?: {
+    type: 'circle'
+    radius: number
+    fillColor: string
+    fillOpacity: number
+    strokeColor: string
+    strokeWidth: number
+  }
+  label?: string  // marker label
+  color?: string  // polyline color
+  weight?: number  // polyline weight
+  opacity?: number  // polyline opacity
+  dashArray?: string  // polyline dashArray
 }
 
 interface Props {
   tracks?: Track[]
   highlightTrackId?: number
   highlightSegment?: { start: number; end: number } | null
+  coloredSegments?: Array<{ start: number; end: number; color: string }> | null  // 多段彩色高亮
+  availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表
   highlightPointIndex?: number
   latestPointIndex?: number | null  // 实时轨迹最新点索引（显示绿色标记）
   defaultLayerId?: string
   mode?: 'home' | 'detail'
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
+  disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
 const props = withDefaults(defineProps<Props>(), {
   tracks: () => [],
   highlightTrackId: undefined,
   highlightSegment: null,
+  coloredSegments: null,
+  availableSegments: null,
   highlightPointIndex: undefined,
   latestPointIndex: null,
   defaultLayerId: undefined,
   mode: 'detail',
   mapScale: 100,
   trackOrientation: 'horizontal',
+  disablePointHover: false,
+  customOverlays: () => [],
 })
 
 // 检测是否为嵌入模式
@@ -176,6 +207,9 @@ const mapContainer = ref<HTMLElement>()
 let AMapInstance: any = null
 let polylines: any[] = []
 let highlightPolyline: any = null  // 路径段高亮图层
+let coloredPolylines: any[] = []  // 多段彩色高亮图层
+let customOverlayMarkers: any[] = []  // 自定义覆盖层标记
+let customOverlayPolylines: any[] = []  // 自定义覆盖层折线
 let mouseMarker: any = null  // 鼠标位置标记
 let tooltip: any = null  // 信息提示框
 let documentMouseMoveHandler: ((e: MouseEvent) => void) | null = null  // document 鼠标移动处理函数
@@ -672,6 +706,12 @@ async function initMap() {
 
     // 统一的鼠标处理函数
     const handleMouseMove = (mouseLngLat: [number, number]) => {
+      // 绘制路径模式：禁用 tooltip
+      if (props.disablePointHover) {
+        hideMarker()
+        return
+      }
+
       if (props.mode === 'home') {
         handleHomeModeMouseMove(mouseLngLat)
       } else {
@@ -937,6 +977,22 @@ async function initMap() {
     // 点击地图显示轨迹信息或跳转
     // 定义点击处理函数（桌面端和移动端共用）
     const handleMapClick = (e: any) => {
+      console.log('[AMap] handleMapClick - 触发点击事件:', e)
+
+      // 绘制路径模式：直接发射点击事件（转换为 WGS84）
+      if (props.disablePointHover) {
+        const lngLat = e.lnglat
+        if (!lngLat) {
+          console.warn('[AMap] handleMapClick - lngLat 为空', e)
+          return
+        }
+        // 高德地图使用 GCJ02 坐标，需要转换为 WGS84
+        const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
+        console.log('[AMap] handleMapClick - 绘制路径模式，发射 map-click:', wgsLng, wgsLat)
+        emit('map-click', wgsLng, wgsLat)
+        return
+      }
+
       // 检查点击是否来自 InfoWindow 内部，如果是则忽略（由 document 点击处理器处理）
       const originalEvent = e.originalEvent
       if (originalEvent && originalEvent.target) {
@@ -1239,8 +1295,8 @@ async function initMap() {
       }
     })
 
-    // 绘制轨迹
-    drawTracks()
+    // 更新轨迹（包括自定义覆盖层）
+    updateTracks()
   } catch (error) {
     console.error('[AMap] Failed to initialize:', error)
   }
@@ -1306,11 +1362,15 @@ function drawTracks() {
 
     // 绘制轨迹线
     const isHighlighted = track.id === props.highlightTrackId
+    // 使用 track.opacity 或默认值 0.8
+    const trackOpacity = track.opacity !== undefined ? track.opacity : 0.8
+    // 使用 track.color 或默认红色
+    const strokeColor = track.color || '#FF0000'
     const polyline = new AMap.Polyline({
       path: path,
       borderWeight: 1,
-      strokeColor: '#FF0000',
-      strokeOpacity: 0.8,
+      strokeColor,
+      strokeOpacity: trackOpacity,
       strokeWeight: isHighlighted ? 5 : 3,
       lineJoin: 'round',
       bubble: true,  // 允许鼠标事件冒泡，以便地图能够捕获 mousemove 和 click
@@ -1321,43 +1381,53 @@ function drawTracks() {
     polylines.push(polyline)
   }
 
-  // 绘制路径段高亮（detail 模式）
-  console.log('[AMap] highlight check:', {
-    mode: props.mode,
-    highlightSegment: props.highlightSegment,
-    trackPathLength: trackPath.length,
-  })
-  if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
+  // 绘制多段彩色高亮（插值页面）
+  if (props.mode === 'detail' && props.coloredSegments && trackPath.length > 0) {
+    for (const seg of props.coloredSegments) {
+      const { start, end, color } = seg
+      if (start >= 0 && end < trackPath.length && start <= end) {
+        const segmentPath = trackPath.slice(start, end + 1)
+        const lngLatPath = segmentPath.map(p => new AMap.LngLat(p.lng, p.lat))
+        if (lngLatPath.length > 0) {
+          const coloredPolyline = new AMap.Polyline({
+            path: lngLatPath,
+            borderWeight: 1,
+            strokeColor: color,
+            strokeOpacity: 0.9,
+            strokeWeight: 7,
+            lineJoin: 'round',
+            bubble: true,
+          })
+          AMapInstance.add(coloredPolyline)
+          coloredPolylines.push(coloredPolyline)
+        }
+      }
+    }
+  }
+  // 绘制单段高亮（detail 模式，兼容旧逻辑）
+  // 红色高亮用于插值轨迹
+  else if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
-    console.log('[AMap] highlight indices:', { start, end, trackPathLength: trackPath.length })
-    // 确保索引在有效范围内
     if (start >= 0 && end < trackPath.length && start <= end) {
-      console.log('[AMap] Drawing highlight polyline, segment length:', end - start + 1)
       const segmentPath = trackPath.slice(start, end + 1)
-      // 转换为 AMap.LngLat 对象数组
       const lngLatPath = segmentPath.map(p => new AMap.LngLat(p.lng, p.lat))
       if (lngLatPath.length > 0) {
         highlightPolyline = new AMap.Polyline({
           path: lngLatPath,
           borderWeight: 1,
-          strokeColor: '#409eff',  // 蓝色高亮
+          strokeColor: '#ff4d4f',  // 红色高亮（插值轨迹）
           strokeOpacity: 0.9,
           strokeWeight: 7,
           lineJoin: 'round',
           bubble: true,
         })
         AMapInstance.add(highlightPolyline)
-        console.log('[AMap] highlightPolyline added to map')
-      } else {
-        console.log('[AMap] lngLatPath is empty!')
       }
-    } else {
-      console.log('[AMap] highlight condition failed:', { start, end, trackPathLength: trackPath.length })
     }
   }
 
-  // 自动适应视图
-  if (polylines.length > 0) {
+  // 自动适应视图（绘制路径模式下禁用）
+  if (polylines.length > 0 && !props.disablePointHover) {
     try {
       AMapInstance.setFitView(polylines, false, [60, 60, 60, 60])
     } catch (e) {
@@ -1396,11 +1466,156 @@ function clearTracks() {
     }
     highlightPolyline = null
   }
+
+  // 清除多段彩色高亮
+  coloredPolylines.forEach((polyline) => {
+    try {
+      AMapInstance.remove(polyline)
+    } catch (e) {
+      // ignore
+    }
+  })
+  coloredPolylines = []
 }
 
 // 更新轨迹
 function updateTracks() {
   drawTracks()
+  drawCustomOverlays()
+}
+
+// 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
+function drawCustomOverlays() {
+  if (!AMapInstance) {
+    console.log('[AMap] drawCustomOverlays - AMapInstance 未初始化')
+    return
+  }
+
+  const AMap = (window as any).AMap
+  console.log('[AMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0)
+
+  // 清除现有的自定义覆盖层
+  customOverlayMarkers.forEach(marker => {
+    try { AMapInstance.remove(marker) } catch { /* ignore */ }
+  })
+  customOverlayMarkers = []
+  customOverlayPolylines.forEach(polyline => {
+    try { AMapInstance.remove(polyline) } catch { /* ignore */ }
+  })
+  customOverlayPolylines = []
+
+  if (!props.customOverlays || props.customOverlays.length === 0) {
+    console.log('[AMap] drawCustomOverlays - 没有覆盖层需要绘制')
+    return
+  }
+
+  for (const overlay of props.customOverlays) {
+    if (overlay.type === 'marker') {
+      // 优先使用 GCJ02 坐标（高德地图坐标系），否则使用 position 字段（WGS84）
+      let lat: number, lng: number
+      if (overlay.latitude_gcj02 != null && overlay.longitude_gcj02 != null) {
+        lat = overlay.latitude_gcj02
+        lng = overlay.longitude_gcj02
+      } else if (overlay.position) {
+        [lat, lng] = overlay.position
+      } else {
+        continue
+      }
+
+      if (!overlay.icon) continue
+
+      const radius = overlay.icon.radius || 6
+      const fillColor = overlay.icon.fillColor || '#f56c6c'
+      const fillOpacity = overlay.icon.fillOpacity !== undefined ? overlay.icon.fillOpacity : 0.9
+      const strokeColor = overlay.icon.strokeColor || '#fff'
+      const strokeWidth = overlay.icon.strokeWidth || 2
+
+      // 创建自定义内容的 Marker
+      const content = document.createElement('div')
+      content.style.cssText = `
+        width: ${radius * 2}px;
+        height: ${radius * 2}px;
+        border-radius: 50%;
+        background-color: ${fillColor};
+        opacity: ${fillOpacity};
+        border: ${strokeWidth}px solid ${strokeColor};
+        box-sizing: border-box;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #fff;
+        font-size: ${radius * 0.8}px;
+        font-weight: bold;
+      `
+
+      if (overlay.label) {
+        content.textContent = overlay.label
+      }
+
+      const marker = new AMap.Marker({
+        position: new AMap.LngLat(lng, lat),
+        content: content,
+        offset: new AMap.Pixel(-radius, -radius),
+        zIndex: 100,
+        bubble: true,  // 允许点击事件冒泡到地图
+      })
+
+      // 绘制路径模式：点击 Marker 也触发 map-click 事件
+      if (props.disablePointHover) {
+        marker.on('click', (e: any) => {
+          const lngLat = e.lnglat
+          const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
+          console.log('[AMap] Marker 点击，发射 map-click:', wgsLng, wgsLat)
+          emit('map-click', wgsLng, wgsLat)
+        })
+      }
+
+      AMapInstance.add(marker)
+      customOverlayMarkers.push(marker)
+    } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
+      // 创建折线（优先使用 GCJ02 坐标，回退到 WGS84）
+      const positions = overlay.positions_gcj02 || overlay.positions
+      const path = positions.map(([lat, lng]) => new AMap.LngLat(lng, lat))
+      const color = overlay.color || '#409eff'
+      const weight = overlay.weight || 3
+      const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+      const dashArray = overlay.dashArray
+
+      const polyline = new AMap.Polyline({
+        path: path,
+        borderWeight: 1,
+        strokeColor: color,
+        strokeOpacity: opacity,
+        strokeWeight: weight,
+        lineJoin: 'round',
+        strokeStyle: dashArray ? 'dashed' : 'solid',
+        isOutline: false,
+        borderColor: 'white',
+        borderWidth: 0,
+      })
+
+      // 设置虚线样式
+      if (dashArray) {
+        polyline.setOptions({
+          strokeStyle: 'dashed',
+          strokeDasharray: dashArray,
+        })
+      }
+
+      // 绘制路径模式：点击 Polyline 也触发 map-click 事件
+      if (props.disablePointHover) {
+        polyline.on('click', (e: any) => {
+          const lngLat = e.lnglat
+          const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
+          console.log('[AMap] Polyline 点击，发射 map-click:', wgsLng, wgsLat)
+          emit('map-click', wgsLng, wgsLat)
+        })
+      }
+
+      AMapInstance.add(polyline)
+      customOverlayPolylines.push(polyline)
+    }
+  }
 }
 
 // 监听 tracks 变化
@@ -1415,6 +1630,14 @@ watch(() => props.highlightTrackId, () => {
 watch(() => props.highlightSegment, () => {
   updateTracks()
 })
+
+watch(() => props.coloredSegments, () => {
+  updateTracks()
+})
+
+watch(() => props.customOverlays, () => {
+  drawCustomOverlays()
+}, { deep: true })
 
 // 监听外部指定的高亮点索引（用于指针同步）
 watch(() => props.highlightPointIndex, (newIndex) => {
@@ -1638,6 +1861,46 @@ function fitBounds(paddingPercent: number = 5) {
   }
 }
 
+// 根据边界框直接设置地图视野（用于聚焦到特定区段）
+function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; maxLon: number }, paddingPercent: number = 15) {
+  if (!AMapInstance) return
+
+  const AMap = (window as any).AMap
+  const { minLat, maxLat, minLon, maxLon } = bounds
+
+  // 创建边界对象
+  const boundsObj = new AMap.Bounds(
+    new AMap.LngLat(minLon, minLat),
+    new AMap.LngLat(maxLon, maxLat)
+  )
+
+  // 先设置中心点和缩放级别
+  const centerLng = (minLon + maxLon) / 2
+  const centerLat = (minLat + maxLat) / 2
+  AMapInstance.setCenter([centerLng, centerLat])
+
+  // 计算合适的缩放级别
+  const latDiff = maxLat - minLat
+  const lngDiff = maxLon - minLon
+  const maxDiff = Math.max(latDiff, lngDiff)
+
+  // 根据差异计算缩放级别
+  let zoom = 12
+  if (maxDiff > 0) {
+    // 粗略计算：每度约 111km
+    const kmDiff = maxDiff * 111
+    if (kmDiff < 0.5) zoom = 16
+    else if (kmDiff < 1) zoom = 15
+    else if (kmDiff < 2) zoom = 14
+    else if (kmDiff < 5) zoom = 13
+    else if (kmDiff < 10) zoom = 12
+    else if (kmDiff < 20) zoom = 11
+    else zoom = 10
+  }
+
+  AMapInstance.setZoom(zoom)
+}
+
 /**
  * 异步检查图片是否为空白或接近空白
  * 通过实际加载图像并采样检查像素内容
@@ -1696,7 +1959,9 @@ defineExpose({
   hideMarker,
   resize,
   fitBounds,
+  fitToBounds,
   getMapElement: () => mapContainer.value || null,
+  getMapInstance: () => AMapInstance,
   async captureMap(): Promise<string | null> {
     if (!AMapInstance || !mapContainer.value) return null
 

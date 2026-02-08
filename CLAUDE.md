@@ -20,6 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -ArgumentList "--remote-debugging-port=9222"
 ```
 
+你可以通过添加调试日志、使用 Chrome 开发者工具 MCP 等方式辅助处理问题。
+
 ## Development Commands
 
 ### Backend
@@ -2027,3 +2029,184 @@ getEmbedCode(token: string, width = '100%', height = '520'): string {
 - [`frontend/src/views/SharedTrack.vue`](frontend/src/views/SharedTrack.vue) - 分享页面主组件
 - [`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 地图组件（viewDetailsUrl prop）
 - [`frontend/src/api/shared.ts`](frontend/src/api/shared.ts) - 分享 API 和嵌入代码生成
+
+---
+
+## 最新更改 (2026-02 轨迹插值功能)
+
+### 功能概述
+
+轨迹插值功能允许用户在轨迹点间隔较大的区段之间，通过添加控制点并使用贝塞尔曲线算法生成中间插值点，使轨迹更加平滑。
+
+**三阶段流程**：
+1. **选择区段**：显示所有符合条件的区段（间隔 ≥ 最小间隔），用户选择一个区段
+2. **绘制路径**：在地图上点击添加控制点，拖拽调整位置
+3. **预览结果**：预览生成的插值点，确认后保存
+
+### 后端架构
+
+**API 端点**（[`interpolation.py`](backend/app/api/interpolation.py)）：
+- `GET /interpolation/tracks/{track_id}/available-segments` - 获取可插值区段列表
+- `POST /interpolation/preview` - 预览插值结果（不保存）
+- `POST /interpolation/tracks/{track_id}/interpolations` - 创建插值配置并插入插值点
+- `GET /interpolation/tracks/{track_id}/interpolations` - 获取轨迹的所有插值配置
+- `DELETE /interpolation/interpolations/{interpolation_id}` - 删除插值配置及关联的插值点
+
+**数据模型**（[`interpolation.py`](backend/app/schemas/interpolation.py)）：
+- `ControlPoint`：贝塞尔曲线控制点（lng、lat、in_handle、out_handle、handles_locked）
+- `AvailableSegment`：可插值区段（start_index、end_index、interval_seconds、start_time、end_time）
+- `InterpolatedPoint`：插值点数据（point_index、time、三坐标系坐标、speed、course、elevation）
+- `InterpolationCreateRequest`：创建插值请求（start_point_index、end_point_index、control_points、interval、algorithm）
+
+**核心服务**（[`bezier_curve_service.py`](backend/app/services/bezier_curve_service.py)）：
+- `calculate_cubic_bezier_point()`：计算三次贝塞尔曲线上的点
+- `generate_interpolated_points()`：生成插值点数组（包含时间线性插值、速度/方位角计算）
+
+### 前端组件
+
+**主页面**（[`Interpolation.vue`](frontend/src/views/Interpolation.vue)）：
+
+**三阶段状态管理**：
+```typescript
+const step = ref<'select' | 'draw' | 'preview'>('select')
+```
+
+**区段选择阶段**：
+- 表格展示可插值区段，每段三行（起点、终点、间隔）
+- 列：时间/间隔、位置、速度、方位角
+- 单位转换：速度 m/s → km/h，方位角数字显示（° 在表头）
+- 选择框列跨越三行
+
+**表格数据结构**（每段三行）：
+```typescript
+interface TableRow {
+  key: string
+  segmentKey: string
+  type: 'start' | 'end' | 'interval'
+  time: string
+  location: string
+  speed: number | null
+  bearing: number | null
+  interval?: number
+}
+```
+
+**绘制路径阶段**：
+- 使用 [`PenToolMap.vue`](frontend/src/components/interpolation/PenToolMap.vue) 组件
+- 地图点击添加控制点
+- 控制点列表显示坐标，支持删除单个点
+- 撤销/重做功能（Ctrl+Z / Ctrl+Y）
+- 重置按钮清空所有控制点和历史记录
+
+**历史记录管理**：
+```typescript
+const history: ControlPoint[][] = []
+const historyIndex = ref(0)
+const isUndoRedoOperation = ref(false)
+
+function saveToHistory() {
+  if (isUndoRedoOperation.value) return
+  // 删除当前位置之后的历史
+  history.splice(historyIndex.value + 1)
+  // 添加新状态
+  history.push([...controlPoints.value])
+  historyIndex.value++
+}
+```
+
+**预览阶段**：
+- 显示插值点数量
+- 禁用编辑（`editable: false`）
+- 返回修改按钮清空控制点和历史记录
+- 确认保存按钮调用创建 API
+
+**API 请求过滤**：
+预览请求需要过滤掉控制点中的多余字段（后端 schema 验证）：
+```typescript
+const filteredControlPoints = controlPoints.value.map(cp => ({
+  lng: cp.lng,
+  lat: cp.lat,
+  in_handle: cp.inHandle,
+  out_handle: cp.outHandle,
+  handles_locked: cp.handlesLocked
+}))
+```
+
+### 地图组件集成
+
+**UniversalMap** 新增 props：
+- `availableSegments`：可插值区段列表（用于地图交互）
+- `coloredSegments`：多段彩色高亮（start、end、color）
+- `disablePointHover`：禁用点悬停（绘制路径时）
+
+**各地图组件 coloredSegments 支持**：
+- **AMap**：使用 `AMap.Polyline` 绘制彩色区段
+- **BMap**：使用 `BMapGL.Polyline` 绘制彩色区段
+- **TencentMap**：使用 `TMap.MultiPolyline`，ID 添加索引避免重复
+- **LeafletMap**：使用 `L.polyline` 绘制彩色区段
+
+**高亮逻辑**（[`UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue)）：
+- 优先级：选中 > 悬停 > 备选
+- 如果全是绿色备选区段，不返回 `highlightSegment`（让 `coloredSegments` 处理）
+
+**自动缩放控制**：
+- 各地图组件添加 `hasAutoFocused` 标志
+- 只在首次加载时自动缩放，编辑过程中不重复缩放
+
+**点击添加控制点**：
+- 高德/百度：Marker 和 Polyline 添加 `click` 事件处理，使用 `bubble: true`
+- 腾讯：区分点击和拖拽（鼠标移动 < 5px 才触发点击）
+
+### 控制点手柄
+
+**数据结构**：
+```typescript
+interface ControlPointHandle {
+  dx: number  // 经度偏移
+  dy: number  // 纬度偏移
+}
+
+interface ControlPoint {
+  lng: number
+  lat: number
+  inHandle: ControlPointHandle
+  outHandle: ControlPointHandle
+  handlesLocked: boolean
+}
+```
+
+**手柄锁定机制**：
+- `handlesLocked = true`：拖拽一个手柄时，另一个对称移动
+- `handlesLocked = false`：手柄独立移动
+
+### 样式规范
+
+**区段表格**：
+- 选择框列跨越三行
+- 间隔行背景色 `#fafafa`，虚线上边框，实线下边框
+- 选中行背景色 `#ecf5ff`
+- 单位显示在表头：速度、方位角 (°)
+
+**地图标记**：
+- 起点标记：绿色圆点
+- 终点标记：红色圆点
+- 控制点标记：蓝色圆点 + 手柄线
+- 插值连线：蓝色虚线
+
+### 涉及文件
+
+**后端**：
+- [`backend/app/api/interpolation.py`](backend/app/api/interpolation.py) - 插值 API 路由
+- [`backend/app/schemas/interpolation.py`](backend/app/schemas/interpolation.py) - 插值相关 Schemas
+- [`backend/app/services/bezier_curve_service.py`](backend/app/services/bezier_curve_service.py) - 贝塞尔曲线服务
+- [`backend/app/services/interpolation_service.py`](backend/app/services/interpolation_service.py) - 插值业务逻辑
+
+**前端**：
+- [`frontend/src/views/Interpolation.vue`](frontend/src/views/Interpolation.vue) - 插值主页面
+- [`frontend/src/components/interpolation/PenToolMap.vue`](frontend/src/components/interpolation/PenToolMap.vue) - 绘制路径地图组件
+- [`frontend/src/api/interpolation.ts`](frontend/src/api/interpolation.ts) - 插值 API 客户端
+- [`frontend/src/components/map/UniversalMap.vue`](frontend/src/components/map/UniversalMap.vue) - 通用地图组件（新增 props）
+- [`frontend/src/components/map/AMap.vue`](frontend/src/components/map/AMap.vue) - 高德地图（coloredSegments、点击事件）
+- [`frontend/src/components/map/BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图（coloredSegments、点击事件）
+- [`frontend/src/components/map/TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图（coloredSegments、点击/拖拽区分）
+- [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图（coloredSegments）

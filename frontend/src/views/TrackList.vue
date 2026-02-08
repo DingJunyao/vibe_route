@@ -156,8 +156,8 @@
             <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
                 <div class="action-buttons">
-                  <!-- 普通轨迹操作 -->
-                  <template v-if="!row.is_live_recording">
+                  <!-- 普通轨迹操作或已结束的实时记录 -->
+                  <template v-if="!row.is_live_recording || row.live_recording_status !== 'active'">
                     <el-button type="primary" size="small" text @click.stop="viewTrack(row)">
                       查看
                     </el-button>
@@ -165,7 +165,7 @@
                       删除
                     </el-button>
                   </template>
-                  <!-- 实时记录操作 -->
+                  <!-- 活跃的实时记录操作 -->
                   <template v-else>
                     <el-button
                       type="primary"
@@ -194,7 +194,7 @@
               v-for="row in unifiedTracks"
               :key="row.id"
               class="track-card"
-              :class="row.is_live_recording ? 'recording-type' : 'track-type'"
+              :class="row.is_live_recording && row.live_recording_status === 'active' ? 'recording-type' : 'track-type'"
               @click="handleRowClick(row)"
             >
               <div class="card-header">
@@ -243,8 +243,8 @@
                 </template>
               </div>
               <div class="card-actions" @click.stop>
-                <!-- 普通轨迹操作 -->
-                <template v-if="!row.is_live_recording">
+                <!-- 普通轨迹操作或已结束的实时记录 -->
+                <template v-if="!row.is_live_recording || row.live_recording_status !== 'active'">
                   <el-button type="primary" size="small" @click="viewTrack(row)">
                     查看
                   </el-button>
@@ -252,7 +252,7 @@
                     删除
                   </el-button>
                 </template>
-                <!-- 实时记录操作 -->
+                <!-- 活跃的实时记录操作 -->
                 <template v-else>
                   <el-button
                     type="primary"

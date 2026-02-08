@@ -60,6 +60,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/tracks/:id/interpolation',
+    name: 'Interpolation',
+    component: () => import('@/views/Interpolation.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/upload',
     name: 'TrackUpload',
     component: () => import('@/views/TrackUpload.vue'),

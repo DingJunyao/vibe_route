@@ -32,7 +32,7 @@
       <div class="header-right">
         <div class="header-actions">
           <el-button
-            v-if="track?.is_live_recording && track.live_recording_token"
+            v-if="track?.is_live_recording && track.live_recording_token && track.live_recording_status === 'active'"
             type="warning"
             @click="showRecordingDetail"
             class="desktop-only"
@@ -90,7 +90,7 @@
             <el-dropdown-menu>
               <el-dropdown-item
                 command="recordingDetail"
-                v-if="isMobile && track?.is_live_recording && track.live_recording_token"
+                v-if="isMobile && track?.is_live_recording && track.live_recording_token && track.live_recording_status === 'active'"
               >
                 <el-icon><Link /></el-icon>
                 记录配置
@@ -228,7 +228,7 @@
                       :highlight-track-id="track.id"
                       :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                       :latest-point-index="latestPointIndex"
-                      :live-update-time="track.last_point_created_at || track.last_upload_at"
+                      :live-update-time="track.live_recording_status === 'active' ? (track.last_point_created_at || track.last_upload_at) : null"
                       @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -449,7 +449,7 @@
                     :highlight-track-id="track.id"
                     :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                     :latest-point-index="latestPointIndex"
-                    :live-update-time="track.last_point_created_at || track.last_upload_at"
+                    :live-update-time="track.live_recording_status === 'active' ? (track.last_point_created_at || track.last_upload_at) : null"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -885,14 +885,6 @@
       :initial-status="shareStatus"
       @update:status="shareStatus = $event"
     />
-
-    <!-- 插值对话框 -->
-    <InterpolationDialog
-      v-model:visible="showInterpolationDialog"
-      :track-id="trackId"
-      :points="points"
-      @applied="handleInterpolationApplied"
-    />
   </div>
 </template>
 
@@ -938,7 +930,6 @@ import { getWebSocketOrigin } from '@/utils/origin'
 import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
 import PosterExportDialog from '@/components/PosterExportDialog.vue'
 import ShareDialog from '@/components/ShareDialog.vue'
-import InterpolationDialog from '@/components/interpolation/InterpolationDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -1030,8 +1021,8 @@ const highlightedSegment = ref<{ start: number; end: number; nodeName: string } 
 
 // 实时轨迹最新点索引（用于显示绿色标记）
 const latestPointIndex = computed(() => {
-  // 只有实时记录时才显示最新点标记
-  if (!track.value?.is_live_recording || !points.value.length) {
+  // 只有活跃的实时记录时才显示最新点标记
+  if (!track.value?.is_live_recording || track.value?.live_recording_status !== 'active' || !points.value.length) {
     return null
   }
 
@@ -1076,9 +1067,6 @@ const posterDialogVisible = ref(false)
 const shareDialogVisible = ref(false)
 const shareStatus = ref<ShareStatus | null>(null)
 
-// 插值对话框相关
-const showInterpolationDialog = ref(false)
-
 const importFile = ref<File | null>(null)
 const importMatchMode = ref<'index' | 'time'>('index')
 const importTimezone = ref<string>('UTC+8')
@@ -1093,9 +1081,9 @@ const liveUpdateStatus = ref<'connected' | 'disconnected' | 'error'>('disconnect
 let regionUpdateTimer: number | null = null
 const REGION_UPDATE_INTERVAL = 10000 // 10 秒
 
-// 判断是否是"待记录"状态（实时记录且没有点）
+// 判断是否是"待记录"状态（活跃的实时记录且没有点）
 const isWaitingForPoints = computed(() => {
-  return track.value?.is_live_recording && points.value.length === 0
+  return track.value?.is_live_recording && track.value?.live_recording_status === 'active' && points.value.length === 0
 })
 
 // 组合轨迹数据用于地图展示
@@ -1745,12 +1733,6 @@ function handleOpenGeoEditor() {
   router.push(`/tracks/${trackId.value}/geo-editor`)
 }
 
-// 打开插值对话框
-function handleOpenInterpolation() {
-  showInterpolationDialog.value = true
-}
-
-// 插值应用后刷新
 async function handleInterpolationApplied() {
   // 重新加载轨迹数据
   await fetchTrackDetail()
@@ -1764,7 +1746,7 @@ function handleEditCommand(command: string) {
       router.push(`/tracks/${trackId.value}/geo-editor`)
       break
     case 'interpolation':
-      handleOpenInterpolation()
+      router.push(`/tracks/${trackId.value}/interpolation`)
       break
   }
 }
