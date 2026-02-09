@@ -126,71 +126,132 @@
                 />
               </div>
 
-              <!-- 区段列表 -->
+              <!-- 可选区段列表 -->
               <div v-if="isLoadingSegments" class="loading-segments">
                 <el-icon class="is-loading"><Loading /></el-icon>
                 <span>加载区段中...</span>
               </div>
-              <div v-if="!isLoadingSegments && availableSegments.length === 0" class="no-segments">
+              <div v-if="!isLoadingSegments && selectableSegments.length === 0 && interpolatedSegments.length === 0" class="no-segments">
                 <el-empty description="没有符合条件的区段" :image-size="80" />
               </div>
-              <div v-if="!isLoadingSegments && availableSegments.length > 0" class="segments-table-container">
-                <el-table
-                  :data="tableData"
-                  stripe
-                  :show-header="true"
-                  :row-class-name="getRowClassName"
-                  max-height="400"
-                  size="small"
-                  :span-method="mergeRows"
-                >
-                  <el-table-column width="50" align="center">
-                    <template #default="{ row }">
-                      <el-radio
-                        v-if="row.type === 'start'"
-                        v-model="selectedSegmentKey"
-                        :label="row.segmentKey"
-                        @change="() => handleSegmentSelectByKey(row.segmentKey)"
-                      >
-                        <template #default>&nbsp;</template>
-                      </el-radio>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="时间" width="90">
-                    <template #default="{ row }">
-                      <span v-if="row.type === 'interval'" class="interval-text">
-                        间隔 {{ row.interval?.toFixed(1) || '-' }}s
-                      </span>
-                      <span v-else>{{ row.time }}</span>
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="位置" width="200">
-                    <template #default="{ row }">
-                      {{ row.type === 'interval' ? '' : row.location }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="速度 (km/h)" width="80" align="right">
-                    <template #default="{ row }">
-                      {{ row.type === 'interval' ? '' : formatSpeedKmh(row.speed) }}
-                    </template>
-                  </el-table-column>
-                  <el-table-column label="方位角 (°)" width="70" align="right">
-                    <template #default="{ row }">
-                      {{ row.type === 'interval' ? '' : formatBearing(row.bearing) }}
-                    </template>
-                  </el-table-column>
-                </el-table>
+
+              <!-- 可插值区段表格 -->
+              <div v-if="!isLoadingSegments && selectableSegments.length > 0" class="segments-section">
+                <h4 class="section-title">可插值区段</h4>
+                <div class="segments-table-container">
+                  <el-table
+                    :data="selectableTableData"
+                    stripe
+                    :show-header="true"
+                    max-height="300"
+                    size="small"
+                    :span-method="mergeRows"
+                  >
+                    <el-table-column width="50" align="center">
+                      <template #default="{ row }">
+                        <el-radio
+                          v-if="row.type === 'start'"
+                          v-model="selectedSegmentKey"
+                          :label="row.segmentKey"
+                          @change="() => handleSegmentSelectByKey(row.segmentKey)"
+                        >
+                          <template #default>&nbsp;</template>
+                        </el-radio>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="时间" width="110">
+                      <template #default="{ row }">
+                        <span v-if="row.type === 'interval'" class="interval-text">
+                          间隔 {{ row.interval?.toFixed(1) || '-' }}s
+                        </span>
+                        <span v-else>{{ row.time }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" width="200">
+                      <template #default="{ row }">
+                        {{ row.type === 'interval' ? '' : row.location }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="速度 (km/h)" width="80" align="right">
+                      <template #default="{ row }">
+                        {{ row.type === 'interval' ? '' : formatSpeedKmh(row.speed) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="方位角 (°)" width="70" align="right">
+                      <template #default="{ row }">
+                        {{ row.type === 'interval' ? '' : formatBearing(row.bearing) }}
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
               </div>
 
               <div class="step-actions">
                 <el-button
                   type="primary"
-                  :disabled="!selectedSegment"
+                  :disabled="!selectedSegment || isSelectedSegmentInterpolated"
                   @click="enterDrawMode"
                   size="large"
                 >
                   下一步：绘制路径
                 </el-button>
+              </div>
+
+              <!-- 已插值区段表格 -->
+              <div v-if="!isLoadingSegments && interpolatedSegments.length > 0" class="segments-section">
+                <h4 class="section-title">已插值区段</h4>
+                <div class="segments-table-container">
+                  <el-table
+                    :data="interpolatedTableData"
+                    stripe
+                    :show-header="true"
+                    max-height="300"
+                    size="small"
+                    :row-class-name="getRowClassName"
+                    :span-method="mergeRowsForInterpolated"
+                    @row-click="handleInterpolatedRowClick"
+                  >
+                    <el-table-column width="50" align="center">
+                      <template #default="{ row }">
+                        <span class="el-icon"><Check /></span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="时间" width="110">
+                      <template #default="{ row }">
+                        <span v-if="row.type === 'interval'" class="interval-text">
+                          间隔 {{ row.interval?.toFixed(1) || '-' }}s
+                        </span>
+                        <span v-else>{{ row.time }}</span>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="位置" width="200">
+                      <template #default="{ row }">
+                        <template v-if="row.type === 'interval'">
+                          <el-button
+                            v-if="row.interpolationId"
+                            size="small"
+                            type="danger"
+                            link
+                            @click.stop="handleDeleteInterpolationById(row.interpolationId)"
+                          >
+                            删除
+                          </el-button>
+                        </template>
+                        <template v-else>{{ row.location }}</template>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="速度 (km/h)" width="80" align="right">
+                      <template #default="{ row }">
+                        {{ row.type === 'interval' ? '' : formatSpeedKmh(row.speed) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="方位角 (°)" width="70" align="right">
+                      <template #default="{ row }">
+                        {{ row.type === 'interval' ? '' : formatBearing(row.bearing) }}
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </div>
               </div>
             </div>
 
@@ -324,7 +385,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   ArrowLeft, HomeFilled, Check, Link, Loading,
   InfoFilled, View, Delete, RefreshLeft, RefreshRight, DArrowLeft, DArrowRight
@@ -404,6 +465,16 @@ interface ExtendedSegment extends AvailableSegment {
 
 const availableSegments = ref<ExtendedSegment[]>([])
 
+// 可供选择的区段（未插值的）
+const selectableSegments = computed(() => {
+  return availableSegments.value.filter(seg => !seg.existing_interpolation_id)
+})
+
+// 已插值的区段
+const interpolatedSegments = computed(() => {
+  return availableSegments.value.filter(seg => seg.existing_interpolation_id)
+})
+
 // 表格数据：每段展开为三行（起点行、终点行、间隔行）
 interface TableRow {
   key: string
@@ -414,11 +485,13 @@ interface TableRow {
   speed: number | null
   bearing: number | null
   interval?: number  // 间隔行包含此字段
+  interpolationId?: number | null  // 插值配置 ID
 }
 
-const tableData = computed<TableRow[]>(() => {
+// 生成表格数据的辅助函数
+function buildTableData(segments: ExtendedSegment[]): TableRow[] {
   const rows: TableRow[] = []
-  for (const seg of availableSegments.value) {
+  for (const seg of segments) {
     // 起点行
     rows.push({
       key: `${seg.key}-start`,
@@ -427,7 +500,8 @@ const tableData = computed<TableRow[]>(() => {
       time: seg.startLabel || '-',
       location: formatLocation(seg.startLocation),
       speed: seg.startSpeed,
-      bearing: seg.startBearing
+      bearing: seg.startBearing,
+      interpolationId: seg.existing_interpolation_id
     })
     // 终点行
     rows.push({
@@ -437,7 +511,8 @@ const tableData = computed<TableRow[]>(() => {
       time: seg.endLabel || '-',
       location: formatLocation(seg.endLocation),
       speed: seg.endSpeed,
-      bearing: seg.endBearing
+      bearing: seg.endBearing,
+      interpolationId: seg.existing_interpolation_id
     })
     // 间隔行
     rows.push({
@@ -448,11 +523,16 @@ const tableData = computed<TableRow[]>(() => {
       location: '',
       speed: null,
       bearing: null,
-      interval: seg.interval_seconds
+      interval: seg.interval_seconds,
+      interpolationId: seg.existing_interpolation_id
     })
   }
   return rows
-})
+}
+
+const selectableTableData = computed(() => buildTableData(selectableSegments.value))
+const interpolatedTableData = computed(() => buildTableData(interpolatedSegments.value))
+
 
 // 转换后的轨迹数据（用于地图显示）
 const trackWithPoints = computed(() => ({
@@ -476,12 +556,21 @@ const trackWithPoints = computed(() => ({
 const highlightSegments = computed(() => {
   const segments: Array<{ start: number; end: number; color: string }> = []
 
-  // 添加所有符合条件的区段（绿色）
-  for (const seg of availableSegments.value) {
+  // 添加未插值的符合条件的区段（绿色）
+  for (const seg of selectableSegments.value) {
     segments.push({
       start: seg.start_index,
       end: seg.end_index,
-      color: '#67c23a'  // 绿色（备选区段）
+      color: '#67c23a'  // 绿色（可插值区段）
+    })
+  }
+
+  // 添加已插值的区段（橙色）
+  for (const seg of interpolatedSegments.value) {
+    segments.push({
+      start: seg.start_index,
+      end: seg.end_index,
+      color: '#ff9800'  // 橙色（已插值区段）
     })
   }
 
@@ -497,14 +586,15 @@ const highlightSegments = computed(() => {
     }
   }
 
-  // 选中的区段（蓝色，最优先）
+  // 选中的区段（黄色，最优先）
   if (selectedSegmentKey.value) {
     const seg = availableSegments.value.find(s => s.key === selectedSegmentKey.value)
     if (seg) {
+      const isInterpolated = seg.existing_interpolation_id !== undefined && seg.existing_interpolation_id !== null
       segments.push({
         start: seg.start_index,
         end: seg.end_index,
-        color: '#409eff'  // 蓝色（选中时）
+        color: isInterpolated ? '#ffd700' : '#409eff'  // 黄色（已插值选中）或蓝色（未插值选中）
       })
     }
   }
@@ -525,6 +615,11 @@ const availableSegmentsForMap = computed(() => {
 const selectedSegment = computed(() => {
   if (!selectedSegmentKey.value) return null
   return availableSegments.value.find(s => s.key === selectedSegmentKey.value)
+})
+
+// 选中的是否为已插值区段
+const isSelectedSegmentInterpolated = computed(() => {
+  return selectedSegment.value?.existing_interpolation_id !== undefined && selectedSegment.value?.existing_interpolation_id !== null
 })
 
 // 起点和终点数据
@@ -595,9 +690,29 @@ function mergeRows({ row, column, columnIndex }: { row: TableRow; column: any; c
   return 1
 }
 
+// 合并行（已插值区段表格，第一列是图标，跨越三行）
+function mergeRowsForInterpolated({ row, column, columnIndex }: { row: TableRow; column: any; columnIndex: number }): number | { rowspan: number; colspan: number } {
+  // 第一列（图标列， columnIndex = 0）
+  if (columnIndex === 0) {
+    if (row.type === 'start') {
+      return { rowspan: 3, colspan: 1 }
+    } else {
+      return { rowspan: 0, colspan: 0 }
+    }
+  }
+  return 1
+}
+
 // 通过 key 选择区段
 function handleSegmentSelectByKey(key: string) {
   selectedSegmentKey.value = key
+}
+
+// 点击已插值区段行
+function handleInterpolatedRowClick(row: TableRow) {
+  if (row.type === 'start') {
+    selectedSegmentKey.value = row.segmentKey
+  }
 }
 
 // 加载轨迹数据
@@ -617,6 +732,8 @@ async function loadTrackData() {
     isLoading.value = false
   }
 }
+
+// 加载可用区段
 
 // 加载可用区段
 async function loadAvailableSegments() {
@@ -649,13 +766,12 @@ async function loadAvailableSegments() {
       }
     })
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.detail || '加载区段失败')
+    ElMessage.error(error.response?.data.detail || '加载区段失败')
     availableSegments.value = []
   } finally {
     isLoadingSegments.value = false
   }
 }
-
 // 最小间隔变化
 function handleIntervalChange() {
   selectedSegmentKey.value = ''
@@ -687,6 +803,7 @@ function enterDrawMode() {
     ElMessage.warning('请先选择有效的区段')
     return
   }
+
   // 初始化历史记录
   history.length = 0
   history.push([])
@@ -856,6 +973,63 @@ function handleReset() {
   historyIndex.value = 0
 }
 
+// 仅删除插值点（不继续）
+async function handleDeleteInterpolationOnly() {
+  const segment = selectedSegment.value
+  if (!segment || !segment.existing_interpolation_id) return
+
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除该区段的插值点吗？删除后将恢复原始轨迹。',
+      '确认删除',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await interpolationApi.deleteInterpolation(segment.existing_interpolation_id)
+    ElMessage.success('插值点已删除')
+
+    // 重新加载区段列表
+    await loadAvailableSegments()
+    // 清空当前选择
+    selectedSegmentKey.value = ''
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.detail || '删除失败')
+    }
+  }
+}
+
+// 通过 ID 删除插值点（用于已插值区段表格中的删除按钮）
+async function handleDeleteInterpolationById(interpolationId: number | null | undefined) {
+  if (!interpolationId) return
+
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除该区段的插值点吗？删除后将恢复原始轨迹。',
+      '确认删除',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+
+    await interpolationApi.deleteInterpolation(interpolationId)
+    ElMessage.success('插值点已删除')
+
+    // 重新加载区段列表
+    await loadAvailableSegments()
+  } catch (error: any) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.response?.data?.detail || '删除失败')
+    }
+  }
+}
+
 // 切换面板折叠
 function togglePanel() {
   panelCollapsed.value = !panelCollapsed.value
@@ -874,10 +1048,6 @@ function handleBack() {
 function goHome() {
   router.push('/home')
 }
-
-// 初始化
-loadTrackData()
-loadAvailableSegments()
 
 // 键盘快捷键
 function handleKeydown(e: KeyboardEvent) {
@@ -1182,6 +1352,54 @@ onUnmounted(() => {
 .interval-text {
   font-weight: 500;
   color: var(--el-text-color-regular);
+}
+
+/* 已插值标记样式 */
+.time-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.interp-tag {
+  font-size: 11px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 6px;
+}
+
+/* 区段分组样式 */
+.segments-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.section-title {
+  margin: 0 0 4px 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+/* 间隔行删除按钮样式 */
+.interval-delete-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.interval-delete-cell .el-button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+/* 位置列中的删除按钮 */
+.location-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 /* 绘制路径 */

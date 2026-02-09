@@ -46,20 +46,16 @@ class InterpolationService:
             db: 数据库会话
             track_id: 轨迹ID
             min_interval_seconds: 最小间隔（秒）
-            ignore_interpolated: 是否忽略已有插值的区段
+            ignore_interpolated: 是否忽略已有插值的区段（此参数已废弃，保留向后兼容）
 
         Returns:
-            可用区段列表
+            可用区段列表（包含已插值区段）
         """
         # 构建查询条件
         conditions = [
             TrackPoint.track_id == track_id,
             TrackPoint.is_valid == True
         ]
-
-        # 是否忽略插值点
-        if ignore_interpolated:
-            conditions.append(TrackPoint.is_interpolated == False)
 
         # 获取轨迹的所有点（按索引排序）
         result = await db.execute(
@@ -69,20 +65,104 @@ class InterpolationService:
         )
         points = result.scalars().all()
 
+        # 获取该轨迹的所有插值配置
+        interpolations_result = await db.execute(
+            select(TrackInterpolation)
+            .where(TrackInterpolation.track_id == track_id)
+            .where(TrackInterpolation.is_valid == True)
+        )
+        interpolations = interpolations_result.scalars().all()
+
+        # 构建区段到插值配置的映射
+        interpolation_map = {}
+        for interp in interpolations:
+            key = (interp.start_point_index, interp.end_point_index)
+            interpolation_map[key] = interp.id
+
+        # 获取所有插值点（用于确定插值区段的实际范围）
+        interpolated_points_result = await db.execute(
+            select(TrackPoint)
+            .where(
+                and_(
+                    TrackPoint.track_id == track_id,
+                    TrackPoint.interpolation_id.isnot(None)
+                )
+            )
+            .order_by(TrackPoint.point_index)
+        )
+        interpolated_points = interpolated_points_result.scalars().all()
+
+        # 构建插值ID到点范围的映射
+        interpolation_ranges = {}
+        for ip in interpolated_points:
+            if ip.interpolation_id not in interpolation_ranges:
+                interpolation_ranges[ip.interpolation_id] = []
+            interpolation_ranges[ip.interpolation_id].append(ip.point_index)
+
         segments = []
+        used_end_indices = set()  # 记录已被插值区段使用的终点索引
+
+        # 首先添加已插值的区段（从插值配置获取）
+        for interp in interpolations:
+            # 获取该插值配置的所有点
+            interp_point_indices = interpolation_ranges.get(interp.id, [])
+            if not interp_point_indices:
+                continue
+
+            # 找到插值点范围
+            min_index = min(interp_point_indices)
+            max_index = max(interp_point_indices)
+
+            # 原始起点是插值范围前的第一个非插值点
+            # 原始终点是插值范围后的第一个非插值点
+            start_point = None
+            end_point = None
+
+            # 查找起点（插值范围前第一个非插值点）
+            for p in reversed(points[:min_index]):
+                if not p.is_interpolated or p.interpolation_id != interp.id:
+                    start_point = p
+                    break
+
+            # 查找终点（插值范围后第一个非插值点）
+            for p in points[max_index + 1:]:
+                if not p.is_interpolated or p.interpolation_id != interp.id:
+                    end_point = p
+                    break
+
+            if start_point and end_point and start_point.time and end_point.time:
+                interval = (end_point.time - start_point.time).total_seconds()
+                segments.append(AvailableSegment(
+                    start_index=start_point.point_index,
+                    end_index=end_point.point_index,
+                    interval_seconds=interval,
+                    start_time=start_point.time,
+                    end_time=end_point.time,
+                    existing_interpolation_id=interp.id
+                ))
+                used_end_indices.add(end_point.point_index)
+
+        # 然后添加未插值的区段（通过间隔判断）
         for i in range(len(points) - 1):
             curr, next_p = points[i], points[i + 1]
+
+            # 如果这个终点已被插值区段使用，跳过（避免重复）
+            if next_p.point_index in used_end_indices:
+                continue
 
             # 计算时间差
             if curr.time and next_p.time:
                 interval = (next_p.time - curr.time).total_seconds()
                 if interval >= min_interval_seconds:
+                    key = (curr.point_index, next_p.point_index)
+                    existing_id = interpolation_map.get(key)
                     segments.append(AvailableSegment(
                         start_index=curr.point_index,
                         end_index=next_p.point_index,
                         interval_seconds=interval,
                         start_time=curr.time,
-                        end_time=next_p.time
+                        end_time=next_p.time,
+                        existing_interpolation_id=existing_id
                     ))
 
         return segments

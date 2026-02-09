@@ -63,6 +63,7 @@ declare module 'vue' {
     InterpolationDialog: typeof import('./components/interpolation/InterpolationDialog.vue')['default']
     LeafletMap: typeof import('./components/map/LeafletMap.vue')['default']
     LiveRecordingDialog: typeof import('./components/LiveRecordingDialog.vue')['default']
+    NProgress: typeof import('./components/NProgress.vue')['default']
     PenToolMap: typeof import('./components/interpolation/PenToolMap.vue')['default']
     PosterExportDialog: typeof import('./components/PosterExportDialog.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

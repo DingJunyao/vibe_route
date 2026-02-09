@@ -1,5 +1,6 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios'
 import { ElMessage } from 'element-plus'
+import { nProgressStore } from '@/stores/nprogress'
 
 // 获取 token 的辅助函数 - 直接从 localStorage 读取，避免 store 初始化问题
 function getToken(): string | null {
@@ -26,9 +27,14 @@ request.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
+    // 跳过进度条的请求（如轮询请求）
+    if (config.skipProgress !== true) {
+      nProgressStore.start()
+    }
     return config
   },
   (error) => {
+    nProgressStore.done()
     return Promise.reject(error)
   }
 )
@@ -36,9 +42,18 @@ request.interceptors.request.use(
 // 响应拦截器
 request.interceptors.response.use(
   (response) => {
+    // 完成进度条
+    if (response.config.skipProgress !== true) {
+      nProgressStore.done()
+    }
     return response.data
   },
   (error) => {
+    // 完成进度条
+    if (error.config?.skipProgress !== true) {
+      nProgressStore.done()
+    }
+
     if (error.response) {
       const { status, data, config } = error.response
       const isLoginPage = window.location.pathname === '/login'

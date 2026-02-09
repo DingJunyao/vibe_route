@@ -28,6 +28,7 @@ export interface AvailableSegment {
   interval_seconds: number
   start_time: string | null
   end_time: string | null
+  existing_interpolation_id?: number | null  // 已存在的插值配置 ID
 }
 
 /**
@@ -133,5 +134,12 @@ export const interpolationApi = {
    */
   delete(interpolationId: number): Promise<void> {
     return http.delete(`/interpolation/interpolations/${interpolationId}`)
+  },
+
+  /**
+   * 删除插值配置（别名）
+   */
+  deleteInterpolation(interpolationId: number): Promise<void> {
+    return this.delete(interpolationId)
   }
 }

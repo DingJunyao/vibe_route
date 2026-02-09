@@ -305,12 +305,13 @@ const highlightSegment = computed(() => {
 
   // 新格式：支持颜色
   if (first && 'color' in first) {
-    // 返回第一个非绿色的区段作为主高亮（蓝色或选中色）
-    const primarySegment = segments.find(s => s.color !== '#67c23a')
-    if (primarySegment) {
-      return { start: primarySegment.start, end: primarySegment.end }
+    // 只有蓝色才返回 highlightSegment（用于旧的单色高亮逻辑）
+    // 橙色（已插值）、黄色（已插值选中）、绿色（可选）都由 coloredSegments 处理
+    const blueSegment = segments.find(s => s.color === '#409eff')
+    if (blueSegment) {
+      return { start: blueSegment.start, end: blueSegment.end }
     }
-    // 如果全是绿色，不返回 highlightSegment（让 coloredSegments 处理）
+    // 其他颜色不返回 highlightSegment（让 coloredSegments 处理）
     return null
   }
 

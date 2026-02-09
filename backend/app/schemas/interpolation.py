@@ -28,6 +28,7 @@ class AvailableSegment(BaseModel):
     interval_seconds: float
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    existing_interpolation_id: Optional[int] = None  # 已存在的插值配置 ID
 
     @field_serializer('start_time', 'end_time')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
