@@ -1429,7 +1429,6 @@ function drawTracks() {
     })
   }
   // 绘制路径段高亮（detail 模式，兼容旧逻辑）
-  // 红色高亮用于插值轨迹
   else if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
     // 确保索引在有效范围内
@@ -1441,7 +1440,7 @@ function drawTracks() {
           map: TMapInstance,
           styles: {
             style_highlight: new TMap.PolylineStyle({
-              color: '#ff4d4f',  // 红色高亮（插值轨迹）
+              color: '#409eff',  // 蓝色高亮
               width: 8,
               borderWidth: 0,
             }),

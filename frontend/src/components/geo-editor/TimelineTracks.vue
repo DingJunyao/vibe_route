@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import type { TrackTimeline, TrackSegment, TrackType } from '@/stores/geo_editor'
-import { ElMessageBox } from 'element-plus'
+import { ElMessageBox, ElMessage } from 'element-plus'
 import { useGeoEditorStore } from '@/stores/geoEditor'
+import { geoEditorApi } from '@/api/geoEditor'
 
 interface Props {
   tracks: TrackTimeline[]
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   'multi-select-change': [isActive: boolean]
   resize: [data: { trackType: TrackType; segmentId: string; newStartIndex: number; newEndIndex: number }]
   move: [data: { trackType: TrackType; segmentId: string; targetStartIndex: number }]
+  'dialog-open': [isOpen: boolean]
 }>()
 
 const geoEditorStore = useGeoEditorStore()
@@ -544,6 +546,25 @@ const editTrackType = ref<TrackType>('province')
 const editSegmentId = ref('')
 const editValue = ref('')
 const editValueEn = ref('')
+const isTranslating = ref(false)
+
+// 记录用户是否手动编辑过英文（在对话框打开期间持久有效）
+const userManuallyEditedEnglish = ref(false)
+
+// 记录是否通过 Tab 键切换焦点（用于阻止 blur 时的自动填充）
+const isTabSwitching = ref(false)
+
+// 轨道类型到 API 类型的映射
+function trackTypeToApiType(trackType: TrackType): 'province' | 'city' | 'district' | 'road_name' | null {
+  const typeMap: Record<TrackType, 'province' | 'city' | 'district' | 'road_name' | null> = {
+    province: 'province',
+    city: 'city',
+    district: 'district',
+    roadNumber: null,  // 道路编号不支持英文翻译
+    roadName: 'road_name',
+  }
+  return typeMap[trackType]
+}
 
 // 计算总点数
 const totalPoints = computed(() => {
@@ -589,6 +610,83 @@ function handleDoubleClick(trackType: TrackType, segment: TrackSegment) {
   editValue.value = segment.value || ''
   editValueEn.value = segment.valueEn || ''
   editDialogVisible.value = true
+  // 重置用户编辑标记
+  userManuallyEditedEnglish.value = false
+}
+
+// 中文输入框失焦时自动翻译（仅在未手动编辑过英文时）
+async function handleChineseBlur() {
+  // 如果是通过 Tab 键切换焦点，不触发自动填充
+  if (isTabSwitching.value) {
+    isTabSwitching.value = false
+    return
+  }
+  await translateEnglish({ checkUserEdited: true })
+}
+
+// 中文输入框按键事件
+async function handleChineseKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    // 回车：无条件填充
+    e.preventDefault()
+    await translateEnglish({ checkUserEdited: false })
+  } else if (e.key === 'Tab') {
+    // Tab 键：标记正在切换焦点，阻止 blur 时的自动填充
+    isTabSwitching.value = true
+  }
+}
+
+// 执行翻译的公共函数
+// options.checkUserEdited: 是否检查用户是否手动编辑过英文
+async function translateEnglish(options: { checkUserEdited: boolean }) {
+  const trimmedValue = editValue.value.trim()
+  if (!trimmedValue) {
+    // 如果中文为空，清空英文
+    editValueEn.value = ''
+    return
+  }
+
+  // 如果需要检查用户编辑状态，且用户已经手动编辑过英文，则不自动覆盖
+  if (options.checkUserEdited && userManuallyEditedEnglish.value) {
+    return
+  }
+
+  // 只对有英文字段的轨道类型进行自动翻译
+  if (!getTrackConfig(editTrackType.value).hasEnglish) {
+    return
+  }
+
+  const apiType = trackTypeToApiType(editTrackType.value)
+  if (!apiType) {
+    return
+  }
+
+  isTranslating.value = true
+  try {
+    const result = await geoEditorApi.translatePlaceName({
+      name: trimmedValue,
+      type: apiType
+    })
+    editValueEn.value = result.name_en
+  } catch (error) {
+    console.error('翻译失败:', error)
+    ElMessage.warning('自动翻译失败，请手动输入英文')
+  } finally {
+    isTranslating.value = false
+  }
+}
+
+// 英文输入框输入事件：标记用户已手动编辑
+function handleEnglishInput() {
+  // 一旦用户在英文框输入过任何内容，就标记为已手动编辑
+  // 这个标记会持续到对话框关闭，之后所有失焦都不会再自动填充
+  userManuallyEditedEnglish.value = true
+}
+
+// 对话框关闭时重置状态
+function handleDialogClose() {
+  userManuallyEditedEnglish.value = false
+  isTranslating.value = false
 }
 
 // 保存编辑
@@ -671,6 +769,11 @@ const segmentsByTrack = computed(() => {
 watch(isMultiSelectMode, (isActive) => {
   emit('multi-select-change', isActive)
 })
+
+// 监听对话框状态变化，通知父组件
+watch(editDialogVisible, (isOpen) => {
+  emit('dialog-open', isOpen)
+})
 </script>
 
 <template>
@@ -745,6 +848,7 @@ watch(isMultiSelectMode, (isActive) => {
       :title="`编辑${getTrackConfig(editTrackType).label}`"
       width="400px"
       :close-on-click-modal="false"
+      @close="handleDialogClose"
     >
       <el-form label-width="80px">
         <el-form-item :label="getTrackConfig(editTrackType).label">
@@ -752,6 +856,8 @@ watch(isMultiSelectMode, (isActive) => {
             v-model="editValue"
             :placeholder="getTrackConfig(editTrackType).placeholder"
             clearable
+            @blur="handleChineseBlur"
+            @keydown="handleChineseKeydown"
           />
         </el-form-item>
         <el-form-item
@@ -762,6 +868,8 @@ watch(isMultiSelectMode, (isActive) => {
             v-model="editValueEn"
             placeholder="如：Beijing"
             clearable
+            :loading="isTranslating"
+            @input="handleEnglishInput"
           />
         </el-form-item>
       </el-form>

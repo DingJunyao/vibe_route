@@ -958,6 +958,11 @@ function handleExitMultiSelect() {
 
 // 全局键盘事件
 function handleGlobalKeydown(e: KeyboardEvent) {
+  // 如果编辑对话框打开，禁用所有快捷键
+  if (isEditDialogOpen.value) {
+    return
+  }
+
   // Ctrl+Z 撤销 / Ctrl+Y 重做
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
     if (e.key === 'z') {
@@ -1059,8 +1064,15 @@ const scaleHighlightIndex = ref<number | null>(null)
 // 多选模式状态（来自 TimelineTracks）
 const isMultiSelectMode = ref(false)
 
+// 对话框状态（来自 TimelineTracks）
+const isEditDialogOpen = ref(false)
+
 function handleMultiSelectChange(isActive: boolean) {
   isMultiSelectMode.value = isActive
+}
+
+function handleDialogOpen(isOpen: boolean) {
+  isEditDialogOpen.value = isOpen
 }
 
 function handleScaleHover(pointIndex: number | null) {
@@ -1326,6 +1338,7 @@ function handleMapPointHover(_point: any, pointIndex: number) {
                 @multi-select-change="handleMultiSelectChange"
                 @resize="handleSegmentResize"
                 @move="handleSegmentMove"
+                @dialog-open="handleDialogOpen"
               />
             </div>
 

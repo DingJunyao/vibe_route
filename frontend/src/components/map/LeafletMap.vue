@@ -2196,7 +2196,7 @@ function drawTracks() {
       if (segmentPath.length > 0) {
         const segmentLatLngs: L.LatLngExpression[] = segmentPath.map(([lng, lat]) => [lat, lng])
         highlightPolyline.value = L.polyline(segmentLatLngs, {
-          color: '#ff4d4f',  // 红色高亮（插值轨迹）
+          color: '#409eff',  // 蓝色高亮
           weight: 7,
           opacity: 0.9,
         })

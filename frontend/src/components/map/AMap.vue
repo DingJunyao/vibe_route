@@ -1405,7 +1405,6 @@ function drawTracks() {
     }
   }
   // 绘制单段高亮（detail 模式，兼容旧逻辑）
-  // 红色高亮用于插值轨迹
   else if (props.mode === 'detail' && props.highlightSegment && trackPath.length > 0) {
     const { start, end } = props.highlightSegment
     if (start >= 0 && end < trackPath.length && start <= end) {
@@ -1415,7 +1414,7 @@ function drawTracks() {
         highlightPolyline = new AMap.Polyline({
           path: lngLatPath,
           borderWeight: 1,
-          strokeColor: '#ff4d4f',  // 红色高亮（插值轨迹）
+          strokeColor: '#409eff',  // 蓝色高亮
           strokeOpacity: 0.9,
           strokeWeight: 7,
           lineJoin: 'round',

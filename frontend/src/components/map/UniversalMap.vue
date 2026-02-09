@@ -173,6 +173,7 @@ import BMap from './BMap.vue'
 import TencentMap from './TencentMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 import { formatTimeShort } from '@/utils/relativeTime'
+import { getEffectiveMapLayer, saveLocalMapPreference } from '@/utils/mapLocalPreference'
 
 interface Point {
   latitude?: number
@@ -514,8 +515,9 @@ function switchLayer(layerId: string) {
   }
 
   currentLayerId.value = layerId
-  // 注意：我们不需要更新 configStore，因为 map_layers 是存储在数据库中的配置
-  // 我们只需要在本地切换即可
+
+  // 保存到本地存储
+  saveLocalMapPreference(layerId)
 
   // 等待新地图初始化后恢复视角
   nextTick(() => {
@@ -695,8 +697,15 @@ onMounted(async () => {
   if (!configStore.config) {
     await configStore.fetchConfig()
   }
-  // 初始化当前图层
-  currentLayerId.value = props.defaultLayerId || configStore.getMapProvider()
+
+  // 获取所有可用的地图层 ID
+  const availableLayerIds = configStore.getMapLayers().map(layer => layer.id)
+
+  // 确定默认地图层（系统默认或 prop 指定的）
+  const defaultLayer = props.defaultLayerId || configStore.getMapProvider()
+
+  // 使用本地偏好（如果存在且可用），否则使用默认值
+  currentLayerId.value = getEffectiveMapLayer(availableLayerIds, defaultLayer)
 
   // 启动时间刷新定时器
   if (props.liveUpdateTime) {
@@ -723,6 +732,8 @@ watch(currentLayerId, () => {
 watch(() => props.defaultLayerId, (newVal) => {
   if (newVal) {
     currentLayerId.value = newVal
+    // 保存到本地存储
+    saveLocalMapPreference(newVal)
   }
 })
 

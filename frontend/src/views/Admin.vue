@@ -842,8 +842,8 @@
             </div>
           </el-tab-pane>
 
-          <!-- 特殊地名映射（仅 GDF 地理编码时显示） -->
-          <el-tab-pane v-if="config.geocoding_provider === 'gdf'" label="地名映射" name="place-mapping">
+          <!-- 特殊地名映射（始终显示） -->
+          <el-tab-pane label="地名映射" name="place-mapping">
             <div class="place-mapping-tab-content">
               <el-card shadow="never" class="mapping-card">
                 <template #header>

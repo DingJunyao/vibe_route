@@ -68,3 +68,14 @@ class GeoEditorDataResponse(BaseModel):
     def serialize_points(self, points: List[TrackPointGeoData]) -> List[TrackPointGeoData]:
         # 限制返回点数，避免响应过大
         return points[:5000]
+
+
+class PlaceNameTranslateRequest(BaseModel):
+    """地名翻译请求"""
+    name: str
+    type: str = Field(..., pattern="^(province|city|district|road_name)$")
+
+
+class PlaceNameTranslateResponse(BaseModel):
+    """地名翻译响应"""
+    name_en: str

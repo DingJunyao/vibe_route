@@ -51,6 +51,15 @@ export interface GeoUpdateResponse {
   segments_count: number
 }
 
+export interface PlaceNameTranslateRequest {
+  name: string
+  type: 'province' | 'city' | 'district' | 'road_name'
+}
+
+export interface PlaceNameTranslateResponse {
+  name_en: string
+}
+
 // API 方法
 export const geoEditorApi = {
   // 获取编辑器数据
@@ -61,5 +70,10 @@ export const geoEditorApi = {
   // 批量更新段落
   updateSegments(trackId: number, request: GeoSegmentsUpdateRequest): Promise<GeoUpdateResponse> {
     return http.put(`/geo-editor/tracks/${trackId}/segments`, request)
+  },
+
+  // 翻译地名为英文
+  translatePlaceName(request: PlaceNameTranslateRequest): Promise<PlaceNameTranslateResponse> {
+    return http.post('/geo-editor/translate-place-name', request)
   },
 }

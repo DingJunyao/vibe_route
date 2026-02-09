@@ -11,6 +11,8 @@ from app.models.user import User
 from app.schemas.geo_editor import (
     GeoEditorDataResponse,
     GeoSegmentsUpdateRequest,
+    PlaceNameTranslateRequest,
+    PlaceNameTranslateResponse,
 )
 from app.services.geo_editor_service import geo_editor_service
 
@@ -78,4 +80,28 @@ async def update_geo_segments(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="更新地理信息失败",
+        )
+
+
+@router.post("/translate-place-name", response_model=PlaceNameTranslateResponse)
+async def translate_place_name(
+    request: PlaceNameTranslateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    翻译地名为英文
+
+    根据中文名称和类型自动生成英文翻译。
+    支持的类型：province（省）、city（市）、district（区）、road_name（道路）
+    """
+    try:
+        from app.utils.place_name_translator import translate_place_name
+
+        name_en = translate_place_name(request.name, request.type)
+        return PlaceNameTranslateResponse(name_en=name_en)
+    except Exception as e:
+        logger.error(f"Error translating place name: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="翻译失败",
         )
