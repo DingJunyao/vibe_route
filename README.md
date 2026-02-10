@@ -213,6 +213,17 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 
 **数据库支持**：
 
+| 驱动 | 用途 | x86/x64 | ARM (树莓派) |
+|------|------|---------|--------------|
+| `aiosqlite` | SQLite 异步 | ✅ wheel | ✅ wheel |
+| `asyncmy` | MySQL 异步（高性能） | ✅ wheel | ❌ 需 Rust 编译 |
+| `aiomysql` | MySQL 异步（纯 Python） | ✅ | ✅ wheel |
+| `asyncpg` | PostgreSQL 异步 | ✅ wheel | ❌ 需编译 |
+| `pymysql` | Alembic 迁移（MySQL） | ✅ | ✅ wheel |
+| `psycopg2-binary` | Alembic 迁移（PostgreSQL） | ✅ wheel | ❌ 需编译 |
+
+**支持的数据库**：
+
 - SQLite（默认）
 - MySQL
 - PostgreSQL + PostGIS（空间扩展）
@@ -236,6 +247,46 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 ## 快速开始
 
 ### 后端启动
+
+**ARM 架构（树莓派等）**：
+
+```bash
+cd backend
+
+# 1. 安装 Rust 工具链（编译 bcrypt、asyncmy 等）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. 安装系统编译依赖
+sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+
+# 3. 创建虚拟环境
+python -m venv venv
+source venv/bin/activate
+
+# 4. 安装 Python 依赖
+pip install -r requirements.txt
+
+# 5. 从 PyPI 安装需要编译的包（piwheels 可能没有）
+pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+
+# 6. 安装 Playwright 浏览器
+playwright install chromium
+
+# 7. 复制配置文件
+cp .env.example .env
+
+# 8. 创建数据目录
+mkdir -p data/uploads data/temp data/exports data/road_signs
+
+# 9. 数据库迁移（首次启动或模型变更时）
+alembic upgrade head
+
+# 10. 运行开发服务器
+uvicorn app.main:app --reload
+```
+
+**x86/x64 架构**：
 
 ```bash
 cd backend

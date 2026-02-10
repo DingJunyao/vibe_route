@@ -26,6 +26,39 @@ Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "
 
 ### Backend
 
+**ARM 架构（树莓派等）**：
+
+```bash
+# 1. 安装 Rust 工具链（编译 bcrypt、asyncmy 等）
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. 安装系统编译依赖
+sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+
+# 3. 安装 Python 依赖
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 4. 从 PyPI 安装需要编译的包（piwheels 可能没有）
+pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+
+# 5. 安装 Playwright 浏览器
+playwright install chromium
+
+# 6. 配置环境
+cp .env.example .env
+mkdir -p data/uploads data/temp data/exports data/road_signs
+
+# 7. 运行
+uvicorn app.main:app --reload
+alembic upgrade head
+```
+
+**x86/x64 架构**：
+
 ```bash
 cd backend
 python -m venv venv
@@ -69,6 +102,38 @@ npm run dev
 每次大的更改，当用户提出整理要点，都要把要点记录在本文件中。
 
 ## Architecture Overview
+
+### 数据库驱动与平台兼容性
+
+项目支持三种数据库：SQLite、MySQL、PostgreSQL。不同平台下驱动选择：
+
+| 驱动 | 用途 | x86/x64 | ARM (树莓派) |
+|------|------|---------|--------------|
+| `aiosqlite` | SQLite 异步 | ✅ wheel | ✅ wheel |
+| `asyncmy` | MySQL 异步（高性能） | ✅ wheel | ❌ 需 Rust 编译 |
+| `aiomysql` | MySQL 异步（纯 Python） | ✅ | ✅ wheel |
+| `asyncpg` | PostgreSQL 异步 | ✅ wheel | ❌ 需编译 |
+| `pymysql` | Alembic 迁移（MySQL） | ✅ | ✅ wheel |
+| `psycopg2-binary` | Alembic 迁移（PostgreSQL） | ✅ wheel | ❌ 需编译 |
+| `bcrypt` | 密码哈希 | ✅ wheel | ❌ 需 Rust 编译 |
+
+**ARM 平台安装注意事项**：
+
+1. **必须安装 Rust 工具链**：编译 `bcrypt` 和 `asyncmy`
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source $HOME/.cargo/env
+   ```
+
+2. **从 PyPI 安装**：piwheels 可能没有某些包的 wheel
+   ```bash
+   pip install asyncmy bcrypt psycopg2-binary asyncpg --index-url https://pypi.org/simple
+   ```
+
+3. **系统依赖**：
+   ```bash
+   sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+   ```
 
 ### 认证流程（双重加密）
 

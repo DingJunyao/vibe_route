@@ -10,12 +10,13 @@ alembic
 
 # 数据库驱动 (支持多数据库)
 aiosqlite
-asyncmy
-asyncpg
+asyncmy  # x86 平台推荐（高性能），ARM 需 Rust 编译
+aiomysql  # ARM 平台备用（纯 Python）
+asyncpg  # PostgreSQL 异步驱动，ARM 需 Rust 编译
 
 # Alembic 同步驱动 (用于数据库迁移)
 pymysql
-psycopg2-binary
+psycopg2-binary  # PostgreSQL 同步驱动，ARM 需编译
 
 # 认证
 bcrypt==4.0.1
@@ -68,4 +69,5 @@ pytest-asyncio
 httpx
 
 # 解压
-rarfileplaywright==1.48.0
+rarfile
+playwright==1.48.0

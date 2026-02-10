@@ -28,8 +28,35 @@
 ### 支持的操作系统
 
 - Linux (Ubuntu 20.04+, Debian 11+, CentOS 8+)
+  - ARM 架构（树莓派等）需要额外配置
 - macOS 12+
 - Windows 10/11 (开发环境)
+
+### ARM 架构特殊说明
+
+在 ARM 架构（如树莓派）上部署时，以下包需要从源码编译：
+
+| 包 | 说明 | 处理方式 |
+|----|------|----------|
+| `bcrypt` | 密码哈希 | 需要 Rust 工具链 |
+| `asyncmy` | MySQL 异步驱动 | 需要 Rust 工具链 |
+| `asyncpg` | PostgreSQL 异步驱动 | 需要编译 |
+| `psycopg2-binary` | PostgreSQL 同步驱动 | 需要编译 |
+| `lxml` | XML 处理 | 需要编译 |
+
+**ARM 平台安装步骤**：
+
+```bash
+# 1. 安装 Rust 工具链
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. 安装系统编译依赖
+sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+
+# 3. 从 PyPI 安装需要编译的包（piwheels 可能没有）
+pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+```
 
 ### 支持的数据库
 
@@ -40,6 +67,22 @@
 ---
 
 ## 开发环境部署
+
+### ARM 架构（树莓派等）
+
+如果使用 ARM 架构设备，请先完成前置步骤：
+
+```bash
+# 1. 安装 Rust 工具链
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+
+# 2. 安装系统编译依赖
+sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+
+# 3. 安装 Playwright 浏览器（如需海报生成功能）
+playwright install chromium
+```
 
 ### 1. 克隆项目
 
@@ -443,6 +486,31 @@ sudo firewall-cmd --reload
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
 ```
+
+### ARM 架构依赖安装失败
+
+**问题**：树莓派上安装依赖时出现 `No matching distribution found` 错误。
+
+**原因**：某些包（如 `asyncmy`、`bcrypt`）在 piwheels 上没有预编译的 wheel。
+
+**解决方案**：
+
+1. 安装 Rust 工具链：
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   source $HOME/.cargo/env
+   ```
+
+2. 从 PyPI 安装：
+   ```bash
+   pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+   ```
+
+3. 如果仍然失败，使用纯 Python 替代方案：
+   ```bash
+   # 用 aiomysql 替代 asyncmy（已在 requirements.txt 中配置）
+   pip install aiomysql
+   ```
 
 ---
 
