@@ -28,6 +28,8 @@ Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "
 
 **ARM 架构（树莓派等）**：
 
+> **注意**：piwheels 上某些包（如 uvicorn 旧版本）存在元数据损坏，会导致 pip 依赖解析卡住。建议直接从 PyPI 安装所有依赖。
+
 ```bash
 # 1. 安装 Rust 工具链（编译 bcrypt、asyncmy 等）
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -40,10 +42,9 @@ sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
 cd backend
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
 
-# 4. 从 PyPI 安装需要编译的包（piwheels 可能没有）
-pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+# 4. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 
 # 5. 安装 Playwright 浏览器
 playwright install chromium

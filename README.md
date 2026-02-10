@@ -250,6 +250,8 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 
 **ARM 架构（树莓派等）**：
 
+> **注意**：piwheels 上某些包存在元数据损坏，建议直接从 PyPI 安装。
+
 ```bash
 cd backend
 
@@ -264,25 +266,22 @@ sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
 python -m venv venv
 source venv/bin/activate
 
-# 4. 安装 Python 依赖
-pip install -r requirements.txt
+# 4. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 
-# 5. 从 PyPI 安装需要编译的包（piwheels 可能没有）
-pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
-
-# 6. 安装 Playwright 浏览器
+# 5. 安装 Playwright 浏览器
 playwright install chromium
 
-# 7. 复制配置文件
+# 6. 复制配置文件
 cp .env.example .env
 
-# 8. 创建数据目录
+# 7. 创建数据目录
 mkdir -p data/uploads data/temp data/exports data/road_signs
 
-# 9. 数据库迁移（首次启动或模型变更时）
+# 8. 数据库迁移（首次启动或模型变更时）
 alembic upgrade head
 
-# 10. 运行开发服务器
+# 9. 运行开发服务器
 uvicorn app.main:app --reload
 ```
 

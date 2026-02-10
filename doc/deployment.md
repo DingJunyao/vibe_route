@@ -46,6 +46,8 @@
 
 **ARM 平台安装步骤**：
 
+> **重要提示**：piwheels 上某些包（如 uvicorn 旧版本）存在元数据损坏，会导致 pip 依赖解析卡住。**建议直接从 PyPI 安装所有依赖**。
+
 ```bash
 # 1. 安装 Rust 工具链
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -54,8 +56,8 @@ source $HOME/.cargo/env
 # 2. 安装系统编译依赖
 sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
 
-# 3. 从 PyPI 安装需要编译的包（piwheels 可能没有）
-pip install asyncmy bcrypt psycopg2-binary asyncpg lxml --index-url https://pypi.org/simple
+# 3. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 ```
 
 ### 支持的数据库
@@ -106,7 +108,12 @@ source venv/bin/activate
 venv\Scripts\activate
 
 # 安装依赖
-pip install -r requirements.txt
+
+# ARM 架构：从 PyPI 安装（避免 piwheels 元数据问题）
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+
+# x86/x64 架构：可使用 requirements.txt
+# pip install -r requirements.txt
 
 # 复制配置文件
 cp .env.example .env
@@ -489,7 +496,17 @@ proxy_set_header Connection "upgrade";
 
 ### ARM 架构依赖安装失败
 
-**问题**：树莓派上安装依赖时出现 `No matching distribution found` 错误。
+**问题 1**：`pip install -r requirements.txt` 卡住不动。
+
+**原因**：piwheels 上某些包（如 uvicorn 旧版本）存在元数据损坏，导致 pip 依赖解析陷入死循环。
+
+**解决方案**：直接从 PyPI 安装所有依赖
+
+```bash
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+```
+
+**问题 2**：树莓派上安装依赖时出现 `No matching distribution found` 错误。
 
 **原因**：某些包（如 `asyncmy`、`bcrypt`）在 piwheels 上没有预编译的 wheel。
 
