@@ -38,7 +38,7 @@
 
 | 包 | 说明 | 处理方式 |
 |----|------|----------|
-| `bcrypt` | 密码哈希 | 需要 Rust 工具链 |
+| `bcrypt` | 密码哈希 | 需要 Rust 工具链，**版本需固定在 3.x** |
 | `asyncmy` | MySQL 异步驱动 | 需要 Rust 工具链 |
 | `asyncpg` | PostgreSQL 异步驱动 | 需要编译 |
 | `psycopg2-binary` | PostgreSQL 同步驱动 | 需要编译 |
@@ -506,7 +506,37 @@ proxy_set_header Connection "upgrade";
 pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 ```
 
-**问题 2**：树莓派上安装依赖时出现 `No matching distribution found` 错误。
+**问题 2**：bcrypt 版本兼容性问题。
+
+**错误信息**：
+```
+AttributeError: module 'bcrypt' has no attribute '__about__'
+ValueError: password cannot be longer than 72 bytes
+```
+
+**原因**：bcrypt 4.0.0+ 移除了 `__about__` 属性，bcrypt 5.0.0+ API 变更，导致 passlib 1.7.4 无法正确使用。
+
+**解决方案**：
+```bash
+pip uninstall -y bcrypt
+pip install 'bcrypt>=3.2.0,<4.0.0'
+```
+
+**问题 3**：svgpathtools 导入错误或版本不兼容。
+
+**错误信息**：
+```
+ModuleNotFoundError: No module named 'svgpathtools'
+```
+
+**原因**：PyPI 上的 svgpathtools 版本与项目不兼容。
+
+**解决方案**：从 GitHub 特定仓库安装
+```bash
+pip install "svgpathtools @ https://github.com/bcwhite-code/svgpathtools/archive/refs/heads/master.zip"
+```
+
+**问题 4**：树莓派上安装依赖时出现 `No matching distribution found` 错误。
 
 **原因**：某些包（如 `asyncmy`、`bcrypt`）在 piwheels 上没有预编译的 wheel。
 

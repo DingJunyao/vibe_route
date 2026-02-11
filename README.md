@@ -248,9 +248,12 @@ Vibe Route 旨在将这些数字化的足迹转化为可被感知、被分享、
 
 ### 后端启动
 
-**ARM 架构（树莓派等）**：
+**ARM 架构（树莓派、Termux + proot-distro 等）**：
 
-> **注意**：piwheels 上某些包存在元数据损坏，建议直接从 PyPI 安装。
+> **重要提示**：
+> 1. **bcrypt 版本**：需固定在 3.x（`bcrypt>=3.2.0,<4.0.0`），与 passlib 1.7.4 兼容
+> 2. **svgpathtools 来源**：需从 GitHub 特定仓库安装
+> 3. **piwheels 问题**：某些包存在元数据损坏，建议直接从 PyPI 安装
 
 ```bash
 cd backend
@@ -260,30 +263,61 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source $HOME/.cargo/env
 
 # 2. 安装系统编译依赖
-sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev python3.13-venv
 
 # 3. 创建虚拟环境
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 
 # 4. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt>=3.2.0,<4.0.0 python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile slowapi python-multipart --index-url https://pypi.org/simple
 
-# 5. 安装 Playwright 浏览器
+# 5. svgpathtools 从 GitHub 安装（PyPI 版本不兼容）
+pip install "svgpathtools @ https://github.com/bcwhite-code/svgpathtools/archive/refs/heads/master.zip"
+
+# 6. 安装 Playwright
+pip install playwright==1.58.0
 playwright install chromium
 
-# 6. 复制配置文件
+# 7. 安装 Playwright 系统依赖
+sudo apt-get install -y libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libxcb1 libxkbcommon0 libatspi2.0-0t64 libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libcairo2 libpango-1.0-0 libasound2t64
+
+# 8. 复制配置文件
 cp .env.example .env
 
-# 7. 创建数据目录
+# 9. 创建数据目录
 mkdir -p data/uploads data/temp data/exports data/road_signs
 
-# 8. 数据库迁移（首次启动或模型变更时）
-alembic upgrade head
+# 10. 初始化数据库（使用 SQLAlchemy 创建表）
+python -c "
+import asyncio
+from app.core.database import engine
+from app.models import Base
 
-# 9. 运行开发服务器
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+asyncio.run(init_db())
+print('数据库初始化成功!')
+"
+
+# 11. 设置 alembic 版本标记
+python -c "
+import sqlite3
+conn = sqlite3.connect('data/vibe_route.db')
+cursor = conn.cursor()
+cursor.execute('CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(32) NOT NULL)')
+cursor.execute('INSERT INTO alembic_version (version_num) VALUES (' + "'"'014_add_interpolations' + "'" + '))
+conn.commit()
+print('Alembic 版本已设置: 014_add_interpolations')
+"
+
+# 12. 运行开发服务器
 uvicorn app.main:app --reload
 ```
+
+> **Termux + proot-distro 用户**：请参考 [doc/termux-deployment.md](./doc/termux-deployment.md) 获取详细的部署指南和常见问题解决。
 
 **x86/x64 架构**：
 
