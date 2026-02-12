@@ -293,10 +293,11 @@ class OverlayRenderer:
         elem_width, elem_height = element_size
         pos_config = element.position or PositionConfig()
 
-        # 获取容器锚点坐标
+        # 获取容器锚点坐标（始终相对于画布，不受 use_safe_area 影响）
+        # position.x/y 是相对于画布的偏移
         container_x, container_y = self._get_container_anchor(
             pos_config.container_anchor,
-            pos_config.use_safe_area
+            use_safe_area=False  # 始终使用画布作为容器
         )
 
         # 获取元素锚点偏移
@@ -311,6 +312,7 @@ class OverlayRenderer:
         offset_y = self.output_height * pos_config.y
 
         # 最终位置（元素左上角）
+        # 容器锚点（画布） + 偏移（画布） - 元素锚点偏移
         final_x = container_x + offset_x - elem_anchor_x
         final_y = container_y + offset_y - elem_anchor_y
 

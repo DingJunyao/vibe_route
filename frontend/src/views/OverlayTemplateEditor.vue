@@ -157,7 +157,8 @@
               </div>
 
               <!-- 控制点覆盖层（与 element-outline 同级，在同一缩放容器内） -->
-              <div class="resize-handles-overlay" v-if="selectedElement">
+              <!-- 拖动时隐藏控制点以提高性能 -->
+              <div class="resize-handles-overlay" v-if="selectedElement && !isDragging">
                 <!-- 四角：调整字号 -->
                 <div :class="getHandlePosition('nw').class" @mousedown.stop="handleResizeStart($event, selectedElement, 'nw')" title="调整字号" :style="getHandlePosition('nw')"></div>
                 <div :class="getHandlePosition('ne').class" @mousedown.stop="handleResizeStart($event, selectedElement, 'ne')" title="调整字号" :style="getHandlePosition('ne')"></div>
@@ -327,20 +328,22 @@
               <el-form-item label="元素锚点">
                 <anchor-selector v-model="selectedElement.position.element_anchor" />
               </el-form-item>
-              <el-form-item label="X 偏移%">
+              <el-form-item label="X 偏移">
                 <el-input-number
                   v-model="selectedElement.position.x"
-                  :min="-50" :max="50" :step="0.001"
+                  :step="0.001"
                   controls-position="right"
-                  :precision="3"
+                  :precision="4"
+                  style="width: 100%"
                 />
               </el-form-item>
-              <el-form-item label="Y 偏移%">
+              <el-form-item label="Y 偏移">
                 <el-input-number
                   v-model="selectedElement.position.y"
-                  :min="-50" :max="50" :step="0.001"
+                  :step="0.001"
                   controls-position="right"
-                  :precision="3"
+                  :precision="4"
+                  style="width: 100%"
                 />
               </el-form-item>
               <el-form-item label="使用安全区">
@@ -393,12 +396,12 @@
                 <font-selector v-model="selectedElement.style.font_family" />
               </el-form-item>
               <el-form-item label="字号%">
-                <el-slider
+                <el-input-number
                   v-model="selectedElement.style.font_size"
-                  :min="0.01" :max="0.1" :step="0.005"
-                  show-input
-                  :input-size="'small'"
-                  :format-tooltip="(v: number) => `${(v * 100).toFixed(1)}%`"
+                  :step="0.001"
+                  :precision="4"
+                  controls-position="right"
+                  style="width: 100%"
                 />
               </el-form-item>
               <el-form-item label="颜色">
@@ -411,11 +414,12 @@
               <el-divider>文本布局</el-divider>
               <el-form label-width="80px" size="small">
                 <el-form-item label="宽度%">
-                  <el-slider
+                  <el-input-number
                     v-model="selectedElement.layout.width"
-                    :min="0" :max="0.5" :step="0.01"
-                    show-input
-                    :input-size="'small'"
+                    :step="0.01"
+                    :precision="3"
+                    controls-position="right"
+                    style="width: 100%"
                   />
                 </el-form-item>
                 <el-form-item label="对齐">
@@ -429,11 +433,12 @@
                   <el-switch v-model="selectedElement.layout.wrap" />
                 </el-form-item>
                 <el-form-item label="行高">
-                  <el-slider
+                  <el-input-number
                     v-model="selectedElement.layout.line_height"
-                    :min="1" :max="2" :step="0.1"
-                    show-input
-                    :input-size="'small'"
+                    :step="0.1"
+                    :precision="2"
+                    controls-position="right"
+                    style="width: 100%"
                   />
                 </el-form-item>
               </el-form>
@@ -554,6 +559,9 @@ const templateConfig = ref<OverlayTemplateConfig>({
 
 // 选中的元素
 const selectedElementId = ref<string | null>(null)
+
+// 元素轮廓样式版本号（用于强制刷新）
+const elementStyleVersion = ref(0)
 
 const selectedElement = computed(() => {
   if (!selectedElementId.value) return null
@@ -976,17 +984,8 @@ const renderOverlayCanvas = () => {
 
     if (!text) continue
 
-    // 计算内容区域
-    let contentArea = {
-      x: safeAreaLeft,
-      y: safeAreaTop,
-      width: safeAreaWidth,
-      height: safeAreaHeight
-    }
-
-    if (!element.position.use_safe_area) {
-      contentArea = { x: 0, y: 0, width, height }
-    }
+    // 容器锚点始终相对于画布计算（不受 use_safe_area 影响）
+    const contentArea = { x: 0, y: 0, width, height }
 
     // 容器锚点
     const containerAnchor = anchorPositions[element.position.container_anchor] || anchorPositions['top-left']
@@ -994,8 +993,9 @@ const renderOverlayCanvas = () => {
     const anchorY = contentArea.y + contentArea.height * containerAnchor.y
 
     // 元素偏移（相对于整个画布）
-    const offsetX = (element.position.x / 100) * width
-    const offsetY = (element.position.y / 100) * height
+    // position.x/y 的单位是比例（0-1），范围 -0.5 到 0.5
+    const offsetX = element.position.x * width
+    const offsetY = element.position.y * height
 
     // 字体大小
     const fontSize = (element.style?.font_size || 0.025) * height
@@ -1189,9 +1189,11 @@ const deleteElement = (elementId: string) => {
   }
 }
 
-// 获取元素边框样式
 // 获取元素边框样式（与 Canvas 渲染逻辑一致，使用百分比）
+// 注意：此函数访问 elementStyleVersion 以确保拖动时重新计算
 const getElementOutlineStyle = (element: OverlayElement) => {
+  // 访问版本号以建立响应式依赖
+  const _version = elementStyleVersion.value
   const config = templateConfig.value
 
   // Canvas 原始尺寸
@@ -1207,17 +1209,9 @@ const getElementOutlineStyle = (element: OverlayElement) => {
   const safeAreaWidth = canvasWidth - safeAreaLeft - safeAreaRight
   const safeAreaHeight = canvasHeight - safeAreaTop - safeAreaBottom
 
-  // 内容区域
-  let contentArea = {
-    x: safeAreaLeft,
-    y: safeAreaTop,
-    width: safeAreaWidth,
-    height: safeAreaHeight
-  }
-
-  if (!element.position.use_safe_area) {
-    contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
-  }
+  // 容器锚点始终相对于画布计算（不受 use_safe_area 影响）
+  // position.x/y 是相对于画布的偏移
+  const contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
 
   // 锚点位置
   const anchorPositions: Record<string, { x: number; y: number }> = {
@@ -1240,8 +1234,9 @@ const getElementOutlineStyle = (element: OverlayElement) => {
   const anchorY = contentArea.y + contentArea.height * containerAnchor.y
 
   // 元素偏移（相对于整个画布）
-  const offsetX = (element.position.x / 100) * canvasWidth
-  const offsetY = (element.position.y / 100) * canvasHeight
+  // position.x/y 的单位是比例（0-1），范围 -0.5 到 0.5
+  const offsetX = element.position.x * canvasWidth
+  const offsetY = element.position.y * canvasHeight
 
   // 字体大小（Canvas 坐标系）
   const fontSize = (element.style?.font_size || 0.025) * canvasHeight
@@ -1393,16 +1388,8 @@ const getHandlePosition = (handle: string) => {
   const safeAreaWidth = canvasWidth - safeAreaLeft - safeAreaRight
   const safeAreaHeight = canvasHeight - safeAreaTop - safeAreaBottom
 
-  let contentArea = {
-    x: safeAreaLeft,
-    y: safeAreaTop,
-    width: safeAreaWidth,
-    height: safeAreaHeight
-  }
-
-  if (!selectedElement.value.position.use_safe_area) {
-    contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
-  }
+  // 容器锚点始终相对于画布计算（不受 use_safe_area 影响）
+  const contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
 
   const anchorPositions: Record<string, { x: number; y: number }> = {
     'top-left': { x: 0, y: 0 },
@@ -1422,8 +1409,9 @@ const getHandlePosition = (handle: string) => {
   const anchorX = contentArea.x + contentArea.width * containerAnchor.x
   const anchorY = contentArea.y + contentArea.height * containerAnchor.y
 
-  const offsetX = (selectedElement.value.position.x / 100) * canvasWidth
-  const offsetY = (selectedElement.value.position.y / 100) * canvasHeight
+  // position.x/y 的单位是比例（0-1），范围 -0.5 到 0.5
+  const offsetX = selectedElement.value.position.x * canvasWidth
+  const offsetY = selectedElement.value.position.y * canvasHeight
 
   const fontSize = (selectedElement.value.style?.font_size || 0.025) * canvasHeight
 
@@ -1455,7 +1443,6 @@ const getHandlePosition = (handle: string) => {
     textWidth = metrics.width
     ascent = metrics.actualBoundingBoxAscent || fontSize * 0.8
     descent = metrics.actualBoundingBoxDescent || fontSize * 0.2
-    console.log('[getHandlePosition] text=', text, 'textWidth=', textWidth, 'fontSize=', fontSize)
   }
 
   const textHeight = ascent + descent
@@ -1466,10 +1453,8 @@ const getHandlePosition = (handle: string) => {
   const fixedWidth = layout?.width
 
   // 如果设置了固定宽度且启用了折行，使用设置的宽度而不是实际文本宽度
-  console.log('[getHandlePosition] wrapEnabled=', wrapEnabled, 'fixedWidth=', fixedWidth, 'textWidth before=', textWidth)
   if (wrapEnabled && fixedWidth !== undefined && fixedWidth !== null) {
     textWidth = fixedWidth * canvasWidth
-    console.log('[getHandlePosition] 使用固定宽度: textWidth=', textWidth, 'canvasWidth=', canvasWidth)
   }
 
   // 计算元素高度：如果有 layout.height 且启用折行，使用 layout.height
@@ -1644,15 +1629,21 @@ const getHandlePosition = (handle: string) => {
 // 处理元素鼠标按下（开始拖动）
 const handleElementMouseDown = (event: MouseEvent, element: OverlayElement) => {
   if (event.button !== 0) return // 只响应左键
+
+  // 阻止事件传播和默认行为
+  event.preventDefault()
+  event.stopPropagation()
+
   selectElement(element.id)
   isDragging.value = true
   dragStartPos.value = { x: event.clientX, y: event.clientY }
-  elementStartPos.value = { x: element.position.x, y: element.position.y }
+  // 只更新拖动需要的位置字段，保留其他字段
+  elementStartPos.value.x = element.position.x
+  elementStartPos.value.y = element.position.y
 }
 
 // 处理画布区域鼠标按下（用于空格键拖动）
 const handleCanvasMouseDown = (event: MouseEvent) => {
-  console.log('[MouseDown] button=', event.button, 'isSpacePressed=', isSpacePressed.value)
 
   // 只处理左键
   if (event.button !== 0) return
@@ -1675,7 +1666,7 @@ const handleCanvasMouseDown = (event: MouseEvent) => {
       y: previewContainerRef.value.scrollTop
     }
     previewContainerRef.value.classList.add('is-panning')
-    console.log('[PanStart] scrollPos=', panStartScroll.value)
+  
   }
 }
 
@@ -1691,7 +1682,7 @@ const handleCanvasTouchStart = (event: TouchEvent) => {
       y: previewContainerRef.value.scrollTop
     }
     previewContainerRef.value.classList.add('is-panning')
-    console.log('[TouchStart] scrollPos=', panStartScroll.value)
+  
   }
 }
 
@@ -1736,16 +1727,16 @@ const handleCanvasTouchEnd = () => {
 
 // 处理缩放开始
 const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: string) => {
-  console.log('[ResizeStart] handle=', handle, 'button=', event.button, 'isResizing before=', isResizing.value, 'target=', event.target)
+
 
   // 居中锚点标记不触发任何操作
   if (handle === 'center-marker') {
-    console.log('[ResizeStart] center-marker, ignoring')
+  
     return
   }
 
   if (event.button !== 0) {
-    console.log('[ResizeStart] not left button, ignoring')
+  
     return
   }
 
@@ -1755,7 +1746,7 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
   resizeHandle.value = handle
   dragStartPos.value = { x: event.clientX, y: event.clientY }
 
-  console.log('[ResizeStart] isResizing after=', isResizing.value, 'resizeHandle=', resizeHandle.value)
+
 
   // 阻止事件传播和默认行为
   event.stopPropagation()
@@ -1786,29 +1777,20 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
   const posX = element.position.x || 0
   const posY = element.position.y || 0
 
-  // 计算容器锚点位置（使用与 renderOverlayCanvas 相同的逻辑）
+  // 计算容器锚点位置（始终相对于画布，不受 use_safe_area 影响）
   const containerAnchorPos = anchorPositions[containerAnchor] || anchorPositions['top-left']
   const elementAnchorPos = anchorPositions[elementAnchor] || anchorPositions['top-left']
 
-  // 计算安全区域
-  let contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
-  if (element.position.use_safe_area) {
-    const safeArea = config.safe_area
-    contentArea = {
-      x: safeArea.left * canvasWidth,
-      y: safeArea.top * canvasHeight,
-      width: (1 - safeArea.left - safeArea.right) * canvasWidth,
-      height: (1 - safeArea.top - safeArea.bottom) * canvasHeight
-    }
-  }
+  // 容器锚点始终相对于画布
+  const contentArea = { x: 0, y: 0, width: canvasWidth, height: canvasHeight }
 
   const anchorX = contentArea.x + contentArea.width * containerAnchorPos.x
   const anchorY = contentArea.y + contentArea.height * containerAnchorPos.y
 
   // 计算偏移（像素）
-  // 注意：position.x/y 是百分比（-0.5 到 0.5），需要除以 100 转换
-  const offsetX = (posX / 100) * canvasWidth
-  const offsetY = (posY / 100) * canvasHeight
+  // position.x/y 的单位是比例（0-1），范围 -0.5 到 0.5
+  const offsetX = posX * canvasWidth
+  const offsetY = posY * canvasHeight
 
   // 获取文本尺寸
   const style = element.style || {}
@@ -1825,9 +1807,9 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
   let descent = 0
 
   const tempCtx = overlayCanvasRef.value?.getContext('2d')
-  console.log('[ResizeStart] element.type=', element.type)
-  console.log('[ResizeStart] element.content=', element.content)
-  console.log('[ResizeStart] element.content.format=', element.content?.format)
+
+
+
 
   // 获取文本内容
   let textSource = ''
@@ -1838,10 +1820,10 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
     customSampleText = element.content.sample_text || ''
   }
 
-  console.log('[ResizeStart] textSource=', textSource)
-  console.log('[ResizeStart] customSampleText=', customSampleText)
-  console.log('[ResizeStart] actualFontSize=', actualFontSize)
-  console.log('[ResizeStart] fontFamily=', fontFamily)
+
+
+
+
 
   if (tempCtx) {
     let text = getSampleText(textSource, customSampleText)
@@ -1852,7 +1834,7 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
     } catch {
       // 保持原文本
     }
-    console.log('[ResizeStart] text=', text, 'formatStr=', formatStr)
+  
     // 与 getHandlePosition 一致：将双引号替换为单引号
     const fontCss = fontFamily.replace(/"/g, "'")
     tempCtx.font = `${actualFontSize}px '${fontCss}'`
@@ -1860,7 +1842,7 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
     textWidth = metrics.width
     ascent = metrics.actualBoundingBoxAscent || actualFontSize * 0.8
     descent = metrics.actualBoundingBoxDescent || actualFontSize * 0.2
-    console.log('[ResizeStart] metrics.width=', metrics.width, 'font=', tempCtx.font)
+  
   }
 
   // 如果设置了固定宽度且启用了折行，使用设置的宽度
@@ -1903,15 +1885,15 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
   const currentHeightPct = elemBottomPct - elemTopPct
 
   // 调试日志
-  console.log('[ResizeStart] element.layout.width=', layout.width)
-  console.log('[ResizeStart] textWidth=', textWidth, 'elemLeft=', elemLeft, 'elemRight=', elemRight)
-  console.log('[ResizeStart] elemLeftPct=', elemLeftPct.toFixed(2), 'elemRightPct=', elemRightPct.toFixed(2))
-  console.log('[ResizeStart] currentWidthPct=', currentWidthPct.toFixed(2))
-  console.log('[ResizeStart] scaleToPreviewX=', scaleToPreviewX)
+
+
+
+
+
 
   // 获取 getHandlePosition 计算的控制点位置（用于对比）
   const handlePos = getHandlePosition('e')
-  console.log('[ResizeStart] getHandlePosition(e).left=', handlePos.left)
+
 
   // 对于四角控制点，计算拖动开始时鼠标到元素中心的距离（预览内容百分比）
   let centerDistance: number | undefined
@@ -1955,7 +1937,7 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
         const deltaY = mousePctY - elemCenterY
         centerDistance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
 
-        console.log('[ResizeStart] corner handle, centerDistance=', centerDistance?.toFixed(2))
+      
       }
     }
   }
@@ -1979,6 +1961,11 @@ const handleMouseMove = (event: MouseEvent) => {
   // 始终更新鼠标位置（用于空格键拖动检测）
   lastMousePos.value = { x: event.clientX, y: event.clientY }
 
+  // 调试日志
+  if (isDragging.value) {
+  
+  }
+
   // 空格键拖动画布
   if (isPanning.value && previewContainerRef.value) {
     event.preventDefault()
@@ -2001,7 +1988,7 @@ const handleMouseMove = (event: MouseEvent) => {
     const clampedScrollTop = Math.max(0, Math.min(maxScrollTop, newScrollTop))
 
     // 调试日志 - 显示实际设置后的值
-    console.log(`[Pan] dX=${deltaX.toFixed(1)}, dY=${deltaY.toFixed(1)}, newScroll=(${newScrollLeft.toFixed(1)}, ${newScrollTop.toFixed(1)}), clamped=(${clampedScrollLeft.toFixed(1)}, ${clampedScrollTop.toFixed(1)})`)
+  
 
     // 使用 requestAnimationFrame 设置滚动，避免事件循环冲突
     requestAnimationFrame(() => {
@@ -2021,10 +2008,11 @@ const handleMouseMove = (event: MouseEvent) => {
     // 拖动元素
     if (!previewCanvasRef.value) return
     const zoomFactor = zoomLevel.value / 100
-    const rect = previewCanvasRef.value.getBoundingClientRect()
 
     const deltaX = event.clientX - dragStartPos.value.x
     const deltaY = event.clientY - dragStartPos.value.y
+
+    console.log('[Drag] 鼠标移动: deltaX=', deltaX.toFixed(1), 'px, deltaY=', deltaY.toFixed(1), 'px, zoom=', zoomFactor.toFixed(2))
 
     // 将像素偏移转换为画布百分比（-50 到 50）
     // deltaX 是视口中的像素，需要除以 zoomFactor 转换为未缩放像素
@@ -2036,26 +2024,45 @@ const handleMouseMove = (event: MouseEvent) => {
     const previewBaseWidth = BASE_PREVIEW_SIZE
     const previewBaseHeight = BASE_PREVIEW_SIZE / aspectRatio
 
+    console.log('[Drag] 预览内容尺寸: width=', previewBaseWidth, ', height=', previewBaseHeight.toFixed(0))
+
     // 将视口像素转换为预览内容像素
     const deltaPreviewX = deltaX / zoomFactor
     const deltaPreviewY = deltaY / zoomFactor
+
+    console.log('[Drag] 预览内容像素: deltaPreviewX=', deltaPreviewX.toFixed(1), ', deltaPreviewY=', deltaPreviewY.toFixed(1))
 
     // 转换为预览内容百分比
     const deltaPreviewPctX = (deltaPreviewX / previewBaseWidth) * 100
     const deltaPreviewPctY = (deltaPreviewY / previewBaseHeight) * 100
 
+    console.log('[Drag] 预览内容百分比: deltaPreviewPctX=', deltaPreviewPctX.toFixed(2), '%, deltaPreviewPctY=', deltaPreviewPctY.toFixed(2), '%')
+
     // 转换为画布百分比（position.x/y 的单位）
     const deltaCanvasPctX = deltaPreviewPctX / 100
     const deltaCanvasPctY = deltaPreviewPctY / 100
 
-    element.position.x = elementStartPos.value.x + deltaCanvasPctX
-    element.position.y = elementStartPos.value.y + deltaCanvasPctY
+    console.log('[Drag] 画布百分比(position单位): deltaCanvasPctX=', deltaCanvasPctX.toFixed(4), ', deltaCanvasPctY=', deltaCanvasPctY.toFixed(4))
+
+    const oldX = element.position.x
+    const oldY = element.position.y
+
+    const newX = elementStartPos.value.x + deltaCanvasPctX
+    const newY = elementStartPos.value.y + deltaCanvasPctY
+
+    console.log('[Drag] 位置: oldX=', oldX.toFixed(4), '-> newX=', newX.toFixed(4), ', 实际变化=', (newX - oldX).toFixed(4))
+
+    element.position.x = newX
+    element.position.y = newY
+
+    // 强制触发轮廓样式更新
+    elementStyleVersion.value++
   }
 
   if (isResizing.value && resizeHandle.value) {
     // 缩放元素
     if (!previewCanvasRef.value || !selectedElement.value) {
-      console.log('[Resize] 缺少必要的引用，清除缩放状态')
+    
       isResizing.value = false
       resizeHandle.value = null
       return
@@ -2106,25 +2113,11 @@ const handleMouseMove = (event: MouseEvent) => {
     const mousePctX = (mouseUnscaledX / previewBaseWidth) * 100
     const mousePctY = (mouseUnscaledY / previewBaseHeight) * 100
 
-    console.log('[Resize] zoomFactor=', zoomFactor.toFixed(2),
-      'previewBaseWidth=', previewBaseWidth,
-      'mouseX=', mouseX.toFixed(1), 'mouseY=', mouseY.toFixed(1),
-      'scrollLeft=', scrollLeft.toFixed(1), 'scrollTop=', scrollTop.toFixed(1),
-      'contentLeft=', contentLeft.toFixed(1), 'contentTop=', contentTop.toFixed(1),
-      'mouseUnscaledX=', mouseUnscaledX.toFixed(1), 'mouseUnscaledY=', mouseUnscaledY.toFixed(1))
-
     // 获取元素起始边界
     const elemLeft = elementStartPos.value.left || 0
     const elemTop = elementStartPos.value.top || 0
     const elemRight = elementStartPos.value.right || 0
     const elemBottom = elementStartPos.value.bottom || 0
-
-    // 调试日志
-    console.log('[Resize] handle=', resizeHandle.value,
-      'mousePctX=', mousePctX.toFixed(2),
-      'mousePctY=', mousePctY.toFixed(2),
-      'elemLeft=', elemLeft.toFixed(2),
-      'elemRight=', elemRight.toFixed(2))
 
     const layout = element.layout
     const wrapEnabled = layout?.wrap === true
@@ -2133,46 +2126,35 @@ const handleMouseMove = (event: MouseEvent) => {
     switch (resizeHandle.value) {
       case 'n': {
         // 上边缘 - 调整行高
-        // 新高度 = 元素下边 - 鼠标Y（都是预览内容百分比）
         if (layout && wrapEnabled) {
-          const newHeight = Math.max(0.01, elemBottom - mousePctY)
-          layout.height = newHeight / 100  // 转换为画布百分比（0-1 范围）
+          const newHeight = elemBottom - mousePctY
+          layout.height = newHeight / 100
         }
         break
       }
       case 's': {
         // 下边缘 - 调整行高
-        // 新高度 = 鼠标Y - 元素上边（都是预览内容百分比）
         if (layout && wrapEnabled) {
-          const newHeight = Math.max(0.01, mousePctY - elemTop)
-          layout.height = newHeight / 100  // 转换为画布百分比（0-1 范围）
+          const newHeight = mousePctY - elemTop
+          layout.height = newHeight / 100
         }
         break
       }
       case 'e': {
         // 右边缘 - 调整宽度
-        // 新宽度 = 鼠标X - 元素左边（都是预览内容百分比）
-        // 注意：只有在 wrap=true 时才调整宽度
         if (layout && wrapEnabled) {
-          const newWidthPreviewPct = Math.max(0.01, mousePctX - elemLeft)
+          const newWidthPreviewPct = mousePctX - elemLeft
           const newWidthCanvasPct = newWidthPreviewPct / 100
-          console.log('[Resize E] wrapEnabled=true, elemLeft=', elemLeft.toFixed(2), 'mousePctX=', mousePctX.toFixed(2), 'newWidth=', newWidthCanvasPct.toFixed(4))
           layout.width = newWidthCanvasPct
-        } else {
-          console.log('[Resize E] wrapEnabled=false, 无法调整宽度')
         }
         break
       }
       case 'w': {
         // 左边缘 - 调整宽度
-        // 新宽度 = 元素右边 - 鼠标X（都是预览内容百分比）
         if (layout && wrapEnabled) {
-          const newWidthPreviewPct = Math.max(0.01, elemRight - mousePctX)
+          const newWidthPreviewPct = elemRight - mousePctX
           const newWidthCanvasPct = newWidthPreviewPct / 100
-          console.log('[Resize W] wrapEnabled=true, elemRight=', elemRight.toFixed(2), 'mousePctX=', mousePctX.toFixed(2), 'newWidth=', newWidthCanvasPct.toFixed(4))
           layout.width = newWidthCanvasPct
-        } else {
-          console.log('[Resize W] wrapEnabled=false, 无法调整宽度')
         }
         break
       }
@@ -2181,26 +2163,31 @@ const handleMouseMove = (event: MouseEvent) => {
       case 'sw':
       case 'se': {
         // 四角控制点：调整字号，跟随鼠标位置
-        // 计算元素中心点（预览内容百分比）
         const elemCenterX = (elemLeft + elemRight) / 2
         const elemCenterY = (elemTop + elemBottom) / 2
 
-        // 计算当前鼠标到元素中心的距离（预览内容百分比）
         const deltaX_pct = mousePctX - elemCenterX
         const deltaY_pct = mousePctY - elemCenterY
         const currentDistance_pct = Math.sqrt(deltaX_pct * deltaX_pct + deltaY_pct * deltaY_pct)
 
-        // 获取拖动开始时的初始距离
         const initialDistance_pct = elementStartPos.value.centerDistance
-
-        // 如果没有初始距离，使用元素宽度作为参考
         const referenceDistance = initialDistance_pct || elementStartPos.value.width || 10
-
-        // 计算缩放比例：当前距离 / 初始距离
         const scaleRatio = referenceDistance > 0 ? currentDistance_pct / referenceDistance : 1
 
+        // 调整字号
         if (element.style) {
-          element.style.font_size = Math.max(0.005, initialFontSize * scaleRatio)
+          element.style.font_size = initialFontSize * scaleRatio
+        }
+
+        // 如果启用了折行，同时缩放宽度和高度
+        if (layout && wrapEnabled) {
+          const initialWidth = elementStartPos.value.width
+          const initialHeight = elementStartPos.value.height
+          const newWidthPreviewPct = initialWidth * scaleRatio
+          const newHeightPreviewPct = initialHeight * scaleRatio
+
+          layout.width = newWidthPreviewPct / 100
+          layout.height = newHeightPreviewPct / 100
         }
         break
       }
@@ -2210,7 +2197,7 @@ const handleMouseMove = (event: MouseEvent) => {
 
 // 停止拖动/缩放
 const handleMouseUp = (event?: MouseEvent) => {
-  console.log('[MouseUp] isDragging=', isDragging.value, 'isResizing=', isResizing.value, 'resizeHandle=', resizeHandle.value)
+
   isDragging.value = false
   isResizing.value = false
   resizeHandle.value = null
@@ -2229,14 +2216,13 @@ const handleContentClick = (event: MouseEvent) => {
   if ((event.target as HTMLElement).closest('.resize-handle')) return
   if ((event.target as HTMLElement).closest('.element-outline')) return
 
-  // 清除所有状态
-  if (isDragging.value || isResizing.value || isPanning.value) {
-    console.log('[ContentClick] 清除所有拖动/缩放状态')
-    isDragging.value = false
-    isResizing.value = false
-    resizeHandle.value = null
-    isPanning.value = false
-    isMouseDownOnCanvas.value = false
+  // 只有在非拖动/缩放状态时才清除状态
+  // 注意：click 事件在 mouseup 之后触发，此时拖动/缩放应该已经结束
+  // 如果仍在拖动/缩放状态，说明是在拖动过程中点击的，不应该清除状态
+  // 这里只是为了安全起见，清理可能残留的状态
+  if (!isDragging.value && !isResizing.value && !isPanning.value) {
+    // 非拖动状态，点击空白区域取消选择
+    // selectedElementId.value = null  // 可选：点击空白取消选择
   }
 }
 
@@ -2405,19 +2391,19 @@ onMounted(async () => {
     previewContainerRef.value.addEventListener('scroll', (e) => {
       const target = e.target as HTMLElement
 
-      console.log('[Scroll Event] isPanning=', isPanning.value, 'shouldLockScroll=', shouldLockScroll.value, 'scrollPos=', target.scrollLeft, target.scrollTop)
+    
 
       // 拖动时允许滚动，并更新记录的位置
       if (isPanning.value) {
         lastValidScrollLeft = target.scrollLeft
         lastValidScrollTop = target.scrollTop
-        console.log('[Scroll] 拖动中的滚动，允许')
+      
         return
       }
 
       // 滚动锁定时阻止滚动
       if (shouldLockScroll.value) {
-        console.log('[Scroll] 锁定滚动，恢复到', lastValidScrollLeft, lastValidScrollTop)
+      
         target.scrollLeft = lastValidScrollLeft
         target.scrollTop = lastValidScrollTop
         return

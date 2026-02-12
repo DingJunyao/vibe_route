@@ -2591,3 +2591,152 @@ layout.width = newWidthCanvasPct
 
 **涉及文件**：
 - [`frontend/src/views/OverlayTemplateEditor.vue`](frontend/src/views/OverlayTemplateEditor.vue) - `getHandlePosition`、`handleResizeStart`、`getElementOutlineStyle`、`handleMouseMove` 函数
+
+## 最新更改 (2026-02 覆盖层模板编辑器 - 坐标系统重构)
+
+**问题背景**：覆盖层模板编辑器中存在坐标系统不一致的问题，导致元素位置、定界框、控制点的显示和交互都不正确。
+
+**核心问题**：`position.x/y` 的单位定义在不同模块中不一致：
+
+- **后端 schema**：定义为比例（0-1），范围 -0.5 到 0.5
+- **后端渲染**：`offset_x = width * pos_config.x`（直接乘，说明是比例）
+- **前端渲染**：错误地使用 `(position.x / 100) * width`（除以 100，当作百分比处理）
+
+**解决方案**：统一所有模块的坐标系统，`position.x/y` 始终是**相对于画布的比例（0-1）**，范围 -0.5 到 0.5。
+
+### 坐标系统规范
+
+**单位定义**：
+
+| 数据 | 单位 | 范围 | 说明 |
+|------|------|------|------|
+| `position.x` | 画布比例 | 无限制 | 相对于画布宽度的比例 |
+| `position.y` | 画布比例 | 无限制 | 相对于画布高度的比例 |
+| `layout.width` | 画布比例 | 正数 | 相对于画布宽度的比例 |
+| `layout.height` | 画布比例 | 正数 | 相对于画布高度的比例 |
+| `style.font_size` | 画布比例 | 正数 | 相对于画布高度的比例 |
+
+**坐标转换公式**：
+
+```javascript
+// 画布比例 → 画布像素
+const offsetX = element.position.x * canvasWidth
+const offsetY = element.position.y * canvasHeight
+
+// 画布像素 → 预览内容百分比（0-100）
+const scaleToPreviewX = previewBaseWidth / canvasWidth
+const scaleToPreviewY = previewBaseHeight / canvasHeight
+const leftPct = (elemX * scaleToPreviewX) / previewBaseWidth * 100
+const topPct = (elemY * scaleToPreviewY) / previewBaseHeight * 100
+```
+
+### 容器锚点计算
+
+**重要变更**：容器锚点（`container_anchor`）始终相对于**画布**计算，不受 `use_safe_area` 影响。
+
+**最终位置公式**：
+
+```python
+# 后端 overlay_renderer.py
+final_x = container_x + offset_x - elem_anchor_x
+final_y = container_y + offset_y - elem_anchor_y
+
+# 其中：
+# - container_x/y 是画布上的锚点位置（如 bottom-left 是画布左下角）
+# - offset_x/y 是相对于画布的偏移
+# - elem_anchor_x/y 是元素自身的锚点偏移
+```
+
+**示例**：
+- X=0, Y=0, container_anchor=bottom-left → 元素的 bottom-left 在画布左下角
+- X=0.1, Y=0, container_anchor=bottom-left → 元素的 bottom-left 在画布左下角向右 10%
+- X=0, Y=0.1, container_anchor=bottom-left → 元素的 bottom-left 在画布左下角向上 10%
+
+### 元素拖动
+
+**鼠标移动转换为画布比例**：
+
+```typescript
+// 视口像素 → 预览内容像素
+const deltaPreviewX = deltaX / zoomFactor
+const deltaPreviewY = deltaY / zoomFactor
+
+// 预览内容像素 → 预览内容百分比（0-100）
+const deltaPreviewPctX = (deltaPreviewX / previewBaseWidth) * 100
+const deltaPreviewPctY = (deltaPreviewY / previewBaseHeight) * 100
+
+// 预览内容百分比 → 画布比例（-0.5 到 0.5）
+const deltaCanvasPctX = deltaPreviewPctX / 100
+const deltaCanvasPctY = deltaPreviewPctY / 100
+
+element.position.x = elementStartPos.value.x + deltaCanvasPctX
+element.position.y = elementStartPos.value.y + deltaCanvasPctY
+```
+
+### 元素缩放（四角控制点）
+
+**方案 2**：对于折行文本，四角控制点同时缩放字号、宽度和高度。
+
+```typescript
+// 计算缩放比例
+const scaleRatio = currentDistance_pct / initialDistance_pct
+
+// 调整字号
+element.style.font_size = initialFontSize * scaleRatio
+
+// 如果启用了折行，同时缩放宽度和高度
+if (layout && wrapEnabled) {
+  layout.width = initialWidth * scaleRatio / 100
+  layout.height = initialHeight * scaleRatio / 100
+}
+```
+
+**无折行时**：只调整字号。
+
+**有折行时**：按比例同时调整字号、宽度和高度。
+
+### UI 控件调整
+
+**移除滑块，改为数字输入框**：
+
+- **字号**：`el-input-number`，精度 0.0001，无最小值限制
+- **宽度**：`el-input-number`，精度 0.001，无最小值限制
+- **行高**：`el-input-number`，精度 0.01，无最小值限制
+
+**X/Y 偏移输入框**：
+
+- 无范围限制（允许任意值）
+- 精度：4 位小数
+- 标签：从"X 偏移%"改为"X 偏移"（去掉 % 符号）
+
+### 响应式刷新
+
+**元素轮廓样式版本号**：为解决 Vue 响应式问题，添加 `elementStyleVersion` ref：
+
+```typescript
+const elementStyleVersion = ref(0)
+
+const getElementOutlineStyle = (element: OverlayElement) => {
+  const _version = elementStyleVersion.value  // 建立响应式依赖
+  // ... 计算逻辑
+}
+
+// 拖动时触发更新
+elementStyleVersion.value++
+```
+
+### 涉及文件
+
+**后端**：
+- [`backend/app/services/overlay_renderer.py`](backend/app/services/overlay_renderer.py) - `_calculate_position` 方法，容器锚点始终使用画布
+- [`backend/app/schemas/overlay_template.py`](backend/app/schemas/overlay_template.py) - `PositionConfig` schema 定义
+
+**前端**：
+- [`frontend/src/views/OverlayTemplateEditor.vue`](frontend/src/views/OverlayTemplateEditor.vue) - 全面坐标系统重构：
+  - `getElementOutlineStyle` - 移除 `/ 100` 错误转换
+  - `renderOverlayCanvas` - 移除 `/ 100` 错误转换
+  - `getHandlePosition` - 移除 `/ 100` 错误转换
+  - `handleResizeStart` - 移除 `/ 100` 错误转换
+  - 容器锚点始终使用画布作为 `contentArea`
+  - 四角控制点缩放逻辑
+  - UI 控件从滑块改为数字输入框
