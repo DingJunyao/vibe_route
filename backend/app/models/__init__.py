@@ -13,6 +13,7 @@ from app.models.admin_division import AdminDivision
 from app.models.admin_division_spatial import AdminDivisionSpatial
 from app.models.user_config import UserConfig
 from app.models.interpolation import TrackInterpolation
+from app.models.overlay_template import OverlayTemplate, Font
 
 __all__ = [
     "Base",
@@ -29,4 +30,6 @@ __all__ = [
     "AdminDivisionSpatial",
     "UserConfig",
     "TrackInterpolation",
+    "OverlayTemplate",
+    "Font",
 ]

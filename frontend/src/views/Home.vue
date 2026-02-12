@@ -16,6 +16,9 @@
         >
           道路标志
         </el-button>
+        <el-button type="info" :icon="Document" @click="$router.push('/overlay-templates')" class="desktop-only">
+          覆盖层模板
+        </el-button>
         <el-button type="warning" :icon="VideoPlay" @click="showLiveRecordingDialog" class="desktop-only">
           记录实时轨迹
         </el-button>
@@ -45,6 +48,10 @@
               <el-dropdown-item command="roadSign" v-if="isMobile && fontsConfigured">
                 <el-icon><Flag /></el-icon>
                 道路标志
+              </el-dropdown-item>
+              <el-dropdown-item command="overlayTemplates" v-if="isMobile">
+                <el-icon><Document /></el-icon>
+                覆盖层模板
               </el-dropdown-item>
               <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
               <el-dropdown-item command="settings">
@@ -331,6 +338,7 @@ import {
   Flag,
   VideoPlay,
   DocumentCopy,
+  Document,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -654,6 +662,8 @@ function handleCommand(command: string) {
     router.push('/upload')
   } else if (command === 'roadSign') {
     showRoadSignDialog()
+  } else if (command === 'overlayTemplates') {
+    router.push('/overlay-templates')
   } else if (command === 'liveRecording') {
     showLiveRecordingDialog()
   }

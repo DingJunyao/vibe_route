@@ -2210,3 +2210,384 @@ interface ControlPoint {
 - [`frontend/src/components/map/BMap.vue`](frontend/src/components/map/BMap.vue) - 百度地图（coloredSegments、点击事件）
 - [`frontend/src/components/map/TencentMap.vue`](frontend/src/components/map/TencentMap.vue) - 腾讯地图（coloredSegments、点击/拖拽区分）
 - [`frontend/src/components/map/LeafletMap.vue`](frontend/src/components/map/LeafletMap.vue) - Leaflet 地图（coloredSegments）
+
+---
+
+## 最新更改 (2026-02 覆盖层模板编辑器)
+
+### 空格键拖动画布功能
+
+**功能背景**：覆盖层模板编辑器中，用户需要按住空格键并拖动鼠标来平移画布，以便查看画布边缘区域。同时，滚动区域应该超出画布边界 50%，提供更灵活的浏览体验。
+
+**核心需求**：
+1. 按住空格键 + 鼠标拖动 → 平移画布
+2. 滚动区域超出画布 50%（上下左右都一样）
+3. 进入页面时自动居中（与点击"适配"效果一致）
+4. 拖动过程中禁用滚动条，防止干扰
+
+**实现架构**（[`OverlayTemplateEditor.vue`](frontend/src/views/OverlayTemplateEditor.vue)）：
+
+**1. 滚动包装器设计**
+
+使用双层结构：`.preview-scroll-wrapper` 提供滚动区域，`.preview-content` 使用 `transform: scale()` 实现缩放。
+
+```html
+<div class="preview-container" ref="previewContainerRef" tabindex="0">
+  <div class="preview-scroll-wrapper" :style="previewScrollWrapperStyle">
+    <div class="preview-content" :style="previewContentStyle">
+      <!-- 画布内容 -->
+    </div>
+  </div>
+</div>
+```
+
+**2. 滚动区域计算**
+
+滚动区域为容器尺寸的 150%，确保可以滚动超出画布边缘：
+
+```typescript
+const previewScrollWrapperStyle = computed(() => {
+  const canvas = templateConfig.value.canvas
+  const aspectRatio = canvas.width / canvas.height
+  const scale = zoomLevel.value / 100
+
+  // 缩放后的画布尺寸
+  const canvasWidth = BASE_PREVIEW_SIZE * scale
+  const canvasHeight = BASE_PREVIEW_SIZE / aspectRatio * scale
+
+  const container = previewContainerRef.value
+  if (!container) {
+    return {
+      width: `${canvasWidth}px`,
+      height: `${canvasHeight}px`,
+      minWidth: `${canvasWidth}px`,
+      minHeight: `${canvasHeight}px`
+    }
+  }
+
+  const containerRect = container.getBoundingClientRect()
+  // 滚动区域为容器尺寸的 150%
+  const scrollAreaWidth = containerRect.width * 1.5
+  const scrollAreaHeight = containerRect.height * 1.5
+
+  // 取较大值确保能滚动
+  const finalWidth = Math.max(scrollAreaWidth, canvasWidth)
+  const finalHeight = Math.max(scrollAreaHeight, canvasHeight)
+
+  return {
+    width: `${finalWidth}px`,
+    height: `${finalHeight}px`,
+    minWidth: `${finalWidth}px`,
+    minHeight: `${finalHeight}px`
+  }
+})
+```
+
+**3. 空格键拖动状态管理**
+
+```typescript
+const isSpacePressed = ref(false)      // 空格键是否按下
+const isPanning = ref(false)            // 是否正在拖动
+const panStartPos = ref({ x: 0, y: 0 }) // 拖动起始鼠标位置
+const panStartScroll = ref({ x: 0, y: 0 }) // 拖动起始滚动位置
+const isMouseDownOnCanvas = ref(false)  // 鼠标是否在画布上按下
+const lastMousePos = ref({ x: 0, y: 0 }) // 最后的鼠标位置
+const shouldLockScroll = ref(false)     // 滚动锁定标志
+```
+
+**4. 键盘事件处理**
+
+容器添加 `tabindex="0"` 使其可以接收键盘事件：
+
+```typescript
+// 空格键按下
+const handleKeydown = (e: KeyboardEvent) => {
+  if (e.code === 'Space' && !e.repeat) {
+    e.preventDefault()
+    e.stopPropagation()
+
+    shouldLockScroll.value = true
+    isSpacePressed.value = true
+
+    // 如果鼠标已经在画布上按下，立即启动拖动
+    if (isMouseDownOnCanvas.value && previewContainerRef.value) {
+      isPanning.value = true
+      panStartPos.value = { ...lastMousePos.value }
+      panStartScroll.value = {
+        x: previewContainerRef.value.scrollLeft,
+        y: previewContainerRef.value.scrollTop
+      }
+    }
+  }
+}
+
+// 空格键释放
+const handleKeyup = (e: KeyboardEvent) => {
+  if (e.code === 'Space') {
+    isSpacePressed.value = false
+    isPanning.value = false
+    setTimeout(() => {
+      shouldLockScroll.value = false
+    }, 100)
+  }
+}
+```
+
+**5. 鼠标事件处理**
+
+```typescript
+// 鼠标按下 - 阻止浏览器自动滚动
+const handleCanvasMouseDown = (event: MouseEvent) => {
+  if (event.button !== 0) return
+
+  event.preventDefault() // 阻止浏览器 autoscroll
+
+  isMouseDownOnCanvas.value = true
+  lastMousePos.value = { x: event.clientX, y: event.clientY }
+
+  // 空格键按下时启动拖动
+  if (isSpacePressed.value && previewContainerRef.value) {
+    event.stopPropagation()
+    isPanning.value = true
+    panStartPos.value = { x: event.clientX, y: event.clientY }
+    panStartScroll.value = {
+      x: previewContainerRef.value.scrollLeft,
+      y: previewContainerRef.value.scrollTop
+    }
+    previewContainerRef.value.classList.add('is-panning')
+  }
+}
+
+// 鼠标移动 - 拖动画布
+const handleMouseMove = (event: MouseEvent) => {
+  if (isPanning.value && previewContainerRef.value) {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const deltaX = event.clientX - panStartPos.value.x
+    const deltaY = event.clientY - panStartPos.value.y
+
+    const newScrollLeft = panStartScroll.value.x - deltaX
+    const newScrollTop = panStartScroll.value.y - deltaY
+
+    const maxScrollLeft = container.scrollWidth - container.clientWidth
+    const maxScrollTop = container.scrollHeight - container.clientHeight
+
+    const clampedScrollLeft = Math.max(0, Math.min(maxScrollLeft, newScrollLeft))
+    const clampedScrollTop = Math.max(0, Math.min(maxScrollTop, newScrollTop))
+
+    // 使用 requestAnimationFrame 避免事件循环冲突
+    requestAnimationFrame(() => {
+      if (previewContainerRef.value) {
+        previewContainerRef.value.scrollLeft = clampedScrollLeft
+        previewContainerRef.value.scrollTop = clampedScrollTop
+      }
+    })
+  }
+}
+
+// 鼠标释放
+const handleMouseUp = () => {
+  isPanning.value = false
+  isMouseDownOnCanvas.value = false
+  if (previewContainerRef.value) {
+    previewContainerRef.value.classList.remove('is-panning')
+  }
+}
+```
+
+**6. 滚动事件锁定**
+
+防止非拖动触发的滚动：
+
+```typescript
+if (previewContainerRef.value) {
+  let lastValidScrollLeft = 0
+  let lastValidScrollTop = 0
+
+  previewContainerRef.value.addEventListener('scroll', (e) => {
+    const target = e.target as HTMLElement
+
+    // 拖动时允许滚动
+    if (isPanning.value) {
+      lastValidScrollLeft = target.scrollLeft
+      lastValidScrollTop = target.scrollTop
+      return
+    }
+
+    // 滚动锁定时阻止滚动
+    if (shouldLockScroll.value) {
+      target.scrollLeft = lastValidScrollLeft
+      target.scrollTop = lastValidScrollTop
+      return
+    }
+
+    // 记录正常滚动位置
+    lastValidScrollLeft = target.scrollLeft
+    lastValidScrollTop = target.scrollTop
+  })
+}
+```
+
+**7. 拖动样式**
+
+```css
+.preview-container.is-panning {
+  user-select: none;
+  overscroll-behavior: none;
+  overflow: hidden !important;  /* 拖动时禁用滚动条 */
+}
+
+.preview-container.is-panning::-webkit-scrollbar {
+  display: none;  /* 隐藏滚动条 */
+}
+```
+
+**8. 初始居中**
+
+进入页面时自动居中画布：
+
+```typescript
+const fitToContainer = () => {
+  zoomLevel.value = calculateFitZoom()
+  isUserZoomed.value = false
+
+  nextTick(() => {
+    if (previewContainerRef.value) {
+      const container = previewContainerRef.value
+      const scrollWrapper = container.querySelector('.preview-scroll-wrapper') as HTMLElement
+
+      if (scrollWrapper) {
+        const wrapperWidth = scrollWrapper.offsetWidth
+        const wrapperHeight = scrollWrapper.offsetHeight
+        const containerWidth = container.clientWidth
+        const containerHeight = container.clientHeight
+
+        // 计算居中位置
+        container.scrollLeft = (wrapperWidth - containerWidth) / 2
+        container.scrollTop = (wrapperHeight - containerHeight) / 2
+      }
+    }
+  })
+}
+
+onMounted(async () => {
+  await nextTick()
+  zoomLevel.value = calculateFitZoom()
+  // ... 其他初始化代码
+  nextTick(() => {
+    fitToContainer() // 初始居中
+  })
+})
+```
+
+**关键技术点**：
+
+1. **双层结构**：`.preview-scroll-wrapper` 提供滚动区域，`.preview-content` 处理缩放
+2. **滚动锁定**：使用 `shouldLockScroll` 标志和事件监听器防止非拖动触发的滚动
+3. **拖动时禁用滚动**：添加 `is-panning` class 时设置 `overflow: hidden !important`
+4. **requestAnimationFrame**：解耦滚动更新与鼠标事件，避免事件循环冲突
+5. **preventDefault**：阻止浏览器默认的 autoscroll 行为
+6. **tabindex="0"**：使容器可接收键盘事件
+7. **全局事件监听**：`mousemove` 和 `mouseup` 绑定到 document，确保拖动不中断
+
+**涉及文件**：
+- [`frontend/src/views/OverlayTemplateEditor.vue`](frontend/src/views/OverlayTemplateEditor.vue) - 覆盖层模板编辑器
+
+### 覆盖层模板编辑器控制点位置计算统一
+
+**问题背景**：拖动控制点调整元素宽度时，控制点会突然回缩或增大，宽度变化幅度过大（1 像素导致 10% 变化），控制点不能保持在鼠标位置上。
+
+**根本原因**：三个关键函数计算元素位置和尺寸时使用了不一致的逻辑：
+
+| 函数 | position.x 处理 | 文本格式化 | 字体设置 |
+|------|-----------------|-----------|---------|
+| `getHandlePosition` | `(position.x / 100) * canvasWidth` | 应用 `format` | 单引号包裹 |
+| `handleResizeStart` | `position.x * canvasWidth` ❌ | 未应用 ❌ | 未包裹 ❌ |
+| `getElementOutlineStyle` | `(position.x / 100) * canvasWidth` | 应用 `format` | 未包裹 ❌ |
+
+**后端数据规范**（[`overlay_template.py`](backend/app/schemas/overlay_template.py)）：
+- `position.x`: 画布宽度的百分比，范围 `-0.5` 到 `0.5`（即 -50% 到 50%）
+- `position.y`: 画布高度的百分比，范围 `-0.5` 到 `0.5`
+- `layout.width`: 画布宽度的比例，范围 `0` 到 `1`
+- `layout.height`: 画布高度的比例，范围 `0` 到 `1`
+
+**解决方案**：
+
+**1. 统一 position.x/y 的坐标转换**
+
+所有函数都使用 `(position.x / 100) * canvasWidth`：
+
+```typescript
+// position.x 的单位是画布宽度的百分比（-0.5 到 0.5）
+// 需要除以 100 转换为像素偏移
+const offsetX = (position.x / 100) * canvasWidth
+const offsetY = (position.y / 100) * canvasHeight
+```
+
+**2. 统一文本格式化处理**
+
+所有测量函数都应用 `content.format` 字段：
+
+```typescript
+let text = getSampleText(content.source, content.sample_text) || ''
+const formatStr = content.format || '{}'
+try {
+  text = formatStr.replace('{}', text)
+} catch {
+  // 保持原文本
+}
+```
+
+**3. 统一字体设置格式**
+
+所有函数都使用单引号包裹字体名称：
+
+```typescript
+const fontFamily = getFontFamilyName(fontId || 'system_msyh')
+const fontCss = fontFamily.replace(/"/g, "'")
+tempCtx.font = `${fontSize}px '${fontCss}'`
+```
+
+**4. 修复元素拖动的坐标转换**
+
+拖动元素时，像素偏移需要正确转换为画布百分比：
+
+```typescript
+// 将视口像素转换为预览内容像素
+const deltaPreviewX = deltaX / zoomFactor
+const deltaPreviewY = deltaY / zoomFactor
+
+// 转换为预览内容百分比
+const deltaPreviewPctX = (deltaPreviewX / previewBaseWidth) * 100
+const deltaPreviewPctY = (deltaPreviewY / previewBaseHeight) * 100
+
+// 转换为画布百分比（position.x/y 的单位：-0.5 到 0.5）
+const deltaCanvasPctX = deltaPreviewPctX / 100
+const deltaCanvasPctY = deltaPreviewPctY / 100
+
+element.position.x = elementStartPos.value.x + deltaCanvasPctX
+element.position.y = elementStartPos.value.y + deltaCanvasPctY
+```
+
+**5. 调整宽度时的坐标转换**
+
+拖动东/西控制点时，鼠标位置直接转换为预览内容百分比，再转换为画布百分比：
+
+```typescript
+// 鼠标位置已经是预览内容百分比（0-100）
+// 直接计算新宽度
+const newWidthPreviewPct = Math.max(0.01, mousePctX - elemLeft)
+const newWidthCanvasPct = newWidthPreviewPct / 100  // 转换为 0-1 范围
+layout.width = newWidthCanvasPct
+```
+
+**关键技术点**：
+
+1. **position.x 是画布百分比（-0.5 到 0.5）**：需要除以 100 转换为像素偏移
+2. **layout.width 是画布比例（0 到 1）**：直接乘以 canvasWidth 得到像素
+3. **预览内容百分比（0-100）**：用于控制点位置和 mousemove 计算
+4. **画布百分比（0-1）**：存储在数据库中，用于 layout.width/height
+
+**涉及文件**：
+- [`frontend/src/views/OverlayTemplateEditor.vue`](frontend/src/views/OverlayTemplateEditor.vue) - `getHandlePosition`、`handleResizeStart`、`getElementOutlineStyle`、`handleMouseMove` 函数
