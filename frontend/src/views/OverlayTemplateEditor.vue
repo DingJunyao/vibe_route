@@ -8,10 +8,33 @@
         <h1>{{ isNew ? '新建模板' : template?.name || '编辑模板' }}</h1>
       </div>
       <div class="header-right">
-        <el-button @click="saveTemplate" type="primary" :loading="isSaving" class="desktop-only">
-          <el-icon><Check /></el-icon>
-          保存
-        </el-button>
+        <div class="header-actions">
+          <el-button
+            :icon="RefreshLeft"
+            :disabled="!canUndo"
+            @click="undo"
+            class="nav-btn desktop-only"
+            title="撤销 (Ctrl+Z)"
+          >
+          </el-button>
+          <el-button
+            :icon="RefreshRight"
+            :disabled="!canRedo"
+            @click="redo"
+            class="nav-btn desktop-only"
+            title="重做 (Ctrl+Y)"
+          >
+          </el-button>
+          <el-button
+            type="primary"
+            :icon="Check"
+            :loading="isSaving"
+            @click="saveTemplate"
+            class="nav-btn"
+          >
+            保存
+          </el-button>
+        </div>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
             <el-icon><User /></el-icon>
@@ -20,6 +43,14 @@
           </span>
           <template #dropdown>
             <el-dropdown-menu>
+              <el-dropdown-item command="undo" v-if="isMobile">
+                <el-icon><RefreshLeft /></el-icon>
+                撤销
+              </el-dropdown-item>
+              <el-dropdown-item command="redo" v-if="isMobile">
+                <el-icon><RefreshRight /></el-icon>
+                重做
+              </el-dropdown-item>
               <el-dropdown-item command="settings">
                 <el-icon><Setting /></el-icon>
                 设置
@@ -232,15 +263,26 @@
 
           <!-- 安全区配置 -->
           <div class="config-section">
-            <h3>安全区配置</h3>
+            <div class="section-header">
+              <h3>安全区配置</h3>
+            </div>
             <el-form label-width="80px" size="small">
               <el-form-item label="顶部">
-                <el-input-number
-                  v-model="templateConfig.safe_area.top"
-                  :min="0" :max="0.2" :step="0.001"
-                  controls-position="right"
-                  :precision="3"
-                />
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                  <el-input-number
+                    v-model="templateConfig.safe_area.top"
+                    :min="0" :max="0.2" :step="0.001"
+                    controls-position="right"
+                    :precision="3"
+                    style="flex: 1;"
+                  />
+                  <el-button
+                    size="small"
+                    :icon="safeAreaLockDirection === 'vertical' ? Lock : Unlock"
+                    :type="safeAreaLockDirection === 'vertical' ? 'primary' : ''"
+                    @click="toggleVerticalLock"
+                  />
+                </div>
               </el-form-item>
               <el-form-item label="底部">
                 <el-input-number
@@ -248,15 +290,25 @@
                   :min="0" :max="0.2" :step="0.001"
                   controls-position="right"
                   :precision="3"
+                  :disabled="safeAreaLockDirection === 'vertical'"
                 />
               </el-form-item>
               <el-form-item label="左侧">
-                <el-input-number
-                  v-model="templateConfig.safe_area.left"
-                  :min="0" :max="0.2" :step="0.001"
-                  controls-position="right"
-                  :precision="3"
-                />
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                  <el-input-number
+                    v-model="templateConfig.safe_area.left"
+                    :min="0" :max="0.2" :step="0.001"
+                    controls-position="right"
+                    :precision="3"
+                    style="flex: 1;"
+                  />
+                  <el-button
+                    size="small"
+                    :icon="safeAreaLockDirection === 'horizontal' ? Lock : Unlock"
+                    :type="safeAreaLockDirection === 'horizontal' ? 'primary' : ''"
+                    @click="toggleHorizontalLock"
+                  />
+                </div>
               </el-form-item>
               <el-form-item label="右侧">
                 <el-input-number
@@ -264,6 +316,7 @@
                   :min="0" :max="0.2" :step="0.001"
                   controls-position="right"
                   :precision="3"
+                  :disabled="safeAreaLockDirection === 'horizontal'"
                 />
               </el-form-item>
             </el-form>
@@ -405,7 +458,7 @@
               <el-form-item label="字体">
                 <font-selector v-model="selectedElement.style.font_family" />
               </el-form-item>
-              <el-form-item label="字号%">
+              <el-form-item label="大小">
                 <el-input-number
                   v-model="selectedElement.style.font_size"
                   :step="0.001"
@@ -423,7 +476,7 @@
             <template v-if="selectedElement.type === 'text'">
               <el-divider>文本布局</el-divider>
               <el-form label-width="80px" size="small">
-                <el-form-item label="宽度%">
+                <el-form-item label="宽度">
                   <el-input-number
                     v-model="selectedElement.layout.width"
                     :step="0.01"
@@ -489,8 +542,25 @@ import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import draggable from 'vuedraggable'
 import {
-  ArrowLeft, HomeFilled, Check, Picture, Close, Document,
-  Rank, Delete, User, Setting, SwitchButton, ArrowDown, Plus, Minus
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Document,
+  HomeFilled,
+  Picture,
+  Close,
+  Rank,
+  Delete,
+  User,
+  Setting,
+  SwitchButton,
+  ArrowDown,
+  Plus,
+  Minus,
+  RefreshLeft,
+  RefreshRight,
+  Lock,
+  Unlock
 } from '@element-plus/icons-vue'
 import {
   overlayTemplateApi,
@@ -566,6 +636,10 @@ const elementStartPos = ref<{
 }>({ x: 0, y: 0, left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, fontSize: 0.025 })
 
 // 模板信息
+// 移动端检测
+const isMobile = computed(() => window.innerWidth <= 768)
+
+// 模板信息
 const templateInfo = ref({
   name: '',
   description: ''
@@ -593,6 +667,127 @@ const templateConfig = ref<OverlayTemplateConfig>({
 // 选中的元素
 const selectedElementId = ref<string | null>(null)
 
+// 历史记录（用于撤销/重做）
+interface HistoryEntry {
+  elements: OverlayElement[]  // 历史元素列表快照
+  timestamp: number
+}
+const editHistory: Ref<HistoryEntry[]> = ref([])
+const historyIndex = ref(-1)  // 当前历史位置，-1 表示没有历史
+
+// 安全区锁定状态
+const safeAreaLockDirection = ref<'vertical' | 'horizontal' | null>(null)  // null 表示未锁定
+
+// 切换垂直锁定（上下）
+const toggleVerticalLock = () => {
+  if (safeAreaLockDirection.value === 'vertical') {
+    // 解锁
+    safeAreaLockDirection.value = null
+  } else {
+    // 锁定并同步值
+    const avgValue = (templateConfig.value.safe_area.top + templateConfig.value.safe_area.bottom) / 2
+    templateConfig.value.safe_area.top = avgValue
+    templateConfig.value.safe_area.bottom = avgValue
+    safeAreaLockDirection.value = 'vertical'
+  }
+}
+
+// 切换水平锁定（左右）
+const toggleHorizontalLock = () => {
+  if (safeAreaLockDirection.value === 'horizontal') {
+    // 解锁
+    safeAreaLockDirection.value = null
+  } else {
+    // 锁定并同步值
+    const avgValue = (templateConfig.value.safe_area.left + templateConfig.value.safe_area.right) / 2
+    templateConfig.value.safe_area.left = avgValue
+    templateConfig.value.safe_area.right = avgValue
+    safeAreaLockDirection.value = 'horizontal'
+  }
+}
+
+// 最大历史记录数
+const MAX_HISTORY = 50
+
+// 监听安全区值变化，自动同步
+watch(() => templateConfig.value.safe_area.top, (newTop) => {
+  if (safeAreaLockDirection.value === 'vertical') {
+    templateConfig.value.safe_area.bottom = newTop
+  }
+})
+
+watch(() => templateConfig.value.safe_area.bottom, (newBottom) => {
+  if (safeAreaLockDirection.value === 'vertical') {
+    templateConfig.value.safe_area.top = newBottom
+  }
+})
+
+watch(() => templateConfig.value.safe_area.left, (newLeft) => {
+  if (safeAreaLockDirection.value === 'horizontal') {
+    templateConfig.value.safe_area.right = newLeft
+  }
+})
+
+watch(() => templateConfig.value.safe_area.right, (newRight) => {
+  if (safeAreaLockDirection.value === 'horizontal') {
+    templateConfig.value.safe_area.left = newRight
+  }
+})
+
+// 保存历史快照
+const saveHistorySnapshot = () => {
+  if (historyIndex.value < editHistory.value.length - 1) {
+    // 当前不在最新位置，删除后面的历史
+    editHistory.value = editHistory.value.slice(0, historyIndex.value + 1)
+  }
+  // 深拷贝当前元素列表
+  const snapshot = {
+    elements: JSON.parse(JSON.stringify(templateConfig.value.elements)),
+    timestamp: Date.now()
+  }
+  editHistory.value.push(snapshot)
+  historyIndex.value = editHistory.value.length - 1
+
+  // 限制历史大小
+  if (editHistory.value.length > MAX_HISTORY) {
+    editHistory.value.shift()
+    historyIndex.value--
+  }
+}
+
+// 撤销/重做操作标志
+const isUndoing = ref(false)
+
+// 撤销
+const undo = () => {
+  if (historyIndex.value > 0) {
+    isUndoing.value = true
+    historyIndex.value--
+    const snapshot = editHistory.value[historyIndex.value]
+    // 直接赋值，watch 会检查 isUndoing 标志
+    templateConfig.value.elements = JSON.parse(JSON.stringify(snapshot.elements))
+    // 清除选中状态
+    selectedElementId.value = null
+    // 延迟重置标志（等待 watch 执行完成）
+    nextTick(() => { isUndoing.value = false })
+  }
+}
+
+// 重做
+const redo = () => {
+  if (historyIndex.value < editHistory.value.length - 1) {
+    isUndoing.value = true
+    historyIndex.value++
+    const snapshot = editHistory.value[historyIndex.value]
+    // 直接赋值，watch 会检查 isUndoing 标志
+    templateConfig.value.elements = JSON.parse(JSON.stringify(snapshot.elements))
+    // 清除选中状态
+    selectedElementId.value = null
+    // 延迟重置标志（等待 watch 执行完成）
+    nextTick(() => { isUndoing.value = false })
+  }
+}
+
 // 元素轮廓样式版本号（用于强制刷新）
 const elementStyleVersion = ref(0)
 
@@ -600,6 +795,28 @@ const selectedElement = computed(() => {
   if (!selectedElementId.value) return null
   return templateConfig.value.elements.find(el => el.id === selectedElementId.value) || null
 })
+
+// 历史状态 computed（安全访问）
+const canUndo = computed(() => historyIndex.value > 0)
+const canRedo = computed(() => editHistory.value && historyIndex.value < editHistory.value.length - 1)
+
+// 监听元素变化，自动保存历史快照
+// 使用防抖来避免拖动时频繁记录
+let saveHistoryTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => templateConfig.value.elements, (newElements, oldElements) => {
+  // 跳过第一次加载和撤销/重做操作
+  if (oldElements && !isUndoing.value) {
+    // 清除之前的定时器
+    if (saveHistoryTimer) {
+      clearTimeout(saveHistoryTimer)
+    }
+    // 延迟 500ms 后保存，避免拖动时频繁记录
+    saveHistoryTimer = setTimeout(() => {
+      saveHistorySnapshot()
+      saveHistoryTimer = null
+    }, 500)
+  }
+}, { deep: true })
 
 // 数值型数据源列表
 const numericSources = new Set([
@@ -830,13 +1047,19 @@ const saveTemplate = async () => {
 
     // 双重检查：确保新建时使用 create API
     if (isNew.value || route.params.id === 'new' || templateId.value === 0) {
-      await overlayTemplateApi.create(data)
+      const result = await overlayTemplateApi.create(data)
+      // 更新模板 ID，后续保存时使用 update API
+      templateId.value = result.id
+      // 更新路由，不离开页面
+      if (route.params.id === 'new') {
+        router.replace(`/overlay-templates/${result.id}`)
+      }
     } else {
       await overlayTemplateApi.update(templateId.value, data)
     }
 
     ElMessage.success('保存成功')
-    router.push('/overlay-templates')
+    // 不跳转页面，留在编辑器
   } catch (error: any) {
     ElMessage.error(error.response?.data?.detail || '保存失败')
   } finally {
@@ -2517,6 +2740,12 @@ const goHome = () => {
 
 const handleCommand = (command: string) => {
   switch (command) {
+    case 'undo':
+      undo()
+      break
+    case 'redo':
+      redo()
+      break
     case 'settings':
       router.push('/settings')
       break
@@ -2578,6 +2807,23 @@ const handleKeydown = (e: KeyboardEvent) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault()
     saveTemplate()
+  }
+
+  // Ctrl+Z / Cmd+Z 撤销
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key === 'z') {
+    e.preventDefault()
+    if (canUndo.value) {
+      undo()
+    }
+  }
+
+  // Ctrl+Y / Cmd+Y 重做（或 Ctrl+Shift+Z）
+  if (((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+      ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')) {
+    e.preventDefault()
+    if (canRedo.value) {
+      redo()
+    }
   }
 }
 
@@ -2745,6 +2991,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.header-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .user-info {
