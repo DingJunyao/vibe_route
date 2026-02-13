@@ -23,6 +23,7 @@ ElementAnchor = ContainerAnchor  # 元素锚点与容器锚点相同
 # ============================================================================
 
 DataSource = Literal[
+    'none',              # 自定义文本，不从数据源获取
     'province',           # 省份
     'city',               # 城市
     'district',           # 区县

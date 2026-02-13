@@ -1,5 +1,8 @@
 <template>
   <el-select :modelValue="modelValue" @update:modelValue="handleChange" size="small">
+    <el-option-group label="自定义">
+      <el-option value="none" label="自定义文本" />
+    </el-option-group>
     <el-option-group label="区域信息">
       <el-option value="province" label="省份" />
       <el-option value="city" label="城市" />

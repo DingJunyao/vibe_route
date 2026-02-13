@@ -260,8 +260,33 @@ class OverlayRenderer:
             self._draw_text_lines(draw, lines, x, y, text_width, font, layout, style.color)
         else:
             # 单行文本
-            anchor = self._get_pil_anchor(layout.horizontal_align, layout.vertical_align)
-            draw.text((x, y), text, font=font, fill=style.color, anchor=anchor)
+            # 如果设置了固定宽度，需要根据对齐方式调整绘制位置
+            if layout.width and layout.horizontal_align in ['center', 'right', 'justify']:
+                # 获取文本的自然宽度
+                bbox = font.getbbox(text)
+                natural_width = bbox[2] - bbox[0]
+
+                # 根据对齐方式调整 x 坐标
+                if layout.horizontal_align == 'center' or layout.horizontal_align == 'justify':
+                    # 居中：文本在固定宽度内居中
+                    # justify 单行文本也居中绘制
+                    x = x + (text_width - natural_width) / 2
+                elif layout.horizontal_align == 'right':
+                    # 右对齐
+                    x = x + text_width - natural_width
+
+                # 使用左对齐绘制（已经调整了位置）
+                anchor = self._get_pil_anchor('left', layout.vertical_align)
+
+                # 如果是 justify 且有固定宽度，使用两端对齐绘制
+                if layout.horizontal_align == 'justify' and layout.width and len(text) > 1:
+                    self._draw_justified_text(draw, text, x, y, text_width, font, style.color)
+                else:
+                    draw.text((x, y), text, font=font, fill=style.color, anchor=anchor)
+            else:
+                # 普通绘制（左对齐或未设置固定宽度）
+                anchor = self._get_pil_anchor(layout.horizontal_align, layout.vertical_align)
+                draw.text((x, y), text, font=font, fill=style.color, anchor=anchor)
 
     def _render_group_element(
         self,
@@ -505,10 +530,35 @@ class OverlayRenderer:
         font: ImageFont,
         color: str
     ):
-        """绘制两端对齐文本（简单实现，通过调整字符间距）"""
-        # 简单实现：使用左对齐
-        # TODO: 实现真正的两端对齐（需要计算字符宽度并分布间距）
-        draw.text((x, y), text, font=font, fill=color, anchor='la')
+        """绘制两端对齐文本（通过调整字符间距实现）"""
+        if not text or len(text) <= 1:
+            # 单个字符或空文本，直接绘制
+            draw.text((x, y), text, font=font, fill=color, anchor='la')
+            return
+
+        # 计算文本的自然宽度
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+
+        # 如果文本宽度大于等于容器宽度，不需要调整间距
+        if text_width >= width:
+            draw.text((x, y), text, font=font, fill=color, anchor='la')
+            return
+
+        # 计算需要分配的总空隙
+        total_space = width - text_width
+        space_per_char = total_space / (len(text) - 1)
+
+        # 逐字符绘制，在字符之间添加均匀间距
+        current_x = x
+        for i, char in enumerate(text):
+            # 绘制当前字符
+            draw.text((current_x, y), char, font=font, fill=color, anchor='la')
+            # 计算当前字符宽度
+            char_bbox = draw.textbbox((0, 0), char, font=font)
+            char_width = char_bbox[2] - char_bbox[0]
+            # 移动到下一个字符位置
+            current_x += char_width + space_per_char
 
     def _format_text(self, point_data: TrackPoint, content: ContentConfig) -> str:
         """根据数据源格式化文本"""

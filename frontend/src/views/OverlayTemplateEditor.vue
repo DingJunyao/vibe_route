@@ -358,7 +358,7 @@
                 <el-form-item label="数据源">
                   <data-source-selector v-model="selectedElement.content.source" />
                 </el-form-item>
-                <el-form-item label="前缀后缀">
+                <el-form-item label="前缀后缀" v-if="selectedElement.content.source !== 'none'">
                   <el-input
                     v-model="selectedElement.content.format"
                     placeholder="{}"
@@ -383,8 +383,18 @@
                   <el-input
                     v-model="selectedElement.content.sample_text"
                     :placeholder="defaultSampleText"
+                    type="textarea"
+                    :rows="selectedElement.content.source === 'none' ? 3 : 1"
+                    resize="horizontal"
                   />
-                  <div class="form-hint">预览时显示的自定义文本，留空则根据数据源生成默认示例</div>
+                  <div class="form-hint">
+                    <template v-if="selectedElement.content.source === 'none'">
+                      自定义文本模式下必填，显示的固定文本内容（支持多行）
+                    </template>
+                    <template v-else>
+                      预览时显示的自定义文本，留空则根据数据源生成默认示例
+                    </template>
+                  </div>
                 </el-form-item>
               </el-form>
             </template>
@@ -418,16 +428,39 @@
                     v-model="selectedElement.layout.width"
                     :step="0.01"
                     :precision="3"
+                    :min="0"
+                    :max="1"
                     controls-position="right"
+                    placeholder="自动"
                     style="width: 100%"
                   />
                 </el-form-item>
-                <el-form-item label="对齐">
+                <el-form-item label="水平对齐">
                   <el-radio-group v-model="selectedElement.layout.horizontal_align">
                     <el-radio-button value="left">左</el-radio-button>
                     <el-radio-button value="center">中</el-radio-button>
                     <el-radio-button value="right">右</el-radio-button>
+                    <el-radio-button value="justify">两端</el-radio-button>
                   </el-radio-group>
+                </el-form-item>
+                <el-form-item label="垂直对齐">
+                  <el-radio-group v-model="selectedElement.layout.vertical_align">
+                    <el-radio-button value="top">上</el-radio-button>
+                    <el-radio-button value="middle">中</el-radio-button>
+                    <el-radio-button value="bottom">下</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item label="高度">
+                  <el-input-number
+                    v-model="selectedElement.layout.height"
+                    :step="0.01"
+                    :precision="3"
+                    :min="0"
+                    :max="1"
+                    controls-position="right"
+                    placeholder="自动"
+                    style="width: 100%"
+                  />
                 </el-form-item>
                 <el-form-item label="折行">
                   <el-switch v-model="selectedElement.layout.wrap" />
@@ -616,6 +649,9 @@ const isNumericSource = computed(() => {
 // 默认示例文本（根据数据源）
 const defaultSampleText = computed((): string => {
   const source = selectedElement.value?.content?.source
+  if (source === 'none') {
+    return '自定义文本'
+  }
   return source ? (SAMPLE_TEXTS[source] || '') : ''
 })
 
@@ -1005,37 +1041,235 @@ const renderOverlayCanvas = () => {
     ctx.font = `${fontSize}px ${fontFamily}`
     ctx.fillStyle = element.style?.color || '#FFFFFF'
 
-    // 测量文本
+    // 获取布局配置
+    const layout = element.layout || {}
+    const horizontalAlign = layout.horizontal_align || 'left'
+    const verticalAlign = layout.vertical_align || 'top'
+    const wrapEnabled = layout.wrap === true
+    const lineHeight = (layout.line_height || 1.2) * fontSize
+
+    // 测量自然文本宽度
     const metrics = ctx.measureText(text)
-    const textWidth = metrics.width
+    const naturalTextWidth = metrics.width
 
     // 获取文字的实际垂直边界
-    // actualBoundingBoxAscent: 从基线到文字顶部的距离
-    // actualBoundingBoxDescent: 从基线到文字底部的距离
     const ascent = metrics.actualBoundingBoxAscent || fontSize * 0.8
     const descent = metrics.actualBoundingBoxDescent || fontSize * 0.2
-    const textHeight = ascent + descent
+    const singleLineHeight = ascent + descent
+
+    // 计算实际使用的文本宽度和高度
+    let textWidth = naturalTextWidth
+    let boxWidth = naturalTextWidth
+
+    // 如果设置了固定宽度，使用固定宽度
+    if (layout.width !== undefined && layout.width !== null) {
+      boxWidth = layout.width * width
+      textWidth = boxWidth
+    }
+
+    // 先计算是否需要折行，以确定内容高度
+    let totalTextHeight: number
+    let lines: string[] = []
+
+    if (wrapEnabled) {
+      lines = wrapText(text, boxWidth, ctx, layout.max_lines)
+      totalTextHeight = lines.length * lineHeight
+    } else {
+      totalTextHeight = singleLineHeight
+    }
+
+    // 计算定界框高度：如果有固定高度则使用，否则使用内容高度
+    let boxHeight = totalTextHeight
+    if (layout.height !== undefined && layout.height !== null) {
+      boxHeight = layout.height * height
+    }
 
     // 元素锚点偏移
     const elementAnchor = anchorPositions[element.position.element_anchor] || anchorPositions['top-left']
 
-    // 计算文本左上角位置（与后端 PIL 逻辑一致）
+    // 计算文本框左上角位置（与后端 PIL 逻辑一致）
     // 后端: final_x = container_x + offset_x - elem_anchor_x
     //      final_y = container_y + offset_y - elem_anchor_y
     // Canvas: fillText 的 y 是基线位置，需要加上 ascent 才能得到顶部位置
-    const elemAnchorOffsetX = textWidth * elementAnchor.x
-    const elemAnchorOffsetY = textHeight * elementAnchor.y
+    const elemAnchorOffsetX = boxWidth * elementAnchor.x
+    const elemAnchorOffsetY = boxHeight * elementAnchor.y
 
-    // 文字左上角位置
-    const textLeftTopX = anchorX + offsetX - elemAnchorOffsetX
-    const textLeftTopY = anchorY + offsetY - elemAnchorOffsetY
+    // 文本框左上角位置
+    const boxLeftTopX = anchorX + offsetX - elemAnchorOffsetX
+    const boxLeftTopY = anchorY + offsetY - elemAnchorOffsetY
 
-    // fillText 的 y 坐标是基线位置，需要从左上角加上 ascent
-    const fillTextX = textLeftTopX
-    const fillTextY = textLeftTopY + ascent
+    // 折行处理
+    if (wrapEnabled) {
+      // 需要折行：拆分文本为多行
+      const lines = wrapText(text, boxWidth, ctx, layout.max_lines)
 
-    ctx.fillText(text, fillTextX, fillTextY)
+      // 计算文本实际高度（不包含最后一行下方的行高空间）
+      // 文本实际高度 = (行数 - 1) * 行高 + 最后一行文本高度
+      const lastLineMetrics = ctx.measureText(lines[lines.length - 1] || text)
+      const lastLineAscent = lastLineMetrics.actualBoundingBoxAscent || fontSize * 0.8
+      const lastLineDescent = lastLineMetrics.actualBoundingBoxDescent || fontSize * 0.2
+      const totalTextHeight = (lines.length - 1) * lineHeight + lastLineAscent + lastLineDescent
+
+      // 根据垂直对齐计算第一行的 y 坐标
+      let firstLineY = boxLeftTopY
+      if (verticalAlign === 'middle') {
+        firstLineY = boxLeftTopY + (boxHeight - totalTextHeight) / 2
+      } else if (verticalAlign === 'bottom') {
+        firstLineY = boxLeftTopY + boxHeight - totalTextHeight
+      }
+      // top 对齐：默认为 boxLeftTopY
+
+      // 绘制每一行
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        const lineMetrics = ctx.measureText(line)
+        const lineWidth = lineMetrics.width
+        const lineAscent = lineMetrics.actualBoundingBoxAscent || fontSize * 0.8
+
+        // 计算行的 y 坐标
+        const lineY = firstLineY + i * lineHeight
+
+        // 计算行的 x 坐标（根据水平对齐方式）
+        let lineX = boxLeftTopX
+        if (horizontalAlign === 'center') {
+          // 居中：文本相对于文本框居中
+          lineX = boxLeftTopX + (boxWidth - lineWidth) / 2
+        } else if (horizontalAlign === 'right') {
+          // 右对齐
+          lineX = boxLeftTopX + boxWidth - lineWidth
+        }
+        // 左对齐和两端对齐：默认从左边缘开始
+
+        // 绘制行文本
+        const fillTextY = lineY + lineAscent
+
+        // 两端对齐处理：所有行都两端对齐（单行文本也支持）
+        if (horizontalAlign === 'justify' && line.length > 1) {
+          // 两端对齐：在固定宽度内均匀分布字符
+          const totalCharWidth = lineWidth
+          const availableWidth = boxWidth
+          const totalSpace = availableWidth - totalCharWidth
+          const spacePerChar = totalSpace / (line.length - 1)
+
+          let currentX = boxLeftTopX  // 从左边缘开始
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j]
+            const charMetrics = ctx.measureText(char)
+            const charWidth = charMetrics.width
+
+            // 绘制字符
+            ctx.fillText(char, currentX, fillTextY)
+
+            // 移动到下一个字符位置（字符宽度 + 均匀间距）
+            currentX += charWidth + spacePerChar
+          }
+        } else {
+          // 普通绘制：左、中、右对齐，或最后一行
+          ctx.fillText(line, lineX, fillTextY)
+        }
+      }
+    } else {
+      // 单行文本
+      // 根据垂直对齐计算 fillText 的 y 坐标（fillText 的 y 是基线位置）
+      // 文本实际垂直范围：[fillTextY - ascent, fillTextY + descent]
+      let fillTextY = boxLeftTopY + ascent  // 上对齐：文本顶端在 boxLeftTopY
+      if (verticalAlign === 'middle') {
+        // 中对齐：文本中心在定界框中心
+        // 文本中心 = (fillTextY - ascent + fillTextY + descent) / 2 = fillTextY + (descent - ascent) / 2
+        // 定界框中心 = boxLeftTopY + boxHeight / 2
+        // 所以：fillTextY = boxLeftTopY + boxHeight / 2 + (ascent - descent) / 2
+        fillTextY = boxLeftTopY + boxHeight / 2 + (ascent - descent) / 2
+      } else if (verticalAlign === 'bottom') {
+        // 下对齐：文本底端在定界框底部
+        // fillTextY + descent = boxLeftTopY + boxHeight
+        fillTextY = boxLeftTopY + boxHeight - descent
+      }
+
+      // 根据水平对齐计算 fillText 的 x 坐标
+      let fillTextX = boxLeftTopX
+      if (horizontalAlign === 'center') {
+        // 居中：文本相对于文本框居中
+        fillTextX = boxLeftTopX + (boxWidth - naturalTextWidth) / 2
+      } else if (horizontalAlign === 'right') {
+        // 右对齐
+        fillTextX = boxLeftTopX + boxWidth - naturalTextWidth
+      }
+      // 左对齐：默认为 boxLeftTopX
+      // justify：从 boxLeftTopX 开始绘制，通过字符间距实现两端对齐
+
+      // 两端对齐单行文本：计算字符间距并绘制
+      if (horizontalAlign === 'justify' && layout.width && text.length > 1) {
+        // 两端对齐：在固定宽度内均匀分布字符
+        // 从文本框左边缘开始绘制
+        const totalCharWidth = naturalTextWidth
+        const availableWidth = boxWidth
+        const totalSpace = availableWidth - totalCharWidth
+        const spacePerChar = totalSpace / (text.length - 1)
+
+        let currentX = boxLeftTopX  // 从左边缘开始
+        for (let i = 0; i < text.length; i++) {
+          const char = text[i]
+          const charMetrics = ctx.measureText(char)
+          const charWidth = charMetrics.width
+
+          // 绘制字符
+          ctx.fillText(char, currentX, fillTextY)
+
+          // 移动到下一个字符位置（字符宽度 + 均匀间距）
+          currentX += charWidth + spacePerChar
+        }
+      } else {
+        // 普通绘制：左、中、右对齐
+        ctx.fillText(text, fillTextX, fillTextY)
+      }
+    }
   }
+}
+
+// 文本折行函数
+const wrapText = (text: string, maxWidth: number, ctx: CanvasRenderingContext2D, maxLines?: number): string[] => {
+  if (!text) return []
+  if (maxWidth <= 0) return [text]
+
+  const lines: string[] = []
+  let currentLine = ''
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    const testLine = currentLine + char
+
+    // 测试添加这个字符后是否超出最大宽度
+    const metrics = ctx.measureText(testLine)
+    if (metrics.width <= maxWidth) {
+      currentLine = testLine
+    } else {
+      // 超出宽度，开始新行
+      if (currentLine) {
+        lines.push(currentLine)
+      }
+      currentLine = char
+    }
+  }
+
+  // 添加最后一行
+  if (currentLine) {
+    lines.push(currentLine)
+  }
+
+  // 处理最大行数限制
+  if (maxLines && lines.length > maxLines) {
+    const result = lines.slice(0, maxLines)
+    if (maxLines > 0) {
+      // 在最后一行添加省略号
+      const lastLine = result[result.length - 1]
+      if (lastLine && lastLine.length > 3) {
+        result[result.length - 1] = lastLine.slice(0, -3) + '...'
+      }
+    }
+    return result
+  }
+
+  return lines
 }
 
 // 获取示例数据
@@ -1060,6 +1294,12 @@ const getSampleData = () => ({
 
 // 根据数据源获取示例文本
 const getSampleText = (source: string, customSample?: string): string => {
+  // 如果是自定义文本数据源，使用自定义示例文本（如果没有则返回空）
+  if (source === 'none') {
+    return customSample || ''
+  }
+
+  // 如果有自定义示例文本，使用它
   if (customSample) return customSample
 
   // 使用 SAMPLE_TEXTS 常量中的极端值作为示例文本
@@ -1166,6 +1406,7 @@ const addTextElement = () => {
     layout: {
       horizontal_align: 'left',
       vertical_align: 'bottom',
+      width: null,  // 初始为 null，表示使用自然宽度；用户可以设置固定宽度
       wrap: false,
       line_height: 1.2
     },
@@ -1268,7 +1509,7 @@ const getElementOutlineStyle = (element: OverlayElement) => {
   // 创建临时 Canvas 测量文本（使用 Canvas 原始尺寸）
   const tempCanvas = document.createElement('canvas')
   const tempCtx = tempCanvas.getContext('2d')
-  let textWidth = fontSize * 3  // 默认宽度
+  let naturalTextWidth = fontSize * 3  // 默认宽度
   let ascent = fontSize * 0.8
   let descent = fontSize * 0.2
 
@@ -1278,14 +1519,15 @@ const getElementOutlineStyle = (element: OverlayElement) => {
     const fontCss = fontFamily.replace(/"/g, "'")
     tempCtx.font = `${fontSize}px '${fontCss}'`
     const metrics = tempCtx.measureText(text)
-    textWidth = metrics.width
+    naturalTextWidth = metrics.width
     // 获取文字的实际垂直边界
     ascent = metrics.actualBoundingBoxAscent || fontSize * 0.8
     descent = metrics.actualBoundingBoxDescent || fontSize * 0.2
   }
 
-  // 如果设置了固定宽度且启用了折行，使用设置的宽度而不是实际文本宽度
-  if (wrapEnabled && fixedWidth !== undefined && fixedWidth !== null) {
+  // 计算文本宽度：如果设置了固定宽度，使用固定宽度；否则使用自然宽度
+  let textWidth = naturalTextWidth
+  if (fixedWidth !== undefined && fixedWidth !== null) {
     textWidth = fixedWidth * canvasWidth
   }
 
@@ -1343,7 +1585,7 @@ const hasLineHeight = computed(() => {
 // 控制点显示逻辑：
 // - 四角：始终显示（用于调整字号）
 // - n/s（上下）：折行时显示，或作为锚点时显示
-// - e/w（左右）：折行时显示，或作为锚点时显示
+// - e/w（左右）：始终显示（允许用户设置固定宽度），除非作为锚点时已由其他方式处理
 // - 居中锚点标记：单独显示（当锚点是 center 时）
 const shouldShowHandle = (handle: string): boolean => {
   if (!selectedElement.value) return false
@@ -1357,12 +1599,13 @@ const shouldShowHandle = (handle: string): boolean => {
     return hasLineHeight.value || anchor === 'bottom'
   }
 
-  // e/w 控制点：折行时显示，或作为锚点时显示
+  // e/w 控制点：始终显示，除非锚点正好是该位置（避免与四角重叠）
+  // 始终显示是为了让用户可以拖动设置固定宽度
   if (handle === 'e') {
-    return hasLineHeight.value || anchor === 'right'
+    return anchor !== 'right'
   }
   if (handle === 'w') {
-    return hasLineHeight.value || anchor === 'left'
+    return anchor !== 'left'
   }
 
   // 四角始终显示
@@ -1452,8 +1695,8 @@ const getHandlePosition = (handle: string) => {
   const wrapEnabled = layout?.wrap === true
   const fixedWidth = layout?.width
 
-  // 如果设置了固定宽度且启用了折行，使用设置的宽度而不是实际文本宽度
-  if (wrapEnabled && fixedWidth !== undefined && fixedWidth !== null) {
+  // 如果设置了固定宽度，使用固定宽度（不依赖折行模式）
+  if (fixedWidth !== undefined && fixedWidth !== null) {
     textWidth = fixedWidth * canvasWidth
   }
 
@@ -1845,8 +2088,8 @@ const handleResizeStart = (event: MouseEvent, element: OverlayElement, handle: s
   
   }
 
-  // 如果设置了固定宽度且启用了折行，使用设置的宽度
-  if (wrapEnabled && fixedWidth !== undefined && fixedWidth !== null) {
+  // 如果设置了固定宽度，使用设置的宽度（不依赖折行模式）
+  if (fixedWidth !== undefined && fixedWidth !== null) {
     textWidth = fixedWidth * canvasWidth
   }
 
@@ -2121,6 +2364,7 @@ const handleMouseMove = (event: MouseEvent) => {
 
     const layout = element.layout
     const wrapEnabled = layout?.wrap === true
+    const hasFixedWidth = layout?.width !== undefined && layout?.width !== null
     const initialFontSize = elementStartPos.value.fontSize || 0.025
 
     switch (resizeHandle.value) {
@@ -2142,7 +2386,8 @@ const handleMouseMove = (event: MouseEvent) => {
       }
       case 'e': {
         // 右边缘 - 调整宽度
-        if (layout && wrapEnabled) {
+        // 折行模式或有固定宽度时都可以调整
+        if (layout && (wrapEnabled || hasFixedWidth)) {
           const newWidthPreviewPct = mousePctX - elemLeft
           const newWidthCanvasPct = newWidthPreviewPct / 100
           layout.width = newWidthCanvasPct
@@ -2151,7 +2396,8 @@ const handleMouseMove = (event: MouseEvent) => {
       }
       case 'w': {
         // 左边缘 - 调整宽度
-        if (layout && wrapEnabled) {
+        // 折行模式或有固定宽度时都可以调整
+        if (layout && (wrapEnabled || hasFixedWidth)) {
           const newWidthPreviewPct = elemRight - mousePctX
           const newWidthCanvasPct = newWidthPreviewPct / 100
           layout.width = newWidthCanvasPct
@@ -2188,6 +2434,11 @@ const handleMouseMove = (event: MouseEvent) => {
 
           layout.width = newWidthPreviewPct / 100
           layout.height = newHeightPreviewPct / 100
+        } else if (layout && hasFixedWidth) {
+          // 非折行模式但有固定宽度时，同时缩放宽度
+          const initialWidth = elementStartPos.value.width
+          const newWidthPreviewPct = initialWidth * scaleRatio
+          layout.width = newWidthPreviewPct / 100
         }
         break
       }

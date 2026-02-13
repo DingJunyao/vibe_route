@@ -385,7 +385,7 @@ onMounted(() => {
 
 .overlay-templates-container > .el-main {
   flex: 1;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .header-left {

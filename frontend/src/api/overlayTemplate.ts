@@ -16,6 +16,7 @@ export type ContainerAnchor =
 export type ElementAnchor = ContainerAnchor
 
 export type DataSource =
+  | 'none'  // 自定义文本，不从数据源获取
   | 'province' | 'city' | 'district'
   | 'province_en' | 'city_en' | 'district_en'
   | 'region' | 'region_en'
