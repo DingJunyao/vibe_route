@@ -235,6 +235,7 @@
                   :step="10"
                   controls-position="right"
                   @change="fitToContainer"
+                  style="width: 100%"
                 />
               </el-form-item>
               <el-form-item label="高度">
@@ -245,6 +246,7 @@
                   :step="10"
                   controls-position="right"
                   @change="fitToContainer"
+                  style="width: 100%"
                 />
               </el-form-item>
               <el-row>
@@ -274,7 +276,8 @@
                     :min="0" :max="0.2" :step="0.001"
                     controls-position="right"
                     :precision="3"
-                    style="flex: 1;"
+                    class="safe-area-input"
+                  style="flex: 1;"
                   />
                   <el-button
                     size="small"
@@ -285,13 +288,24 @@
                 </div>
               </el-form-item>
               <el-form-item label="底部">
-                <el-input-number
-                  v-model="templateConfig.safe_area.bottom"
-                  :min="0" :max="0.2" :step="0.001"
-                  controls-position="right"
-                  :precision="3"
-                  :disabled="safeAreaLockDirection === 'vertical'"
-                />
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                  <el-input-number
+                    v-model="templateConfig.safe_area.bottom"
+                    :min="0" :max="0.2" :step="0.001"
+                    controls-position="right"
+                    :precision="3"
+                    :disabled="safeAreaLockDirection === 'vertical'"
+                    class="safe-area-input"
+                    style="flex: 1;"
+                  />
+                  <el-button
+                    size="small"
+                    :icon="safeAreaLockDirection === 'vertical' ? Lock : Unlock"
+                    :type="safeAreaLockDirection === 'vertical' ? 'primary' : ''"
+                    @click="toggleVerticalLock"
+                    style="visibility: hidden;"
+                  />
+                </div>
               </el-form-item>
               <el-form-item label="左侧">
                 <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
@@ -300,7 +314,8 @@
                     :min="0" :max="0.2" :step="0.001"
                     controls-position="right"
                     :precision="3"
-                    style="flex: 1;"
+                    class="safe-area-input"
+                  style="flex: 1;"
                   />
                   <el-button
                     size="small"
@@ -311,13 +326,24 @@
                 </div>
               </el-form-item>
               <el-form-item label="右侧">
-                <el-input-number
-                  v-model="templateConfig.safe_area.right"
-                  :min="0" :max="0.2" :step="0.001"
-                  controls-position="right"
-                  :precision="3"
-                  :disabled="safeAreaLockDirection === 'horizontal'"
-                />
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1;">
+                  <el-input-number
+                    v-model="templateConfig.safe_area.right"
+                    :min="0" :max="0.2" :step="0.001"
+                    controls-position="right"
+                    :precision="3"
+                    :disabled="safeAreaLockDirection === 'horizontal'"
+                    class="safe-area-input"
+                    style="flex: 1;"
+                  />
+                  <el-button
+                    size="small"
+                    :icon="safeAreaLockDirection === 'horizontal' ? Lock : Unlock"
+                    :type="safeAreaLockDirection === 'horizontal' ? 'primary' : ''"
+                    @click="toggleHorizontalLock"
+                    style="visibility: hidden;"
+                  />
+                </div>
               </el-form-item>
             </el-form>
           </div>
@@ -415,6 +441,8 @@
                   <el-input
                     v-model="selectedElement.content.format"
                     placeholder="{}"
+                    type="textarea"
+                    :rows="2"
                   />
                   <div class="form-hint">
                     使用 <code>{}</code> 作为数据占位符，可添加前后缀。
@@ -437,8 +465,8 @@
                     v-model="selectedElement.content.sample_text"
                     :placeholder="defaultSampleText"
                     type="textarea"
-                    :rows="selectedElement.content.source === 'none' ? 3 : 1"
-                    resize="horizontal"
+                    :rows="2"
+                    resize="none"
                   />
                   <div class="form-hint">
                     <template v-if="selectedElement.content.source === 'none'">
@@ -1544,7 +1572,8 @@ const formatNumericValue = (value: string, decimalPlaces?: number): string => {
 
 // 获取字体族名称
 const getFontFamilyName = (fontId: string): string => {
-  const fontMap: Record<string, string> = {
+  // 系统字体映射
+  const systemFontMap: Record<string, string> = {
     'system_msyh': 'Microsoft YaHei',
     'system_simhei': 'SimHei',
     'system_simsun': 'SimSun',
@@ -1552,7 +1581,14 @@ const getFontFamilyName = (fontId: string): string => {
     'system_times': 'Times New Roman',
     'system_courier': 'Courier New'
   }
-  return fontMap[fontId] || 'sans-serif'
+
+  // 如果是系统字体，返回映射的名称
+  if (systemFontMap[fontId]) {
+    return systemFontMap[fontId]
+  }
+
+  // 用户上传的字体（管理员或用户类型）使用 user_font_ 前缀
+  return `user_font_${fontId}`
 }
 
 // 监听模板配置变化，实时重新渲染

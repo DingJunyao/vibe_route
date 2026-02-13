@@ -36,6 +36,24 @@ Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "
 - 大任务完成后整理要点到本文件
 - 保持文件大小 < 40KB（压缩历史版本到独立文件）
 
+### tips
+
+For map coordinate conversions, always use the MapService.covert_coords method with provider-specific transformations. AMap/Tencent use GCJ-02, Baidu uses BD-09, Leaflet uses WGS-84.
+
+For text alignment and wrapping features: always test justify overflow, control point positioning when toggling wrap mode, and width adjustment in non-wrap mode before considering implementation complete.
+
+When handling Chinese characters in font uploads or text display, always use UTF-8 encoding and check for full-width vs single-width quote/comparison operator issues.
+
+For undo/redo implementation: always debounce state recording during drag operations, avoid naming conflicts with browser 'history' object, and test multi-step undo jumps.
+
+For control handles on bounding boxes: use shouldShowHandle function instead of hasLineHeight in v-if conditions, align handles to bounding box edges, and display N/S handles when acting as anchors even without line wrapping.
+
+Before fixing any UI bug, first use chrome-devtools to take a snapshot and inspect the computed CSS styles, Vue component state, and actual rendered DOM. Then identify the root cause before editing code.
+
+After implementing any text alignment or control point feature, test: (1) justify mode overflow, (2) wrap mode toggle detaching controls, (3) width adjustment when wrap disabled, (4) coordinate switching across AMap/Baidu/Tencent/Leaflet, (5) control point display after provider switch. Only consider complete when all pass.
+
+For any coordinate or marker-related fix: (1) Test coordinate conversion works for all four providers (AMap=GCJ-02, Baidu=BD-09, Tencent=GCJ-02, Leaflet=WGS-84), (2) Verify green latest-point markers display correctly on each, (3) Switch between providers and confirm control points still render, (4) Use MapService.convert_coords consistently, never manually transform coordinates.
+
 ## 快速命令
 
 ```bash
@@ -323,6 +341,7 @@ frontend/src/
 - 地理编码服务配置缓存
 
 ### 2026-02
+
 - 多边形几何字段 + Shapely 精确匹配
 - 省辖县级行政单位分类修复
 - 地理信息编辑器（刻度条、撤销/重做、空块操作）
@@ -336,3 +355,17 @@ frontend/src/
   - 添加"自定义文本"数据源选项
   - 示例文本支持多行输入
   - 修正文本整体高度计算（排除最后一行下方空间）
+- **GB 5765 字体支持**：
+  - 后端启动时预转换为 WOFF2 格式（`_convert_gb5765_fonts_to_woff2()`）
+  - 删除问题表（VDMX、GASP、GDEF、GPOS、GSUB、gasp、gvar、fvar、STAT、trak、kern、vhea、vmtx）
+  - 重建最小化 post 表（format 3.0）
+  - WOFF2 缓存机制（`backend/data/fonts/woff2_cache/`）
+  - 前端动态加载字体（`user_font_${fontId}` 命名）
+  - `OverlayTemplateEditor.getFontFamilyName()` 支持用户字体映射
+  - `FontSelector` 为 GB 5765 字体添加时间戳绕过浏览器缓存
+- **覆盖层模板编辑器 UI 完善**：
+  - 安全区输入框宽度统一（使用 visibility: hidden 占位）
+  - 前缀后缀输入框支持多行文本（textarea, 2 行）
+  - 示例文本输入框高度与描述输入框一致（2 行）
+  - 画布宽高输入框和字体下拉框宽度延伸到右边（100%）
+  - 画布渲染支持用户/管理员上传字体

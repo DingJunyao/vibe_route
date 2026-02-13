@@ -277,21 +277,220 @@ class OverlayTemplateService:
 class FontService:
     """字体管理服务"""
 
+    # 系统字体定义（静态）
+    SYSTEM_FONTS = [
+        Font(
+            id='system_msyh',
+            name='微软雅黑',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='Microsoft YaHei',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=True,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        ),
+        Font(
+            id='system_simhei',
+            name='黑体',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='SimHei',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=True,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        ),
+        Font(
+            id='system_simsun',
+            name='宋体',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='SimSun',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=True,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        ),
+        Font(
+            id='system_arial',
+            name='Arial',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='Arial',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=False,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        ),
+        Font(
+            id='system_times',
+            name='Times New Roman',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='Times New Roman',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=False,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        ),
+        Font(
+            id='system_courier',
+            name='Courier New',
+            filename='',
+            type='system',
+            owner_id=None,
+            file_path='',
+            file_size=0,
+            family='Courier New',
+            style='normal',
+            weight=400,
+            supports_latin=True,
+            supports_chinese=False,
+            supports_japanese=False,
+            supports_korean=False,
+            preview_url=None
+        )
+    ]
+
     def __init__(self, db: AsyncSession):
         self.db = db
+        # 道路标志字体目录（管理员通过后台管理上传的字体）
+        self.admin_fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
 
     async def list_fonts(self, user_id: int) -> List[Font]:
         """获取可用字体列表"""
+        # 获取数据库中的管理员和用户字体
         result = await self.db.execute(
             select(Font)
             .where(
-                (Font.type == 'system') |
                 (Font.type == 'admin') |
                 ((Font.type == 'user') & (Font.owner_id == user_id))
             )
             .where(Font.is_valid == True)
         )
-        return list(result.scalars().all())
+        db_fonts = list(result.scalars().all())
+
+        # 扫描管理员通过后台管理上传的字体文件（FONTS_DIR 目录）
+        admin_fonts_from_fs = []
+        if self.admin_fonts_dir.exists():
+            existing_db_ids = {f.id for f in db_fonts}
+            for font_file in self.admin_fonts_dir.iterdir():
+                if font_file.is_file() and font_file.suffix.lower() in ('.ttf', '.otf', '.ttc', '.woff2'):
+                    # 使用文件名（不含扩展名）作为 ID
+                    font_id = f"admin_{font_file.stem}"
+                    # 避免重复
+                    if font_id not in existing_db_ids:
+                        stat = font_file.stat()
+                        # 读取字体文件的元数据获取真实名称
+                        font_name = font_file.stem  # 默认使用文件名
+                        font_family = font_file.stem
+                        font_style = 'normal'
+                        font_weight = 400
+
+                        # 尝试从字体文件中读取真实名称
+                        try:
+                            from fontTools.ttLib import TTFont
+                            tt_font = TTFont(font_file)
+                            # 优先使用 name 表中的英文名称
+                            if 'name' in tt_font:
+                                name_table = tt_font['name']
+                                # Name record IDs: 1=Font Family Name, 2=Font Style, 4=Full Font Name
+                                # 优先使用 Font Family Name (ID=1)
+                                # 支持 Microsoft (platformID=3) 和 Apple/Unicode (platformID=1/0)
+                                for name_record in name_table.names:
+                                    if name_record.nameID == 1 and name_record.platformID in (1, 3):
+                                        try:
+                                            candidate_name = name_record.toUnicode()
+                                            if candidate_name and len(candidate_name) > 0:
+                                                font_name = candidate_name
+                                                break
+                                        except Exception:
+                                            continue
+                                # 如果没找到，尝试使用 Full Font Name (ID=4)
+                                if font_name == font_file.stem:
+                                    for name_record in name_table.names:
+                                        if name_record.nameID == 4 and name_record.platformID in (1, 3):
+                                            try:
+                                                candidate_name = name_record.toUnicode()
+                                                if candidate_name and len(candidate_name) > 0:
+                                                    font_name = candidate_name
+                                                    break
+                                            except Exception:
+                                                continue
+
+                            # 读取字体家族信息
+                            if 'OS/2' in tt_font:
+                                os2 = tt_font['OS/2']
+                                if hasattr(os2, 'sfntFamily'):
+                                    font_family = os2.sfntFamily
+                                if hasattr(os2, 'weight'):
+                                    font_weight = os2.weight
+
+                            # 读取样式信息
+                            if 'head' in tt_font:
+                                head = tt_font['head']
+                                if hasattr(head, 'macStyle'):
+                                    style_map = {0: 'normal', 1: 'italic'}
+                                    mac_style = head.macStyle
+                                    if isinstance(mac_style, int) and mac_style in style_map:
+                                        font_style = style_map[mac_style]
+
+                        except Exception as e:
+                            print(f"Failed to read font metadata for {font_file.name}: {e}")
+
+                        admin_fonts_from_fs.append(
+                            Font(
+                                id=font_id,
+                                name=font_name,
+                                filename=font_file.name,
+                                type='admin',
+                                owner_id=None,
+                                file_path=str(font_file),
+                                file_size=stat.st_size,
+                                family=font_family,
+                                style=font_style,
+                                weight=font_weight,
+                                supports_latin=True,
+                                supports_chinese=True,  # 假设支持中文
+                                supports_japanese=False,
+                                supports_korean=False,
+                                preview_url=None
+                            )
+                        )
+
+        # 合并系统字体 + 文件系统管理员字体 + 数据库字体
+        return self.SYSTEM_FONTS + admin_fonts_from_fs + db_fonts
 
     async def get_font(self, font_id: str) -> Optional[Font]:
         """获取单个字体"""
@@ -305,6 +504,7 @@ class FontService:
     async def upload_user_font(
         self,
         user_id: int,
+        is_admin: bool,
         filename: str,
         file_content: bytes
     ) -> Font:
@@ -312,6 +512,9 @@ class FontService:
         # 检查是否允许用户上传字体
         if not settings.overlay_allow_user_fonts:
             raise HTTPException(403, "用户字体上传功能已关闭")
+
+        # 管理员上传时 type='admin'，普通用户上传时 type='user'
+        font_type = 'admin' if is_admin else 'user'
 
         # 检查数量限制
         from sqlalchemy import func
@@ -352,15 +555,72 @@ class FontService:
         with open(file_path, 'wb') as f:
             f.write(file_content)
 
+        # 读取字体元数据
+        font_name = filename.rsplit('.', 1)[0]  # 默认使用文件名（去掉扩展名）
+        font_family = font_name
+        font_style = 'normal'
+        font_weight = 400
+
+        try:
+            from fontTools.ttLib import TTFont
+            tt_font = TTFont(str(file_path))
+            # 优先使用 name 表中的字体家族名称
+            if 'name' in tt_font:
+                name_table = tt_font['name']
+                # Name record IDs: 1=Font Family Name, 4=Full Font Name
+                # 支持 Microsoft (platformID=3) 和 Apple/Unicode (platformID=1/0)
+                for name_record in name_table.names:
+                    if name_record.nameID == 1 and name_record.platformID in (1, 3):
+                        try:
+                            candidate_name = name_record.toUnicode()
+                            if candidate_name and len(candidate_name) > 0:
+                                font_name = candidate_name
+                                font_family = candidate_name
+                                break
+                        except Exception:
+                            continue
+                # 如果没找到，尝试使用 Full Font Name
+                if font_name == filename.rsplit('.', 1)[0]:
+                    for name_record in name_table.names:
+                        if name_record.nameID == 4 and name_record.platformID in (1, 3):
+                            try:
+                                candidate_name = name_record.toUnicode()
+                                if candidate_name and len(candidate_name) > 0:
+                                    font_name = candidate_name
+                                    break
+                            except Exception:
+                                continue
+
+            # 读取字体样式信息
+            if 'head' in tt_font:
+                head = tt_font['head']
+                if hasattr(head, 'macStyle'):
+                    style_map = {0: 'normal', 1: 'italic'}
+                    mac_style = head.macStyle
+                    if isinstance(mac_style, int) and mac_style in style_map:
+                        font_style = style_map[mac_style]
+
+            # 读取字重信息
+            if 'OS/2' in tt_font:
+                os2 = tt_font['OS/2']
+                if hasattr(os2, 'weight'):
+                    font_weight = os2.weight
+
+        except Exception as e:
+            print(f"Failed to read font metadata for {filename}: {e}")
+
         # 创建字体记录
         font = Font(
             id=f"user_{user_id}_{filename}",
-            name=filename.rsplit('.', 1)[0],  # 去掉扩展名
+            name=font_name,
             filename=filename,
-            type='user',
+            type=font_type,
             owner_id=user_id,
             file_path=str(file_path),
             file_size=file_size,
+            family=font_family,
+            style=font_style,
+            weight=font_weight,
             supports_chinese=True,  # 假设支持中文
         )
         self.db.add(font)

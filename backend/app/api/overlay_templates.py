@@ -239,6 +239,238 @@ async def delete_font(
     await service.delete_font(font_id, current_user.id, is_admin)
 
 
+@router.get("/fonts/{font_id}/file")
+async def get_font_file(
+    font_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取字体文件（用于前端加载）- 无需认证，字体文件非敏感资源"""
+    from app.models.overlay_template import Font
+    from sqlalchemy import select
+    from pathlib import Path
+
+    result = await db.execute(
+        select(Font).where(Font.id == font_id)
+    )
+    font = result.scalar_one_or_none()
+
+    # 数据库中不存在，尝试从管理员字体目录（FONTS_DIR）读取
+    if not font:
+        if font_id.startswith('admin_'):
+            from app.core.config import settings
+
+            # 从 font_id 提取文件名（去掉 'admin_' 前缀）
+            filename = font_id[6:]  # 去掉 'admin_' 前缀
+            admin_fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
+
+            # 尝试添加常见的字体扩展名
+            for ext in ['.ttf', '.otf', '.ttc', '.woff2']:
+                font_path = admin_fonts_dir / (filename + ext)
+                if font_path.exists():
+                    return _serve_font_file(font_path)
+
+            # 如果都不存在，尝试直接用文件名
+            font_path = admin_fonts_dir / filename
+            if font_path.exists():
+                return _serve_font_file(font_path)
+
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "字体不存在")
+
+    # 读取字体文件
+    font_path = Path(font.file_path)
+    if not font_path.exists():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "字体文件不存在")
+
+    return _serve_font_file(font_path)
+
+
+def _serve_font_file(font_path: Path):
+    """Font file serving helper - uses cached WOFF2 if available"""
+    from pathlib import Path
+    from app.core.config import settings
+    from io import BytesIO
+
+    print(f"DEBUG: _serve_font_file called with font_path: {font_path}")
+
+    # Initialize variables
+    content = None
+    mime_type = 'font/sfnt'  # Default MIME type
+
+    # First, try to find the actual TTF file (with underscore)
+    source_path = font_path
+
+    # Check if pre-converted WOFF2 exists (for GB 5765 fonts)
+    fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
+    woff2_dir = fonts_dir / 'woff2_cache'
+
+    # Generate cache filename
+    if font_path.name.endswith('.ttf'):
+        woff2_name = font_path.name.replace('.ttf', '.woff2')
+    elif font_path.name.endswith('.otf'):
+        woff2_name = font_path.name.replace('.otf', '.woff2')
+    else:
+        woff2_name = font_path.name + '.woff2'
+
+    woff2_path = woff2_dir / woff2_name
+
+    if woff2_path.exists():
+        # Check if cache is newer than source
+        source_mtime = source_path.stat().st_mtime
+        woff2_mtime = woff2_path.stat().st_mtime
+        if woff2_mtime >= source_mtime:
+            # Use cached WOFF2
+            with open(woff2_path, 'rb') as f:
+                content = f.read()
+            mime_type = 'font/woff2'
+            print(f"DEBUG: Using cached WOFF2: {woff2_path.name} ({len(content)} bytes)")
+            logger.info(f"Serving cached WOFF2: {woff2_path.name} ({len(content)} bytes)")
+
+    # If no cached content, read and convert original file
+    if content is None:
+        print(f"DEBUG: Reading and converting source file: {source_path}")
+        with open(source_path, 'rb') as f:
+            content = f.read()
+
+        original_size = len(content)
+        logger.info(f"Serving original font file: {font_path.name} ({original_size} bytes)")
+
+        # Determine MIME type based on file extension
+        suffix = font_path.suffix.lower()
+
+        if suffix in ('.ttf', '.otf', '.ttc'):
+            # For TTF/OTF files, try to convert to WOFF2
+            # Only do full conversion for GB 5765 fonts (jtbz_A, jtbz_B, jtbz_C)
+            # Other fonts can be directly served as original format
+            gb5765_fonts = ['jtbz_A.ttf', 'jtbz_B.ttf', 'jtbz_C.ttf',
+                            'admin_jtbz_A.ttf', 'admin_jtbz_B.ttf', 'admin_jtbz_C.ttf']
+            is_gb5765_font = font_path.name in gb5765_fonts
+
+            if is_gb5765_font:
+                # GB 5765 fonts need table cleanup for browser compatibility
+                try:
+                    from fontTools.ttLib import TTFont
+
+                    font = TTFont(BytesIO(content))
+                    original_tables = list(font.keys())
+
+                    # Remove problematic tables
+                    # vmtx requires vhea, so remove both or neither
+                    # post table may be corrupted, remove and rebuild a minimal one
+                    problematic_tables = []
+                    for table_tag in font.keys():
+                        if table_tag in ('VDMX', 'GASP', 'GDEF', 'GPOS', 'GSUB', 'gasp', 'gvar', 'fvar', 'STAT', 'trak', 'kern'):
+                            problematic_tables.append(table_tag)
+                        # Remove vhea and vmtx together (vmtx depends on vhea)
+                        elif table_tag in ('vhea', 'vmtx'):
+                            problematic_tables.append(table_tag)
+                        # Remove post table (will rebuild a minimal one)
+                        elif table_tag == 'post':
+                            problematic_tables.append(table_tag)
+
+                    if problematic_tables:
+                        print(f"DEBUG: Removing {len(problematic_tables)} problematic tables from {font_path.name}")
+
+                    for table_tag in problematic_tables:
+                        try:
+                            del font[table_tag]
+                        except:
+                            pass
+
+                    # Rebuild post table (minimal version)
+                    try:
+                        from fontTools.ttLib import newTable
+                        font['post'] = newTable('post')
+                        # Set required attributes for post table header
+                        font['post'].formatType = 3.0
+                        font['post'].italicAngle = 0.0
+                        font['post'].underlinePosition = -100
+                        font['post'].underlineThickness = 50
+                        font['post'].isFixedPitch = 0
+                        font['post'].minMemType42 = 0
+                        font['post'].maxMemType42 = 0
+                        font['post'].minMemType1 = 0
+                        font['post'].maxMemType1 = 0
+                        print(f"DEBUG: Rebuilt post table for {font_path.name}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to rebuild post table: {e}")
+                        raise  # 让错误传播
+
+                    # Save as WOFF2
+                    woff2_output = BytesIO()
+                    font.save(woff2_output, 'WOFF2')
+
+                    content = woff2_output.getvalue()
+                    mime_type = 'font/woff2'
+
+                    print(f"DEBUG: Converted {font_path.name} to WOFF2 ({len(content)} bytes)")
+
+                    # Save to cache for future use
+                    try:
+                        woff2_path.parent.mkdir(exist_ok=True)
+                        with open(woff2_path, 'wb') as f:
+                            f.write(content)
+                        print(f"DEBUG: Cached WOFF2 to {woff2_path}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to cache WOFF2: {e}")
+
+                except Exception as e:
+                    print(f"DEBUG: Failed to convert {font_path.name}: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                # Non-GB5765 fonts: just convert to WOFF2 without modifying tables
+                try:
+                    from fontTools.ttLib import TTFont
+
+                    font = TTFont(BytesIO(content))
+                    woff2_output = BytesIO()
+                    font.save(woff2_output, 'WOFF2')
+
+                    content = woff2_output.getvalue()
+                    mime_type = 'font/woff2'
+
+                    print(f"DEBUG: Converted {font_path.name} to WOFF2 ({len(content)} bytes)")
+
+                    # Save to cache for future use
+                    try:
+                        woff2_path.parent.mkdir(exist_ok=True)
+                        with open(woff2_path, 'wb') as f:
+                            f.write(content)
+                        print(f"DEBUG: Cached WOFF2 to {woff2_path}")
+                    except Exception as e:
+                        print(f"DEBUG: Failed to cache WOFF2: {e}")
+
+                except Exception as e:
+                    print(f"DEBUG: Failed to convert {font_path.name} to WOFF2: {e}")
+                    # Keep original content
+
+                    # Determine original MIME type
+                    if suffix == '.ttf':
+                        mime_type = 'font/sfnt'
+                    elif suffix == '.otf':
+                        mime_type = 'font/otf'
+                    elif suffix == '.ttc':
+                        mime_type = 'font/collection'
+        elif suffix == '.woff':
+            mime_type = 'font/woff'
+        elif suffix == '.woff2':
+            mime_type = 'font/woff2'
+
+    # Ensure we have content to return
+    if content is None:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to read font file")
+
+    from fastapi import Response
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            'Cache-Control': 'public, max-age=31536000',
+            'Access-Control-Allow-Origin': '*',
+        }
+    )
+
+
 # ============================================================================
 # 导出覆盖层
 # ============================================================================

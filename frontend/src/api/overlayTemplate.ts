@@ -253,12 +253,25 @@ export const overlayTemplateApi = {
   },
 
   /**
+   * 获取字体文件URL（用于动态加载）
+   */
+  getFontFileUrl: (fontId: string) => {
+    // GB 5765 字体添加时间戳参数，避免浏览器缓存旧版本
+    const gb5765Fonts = ['admin_jtbz_A', 'admin_jtbz_B', 'admin_jtbz_C']
+    const url = `/api/overlay-templates/fonts/${fontId}/file`
+    if (gb5765Fonts.includes(fontId)) {
+      return `${url}?v=${Date.now()}`
+    }
+    return url
+  },
+
+  /**
    * 上传字体
    */
   uploadFont: (file: File, onProgress?: (progress: number) => void) => {
     const formData = new FormData()
     formData.append('file', file)
-    return request.post<Font>('/overlay-templates/fonts/upload', formData, {
+    return request.post<{ message: string; filename: string }>('/overlay-templates/fonts/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       onUploadProgress: (progressEvent: AxiosProgressEvent) => {
         if (onProgress && progressEvent.total) {

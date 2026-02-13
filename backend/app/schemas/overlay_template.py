@@ -269,7 +269,7 @@ class FontResponse(BaseModel):
     supports_japanese: bool
     supports_korean: bool
     preview_url: Optional[str]
-    created_at: datetime
+    created_at: Optional[datetime] = None  # 系统字体没有此字段
 
     class Config:
         from_attributes = True
