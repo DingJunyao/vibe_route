@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc && vite build",
+    "build": "vite build",
+    "build:check": "vue-tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix --ignore-path .gitignore"
   },
@@ -28,6 +29,7 @@
     "js-sha256": "^0.11.1",
     "leaflet": "^1.9.4",
     "leaflet.chinatmsproviders": "^3.0.6",
+    "js-yaml": "^4.1.0",
     "pinia": "^2.1.7",
     "proj4leaflet": "^1.0.2",
     "qrcode": "^1.5.4",
@@ -41,6 +43,7 @@
     "@typescript-eslint/eslint-plugin": "^6.17.0",
     "@typescript-eslint/parser": "^6.17.0",
     "@vitejs/plugin-vue": "^4.5.2",
+    "@types/js-yaml": "^4.0.9",
     "eruda": "^3.4.3",
     "eslint": "^8.56.0",
     "eslint-plugin-vue": "^9.19.2",

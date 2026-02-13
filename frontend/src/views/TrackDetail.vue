@@ -75,6 +75,10 @@
             <el-icon><Picture /></el-icon>
             导出海报
           </el-button>
+          <el-button type="primary" @click="overlayExportDialogVisible = true" class="desktop-only">
+            <el-icon><Film /></el-icon>
+            覆盖层
+          </el-button>
           <el-button type="primary" @click="shareDialogVisible = true" class="desktop-only">
             <el-icon><Share /></el-icon>
             分享
@@ -110,6 +114,10 @@
               <el-dropdown-item command="poster" v-if="isMobile">
                 <el-icon><Picture /></el-icon>
                 导出海报
+              </el-dropdown-item>
+              <el-dropdown-item command="overlayExport" v-if="isMobile">
+                <el-icon><Film /></el-icon>
+                覆盖层
               </el-dropdown-item>
               <el-dropdown-item command="share" v-if="isMobile">
                 <el-icon><Share /></el-icon>
@@ -885,6 +893,82 @@
       :initial-status="shareStatus"
       @update:status="shareStatus = $event"
     />
+
+    <!-- 覆盖层导出对话框 -->
+    <el-dialog
+      v-model="overlayExportDialogVisible"
+      title="导出覆盖层"
+      :width="isMobile ? '95%' : '500px'"
+    >
+      <el-form :model="overlayExportConfig" label-width="100px">
+        <el-form-item label="使用模板">
+          <el-select v-model="selectedOverlayTemplate" placeholder="选择模板" style="width: 100%">
+            <el-option
+              v-for="tpl in overlayTemplates"
+              :key="tpl.id"
+              :label="tpl.name"
+              :value="tpl.id"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="输出分辨率">
+          <el-radio-group v-model="overlayExportConfig.resolution">
+            <el-radio-button value="1920x1080">1080p</el-radio-button>
+            <el-radio-button value="2560x1440">2K</el-radio-button>
+            <el-radio-button value="3840x2160">4K</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="采样率">
+          <el-radio-group v-model="overlayExportConfig.frameRate">
+            <el-radio-button :value="1">1 fps（每秒1帧）</el-radio-button>
+            <el-radio-button :value="2">2 fps</el-radio-button>
+            <el-radio-button :value="5">5 fps</el-radio-button>
+            <el-radio-button :value="0">全部</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="时间范围">
+          <div class="range-inputs">
+            <el-input-number
+              v-model="overlayExportConfig.startIndex"
+              :min="0"
+              :max="points.length - 1"
+              placeholder="起始索引"
+            />
+            <span>至</span>
+            <el-input-number
+              v-model="overlayExportConfig.endIndex"
+              :min="-1"
+              :max="points.length - 1"
+              placeholder="-1 表示到最后"
+            />
+          </div>
+          <el-button text @click="setFullRange">全部</el-button>
+        </el-form-item>
+
+        <el-form-item label="输出格式">
+          <el-radio-group v-model="overlayExportConfig.outputFormat">
+            <el-radio-button value="zip">ZIP 压缩包</el-radio-button>
+            <el-radio-button value="png_sequence">PNG 序列</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-alert type="info" :closable="false">
+          <template #title>
+            预计生成 ~{{ estimatedFrames }} 帧
+          </template>
+        </el-alert>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="overlayExportDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="exportOverlay" :loading="isExportingOverlay">
+          开始导出
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -916,10 +1000,12 @@ import {
   Link,
   Picture,
   Share,
+  Film,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode, type ShareStatus } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
+import { overlayTemplateApi } from '@/api/overlayTemplate'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -1063,6 +1149,82 @@ const importing = ref(false)
 // 海报导出相关
 const posterDialogVisible = ref(false)
 
+// 覆盖层导出相关
+const overlayExportDialogVisible = ref(false)
+const overlayTemplates = ref<any[]>([])
+const selectedOverlayTemplate = ref<number | null>(null)
+const overlayExportConfig = ref({
+  resolution: '1920x1080',
+  frameRate: 1,
+  startIndex: 0,
+  endIndex: -1,
+  outputFormat: 'zip'
+})
+const isExportingOverlay = ref(false)
+
+// 覆盖层导出计算属性
+const estimatedFrames = computed(() => {
+  const total = overlayExportConfig.value.endIndex === -1
+    ? points.value.length
+    : overlayExportConfig.value.endIndex - overlayExportConfig.value.startIndex + 1
+  const rate = overlayExportConfig.value.frameRate || 1
+  return Math.ceil(total / rate)
+})
+
+// 加载覆盖层模板列表
+const loadOverlayTemplates = async () => {
+  try {
+    const response = await overlayTemplateApi.list({ include_system: true })
+    overlayTemplates.value = response.items
+  } catch (error: any) {
+    console.error('加载模板列表失败:', error)
+  }
+}
+
+// 设置全范围
+const setFullRange = () => {
+  overlayExportConfig.value.startIndex = 0
+  overlayExportConfig.value.endIndex = -1
+}
+
+// 导出覆盖层
+const exportOverlay = async () => {
+  if (!selectedOverlayTemplate.value) {
+    ElMessage.warning('请选择模板')
+    return
+  }
+
+  isExportingOverlay.value = true
+  try {
+    const blob = await overlayTemplateApi.exportOverlay(
+      trackId.value,
+      {
+        template_id: selectedOverlayTemplate.value,
+        resolution: overlayExportConfig.value.resolution,
+        frame_rate: overlayExportConfig.value.frameRate,
+        start_index: overlayExportConfig.value.startIndex,
+        end_index: overlayExportConfig.value.endIndex,
+        output_format: overlayExportConfig.value.outputFormat as 'zip' | 'png_sequence'
+      }
+    )
+
+    // 下载文件
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `overlay_${trackId.value}.${overlayExportConfig.value.outputFormat === 'zip' ? 'zip' : 'png'}`
+    a.click()
+    URL.revokeObjectURL(url)
+
+    ElMessage.success('导出成功')
+    overlayExportDialogVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.detail || '导出失败')
+  } finally {
+    isExportingOverlay.value = false
+  }
+}
+
 // 分享相关
 const shareDialogVisible = ref(false)
 const shareStatus = ref<ShareStatus | null>(null)
@@ -1147,6 +1309,8 @@ function handleCommand(command: string) {
     importDialogVisible.value = true
   } else if (command === 'poster') {
     posterDialogVisible.value = true
+  } else if (command === 'overlayExport') {
+    overlayExportDialogVisible.value = true
   } else if (command === 'share') {
     shareDialogVisible.value = true
   }
@@ -2460,6 +2624,13 @@ watch(isTallScreen, () => {
   })
 })
 
+// 监听覆盖层导出对话框打开
+watch(overlayExportDialogVisible, (newVal) => {
+  if (newVal && overlayTemplates.value.length === 0) {
+    loadOverlayTemplates()
+  }
+})
+
 onUnmounted(() => {
   stopPollingProgress()
 
@@ -3562,5 +3733,12 @@ onUnmounted(() => {
   vertical-align: middle;
   height: 1.4em;
   width: auto;
+}
+
+/* 覆盖层导出对话框样式 */
+.range-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>

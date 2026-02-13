@@ -90,5 +90,25 @@ class Settings(BaseSettings):
     # 首位用户自动为管理员
     FIRST_USER_IS_ADMIN: bool = True
 
+    # 覆盖层配置
+    OVERLAY_ALLOW_USER_FONTS: bool = False  # 是否允许用户上传自定义字体
+    OVERLAY_MAX_USER_FONTS: int = 10  # 每个用户最多上传字体数量
+    OVERLAY_MAX_USER_FONTS_SIZE_MB: int = 100  # 每个用户字体总大小限制(MB)
+
+    @property
+    def overlay_allow_user_fonts(self) -> bool:
+        """是否允许用户上传自定义字体"""
+        return self.OVERLAY_ALLOW_USER_FONTS
+
+    @property
+    def overlay_max_user_fonts(self) -> int:
+        """每个用户最多上传字体数量"""
+        return self.OVERLAY_MAX_USER_FONTS
+
+    @property
+    def overlay_max_user_fonts_size_mb(self) -> int:
+        """每个用户字体总大小限制(MB)"""
+        return self.OVERLAY_MAX_USER_FONTS_SIZE_MB
+
 
 settings = Settings()

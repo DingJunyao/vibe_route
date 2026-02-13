@@ -84,6 +84,24 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/overlay-templates',
+    name: 'OverlayTemplates',
+    component: () => import('@/views/OverlayTemplates.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/overlay-templates/new',
+    name: 'OverlayTemplateEditor',
+    component: () => import('@/views/OverlayTemplateEditor.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
+    path: '/overlay-templates/:id',
+    name: 'OverlayTemplateEdit',
+    component: () => import('@/views/OverlayTemplateEditor.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/admin',
     name: 'Admin',
     component: () => import('@/views/Admin.vue'),

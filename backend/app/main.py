@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 FastAPI 主应用
 """
@@ -26,7 +27,7 @@ if sys.platform == 'win32':
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -94,9 +95,147 @@ class LoggerAdapter:
 logger = LoggerAdapter(loguru_logger)
 
 
+def _convert_gb5765_fonts_to_woff2():
+    """Pre-convert GB 5765 fonts to WOFF2 format at startup"""
+    import time
+    
+    print("=" * 60)
+    print("GB5765 FONT CONVERSION: Starting...")
+    print("=" * 60)
+    
+    # Small delay to ensure output is visible
+    time.sleep(0.1)
+    
+    try:
+        from pathlib import Path
+        from app.core.config import settings
+    except ImportError as e:
+        print(f"ERROR: Cannot import: {e}")
+        return
+    
+    try:
+        fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
+        print(f"Fonts directory: {fonts_dir}")
+        print(f"Directory exists: {fonts_dir.exists()}")
+    except Exception as e:
+        print(f"ERROR: Cannot determine fonts_dir: {e}")
+        return
+    
+    if not fonts_dir.exists():
+        print("ERROR: Fonts directory does not exist, skipping conversion")
+        return
+    
+    # GB 5765 font files - using underscores as they appear in filesystem
+    gb_fonts = ['jtbz_A.ttf', 'jtbz_B.ttf', 'jtbz_C.ttf']
+    woff2_dir = fonts_dir / 'woff2_cache'
+    woff2_dir.mkdir(exist_ok=True)
+    
+    print(f"Processing {len(gb_fonts)} GB 5765 fonts")
+    
+    for font_name in gb_fonts:
+        source_path = fonts_dir / font_name
+        woff2_path = woff2_dir / font_name.replace('.ttf', '.woff2')
+        
+        # Check if WOFF2 already exists and is up to date
+        need_conversion = True
+        if woff2_path.exists():
+            source_mtime = source_path.stat().st_mtime
+            woff2_mtime = woff2_path.stat().st_mtime
+            if woff2_mtime >= source_mtime:
+                need_conversion = False
+                print(f"  {font_name}: Cache is up to date, skipping")
+        
+        if not need_conversion:
+            continue
+        
+        try:
+            from fontTools.ttLib import TTFont
+            from io import BytesIO
+            
+            # Read original font
+            with open(source_path, 'rb') as f:
+                content = f.read()
+            
+            # Load and sanitize
+            font = TTFont(BytesIO(content))
+            original_tables = list(font.keys())
+            print(f"  {font_name}: Original tables: {original_tables}")
+
+            # Remove problematic tables
+            # vmtx requires vhea, so remove both or neither
+            # post table may be corrupted, remove and rebuild a minimal one
+            has_vhea = 'vhea' in font
+            has_vmtx = 'vmtx' in font
+
+            problematic_tables = []
+            for table_tag in font.keys():
+                if table_tag in ('VDMX', 'GASP', 'GDEF', 'GPOS', 'GSUB', 'gasp', 'gvar', 'fvar', 'STAT', 'trak', 'kern'):
+                    problematic_tables.append(table_tag)
+                # Remove vhea and vmtx together (vmtx depends on vhea)
+                elif table_tag in ('vhea', 'vmtx'):
+                    problematic_tables.append(table_tag)
+                # Remove post table (will rebuild a minimal one)
+                elif table_tag == 'post':
+                    problematic_tables.append(table_tag)
+
+            if problematic_tables:
+                print(f"  {font_name}: Removing {len(problematic_tables)} problematic tables: {problematic_tables}")
+
+                for table_tag in problematic_tables:
+                    try:
+                        del font[table_tag]
+                    except Exception as e:
+                        print(f"  {font_name}: Failed to remove {table_tag}: {e}")
+
+            # Rebuild post table (minimal version)
+            try:
+                from fontTools.ttLib import newTable
+                font['post'] = newTable('post')
+                # Set required attributes for the post table header
+                font['post'].formatType = 3.0
+                font['post'].italicAngle = 0.0
+                font['post'].underlinePosition = -100
+                font['post'].underlineThickness = 50
+                font['post'].isFixedPitch = 0
+                font['post'].minMemType42 = 0
+                font['post'].maxMemType42 = 0
+                font['post'].minMemType1 = 0
+                font['post'].maxMemType1 = 0
+                print(f"  {font_name}: Rebuilt post table")
+            except Exception as e:
+                print(f"  {font_name}: Failed to rebuild post table: {e}")
+                raise  # 让错误传播，停止处理
+            
+            # Save as WOFF2
+            woff2_output = BytesIO()
+            font.save(woff2_output, 'WOFF2')
+            
+            woff2_content = woff2_output.getvalue()
+            
+            # Write to cache directory
+            with open(woff2_path, 'wb') as f:
+                f.write(woff2_content)
+            
+            print(f"  {font_name}: Converted to WOFF2 ({len(woff2_content)} bytes, removed {len(problematic_tables)} tables)")
+        except Exception as e:
+            print(f"  {font_name}: FAILED - {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print("=" * 60)
+    print("GB5765 FONT CONVERSION: Completed!")
+    print("=" * 60)
+    time.sleep(0.1)  # Ensure final message is visible
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    # 启动时预转换 GB 5765 字体为 WOFF2 格式
+    # 这些字体有非标准的表结构，浏览器 OTS 会拒绝
+    # 预转换避免每次请求时都处理
+    _convert_gb5765_fonts_to_woff2()
+
     # 启动缓存清理任务
     from app.utils.cache import config_cache
     await config_cache.start_cleanup_task()
@@ -242,6 +381,7 @@ app.include_router(poster.router, prefix="/api/poster", tags=["poster"])
 app.include_router(user_config.router, prefix=settings.API_V1_PREFIX)
 app.include_router(shared.router, prefix=settings.API_V1_PREFIX)  # 公开分享接口
 app.include_router(interpolation.router, prefix=settings.API_V1_PREFIX)
+app.include_router(overlay_templates.router, prefix=settings.API_V1_PREFIX)  # 覆盖层模板
 
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息

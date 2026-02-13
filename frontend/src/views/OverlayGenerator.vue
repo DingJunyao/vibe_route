@@ -1,9 +1,35 @@
 <template>
   <el-container class="overlay-generator-container">
     <el-header>
-      <div class="header-content">
-        <el-button @click="$router.push('/home')" :icon="HomeFilled" />
+      <div class="header-left">
+        <el-button @click="$router.back()" :icon="ArrowLeft" class="nav-btn" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
         <h1>信息覆盖层生成</h1>
+      </div>
+      <div class="header-right">
+        <el-dropdown @command="handleCommand">
+          <span class="user-info">
+            <el-icon><User /></el-icon>
+            <span class="username">{{ authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="settings">
+                <el-icon><Setting /></el-icon>
+                设置
+              </el-dropdown-item>
+              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
+                <el-icon><Setting /></el-icon>
+                后台管理
+              </el-dropdown-item>
+              <el-dropdown-item command="logout">
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </el-header>
 
@@ -247,9 +273,28 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onUnmounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { HomeFilled, VideoCamera, Refresh, Download } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, VideoCamera, Refresh, Download, User, Setting, SwitchButton, ArrowDown } from '@element-plus/icons-vue'
+import { useAuthStore } from '@/stores/auth'
 import { taskApi, type Task, type CreateOverlayTaskRequest } from '@/api/task'
 import { trackApi, type Track } from '@/api/track'
+
+const authStore = useAuthStore()
+
+// 下拉菜单处理
+const handleCommand = (command: string) => {
+  switch (command) {
+    case 'settings':
+      window.location.href = '/settings'
+      break
+    case 'admin':
+      window.location.href = '/admin'
+      break
+    case 'logout':
+      authStore.logout()
+      window.location.href = '/login'
+      break
+  }
+}
 
 // 表单数据
 const form = reactive<CreateOverlayTaskRequest>({
@@ -522,22 +567,60 @@ onUnmounted(() => {
   background: #f5f7fa;
 }
 
-.el-header {
+.overlay-generator-container > .el-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
   background: white;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   display: flex;
+  justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
+  gap: 16px;
 }
 
-.header-content {
+.header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
 }
 
 .el-header h1 {
   font-size: 20px;
   margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 4px;
+  transition: background-color 0.3s;
+}
+
+.user-info:hover {
+  background-color: #f5f7fa;
+}
+
+.user-info .username {
+  display: inline;
 }
 
 .info-text p {
