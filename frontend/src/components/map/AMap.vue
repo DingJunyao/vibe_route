@@ -10,6 +10,8 @@ import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { gcj02ToWgs84 } from '@/utils/coordTransform'
+import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import type { MarkerPosition } from '@/types/animation'
 
 // 类型定义
 interface Point {
@@ -215,6 +217,13 @@ let tooltip: any = null  // 信息提示框
 let documentMouseMoveHandler: ((e: MouseEvent) => void) | null = null  // document 鼠标移动处理函数
 let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 
+// 动画相关状态
+let animationPassedPolyline: any = null
+let animationRemainingPolyline: any = null
+let animationMarker: any = null
+let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+let currentMapRotation = 0
+
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
 let trackPath: any[] = []  // 高德地图坐标路径
@@ -408,6 +417,181 @@ function createTooltip() {
 
   // 使用捕获阶段监听，确保能捕获到 InfoWindow 内的点击
   document.addEventListener('click', handleTooltipClick, true)
+}
+
+// 动画标记图标创建函数
+function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
+  const div = document.createElement('div')
+
+  if (style === 'car') {
+    // 汽车图标 - 使用 vehicle.svg
+    div.innerHTML = `
+      <div class="animation-marker-car" style="
+        width: 40px;
+        height: 27px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+      </div>
+    `
+  } else if (style === 'person') {
+    // 人物图标
+    div.innerHTML = `
+      <div class="animation-marker-person" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="10" r="8" fill="#4CAF50" />
+          <circle cx="9" cy="9" r="2" fill="#333" />
+          <circle cx="15" cy="9" r="2" fill="#333" />
+          <path d="M12 16 Q10 12 8 20 Q12 22 12 16" fill="#333" />
+          <circle cx="12" cy="19" r="2.5" fill="#333" />
+        </svg>
+      </div>
+    `
+  } else {
+    // 默认箭头图标 - 使用 location.svg
+    div.innerHTML = `
+      <div class="animation-marker-arrow" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/location.svg" width="24" height="24" style="display: block;" />
+      </div>
+    `
+  }
+
+  return div
+}
+
+// 实现动画地图适配器
+const animationAdapter: AnimationMapAdapter = {
+  setPassedSegment(start: number, end: number) {
+    if (!AMapInstance || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
+
+    const toLngLat = (p: any) => new AMap.LngLat(
+      p.longitude_gcj02 ?? p.longitude_wgs84 ?? p.longitude,
+      p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude
+    )
+
+    // 移除旧的轨迹
+    if (animationPassedPolyline) {
+      AMapInstance.remove(animationPassedPolyline)
+    }
+    if (animationRemainingPolyline) {
+      AMapInstance.remove(animationRemainingPolyline)
+    }
+
+    // 绘制已过轨迹（蓝色）
+    if (passedPoints.length > 1) {
+      animationPassedPolyline = new AMap.Polyline({
+        path: passedPoints.map(toLngLat),
+        strokeColor: '#409eff',
+        strokeWeight: 5,
+        strokeOpacity: 0.8,
+        lineJoin: 'round',
+      })
+      AMapInstance.add(animationPassedPolyline)
+    }
+
+    // 绘制未过轨迹（灰色）
+    if (remainingPoints.length > 1) {
+      animationRemainingPolyline = new AMap.Polyline({
+        path: remainingPoints.map(toLngLat),
+        strokeColor: '#c0c4cc',
+        strokeWeight: 5,
+        strokeOpacity: 0.5,
+        lineJoin: 'round',
+      })
+      AMapInstance.add(animationRemainingPolyline)
+    }
+  },
+
+  setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
+    if (!AMapInstance) return
+
+    const AMap = (window as any).AMap
+    const lngLat = new AMap.LngLat(position.lng, position.lat)
+
+    // 根据样式确定标记尺寸和锚点
+    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
+    const offset = style === 'car' ? { x: -20, y: -14 } : { x: -12, y: -10 }
+
+    if (!animationMarker) {
+      animationMarker = new AMap.Marker({
+        position: lngLat,
+        content: createAnimationIcon(style),
+        offset: new AMap.Pixel(offset.x, offset.y),
+        zIndex: 200,
+      })
+      AMapInstance.add(animationMarker)
+      currentAnimationMarkerStyle = style
+    } else {
+      // 更新位置
+      animationMarker.setPosition(lngLat)
+
+      // 检查样式是否变化，避免频繁更新导致闪烁
+      if (currentAnimationMarkerStyle !== style) {
+        const newContent = createAnimationIcon(style)
+        animationMarker.setContent(newContent)
+        animationMarker.setOffset(new AMap.Pixel(offset.x, offset.y))
+        currentAnimationMarkerStyle = style
+      }
+
+      // 根据方位旋转标记（所有样式都需要旋转）
+      const content = animationMarker.getContent() as HTMLElement
+      if (content) {
+        // 所有样式都旋转外层容器
+        const wrapperDiv = content.querySelector('div') as HTMLDivElement
+        if (wrapperDiv) {
+          wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+        }
+      }
+    }
+  },
+
+  setCameraToMarker(position: MarkerPosition) {
+    if (!AMapInstance) return
+    const AMap = (window as any).AMap
+    const lngLat = new AMap.LngLat(position.lng, position.lat)
+    AMapInstance.setCenter(lngLat)
+  },
+
+  setMapRotation(bearing: number) {
+    if (!AMapInstance) return
+
+    const AMap = (window as any).AMap
+
+    // 设置为 3D 模式
+    AMapInstance.setViewMode('3D')
+
+    // 设置旋转角度
+    currentMapRotation = bearing
+    AMapInstance.setRotation(bearing)
+  },
+
+  getMapRotation() {
+    return currentMapRotation
+  },
 }
 
 // 计算点到线段的最近点
@@ -1706,6 +1890,12 @@ watch(() => props.latestPointIndex, () => {
 // 生命周期
 onMounted(async () => {
   await init()
+
+  // 注册动画适配器
+  setTimeout(() => {
+    const { registerAdapter } = useAnimationMap()
+    registerAdapter(animationAdapter)
+  }, 100)
 })
 
 onUnmounted(() => {
@@ -1720,6 +1910,21 @@ onUnmounted(() => {
     clearTimeout(throttleTimer)
     throttleTimer = null
   }
+
+  // 清理动画元素
+  if (animationPassedPolyline) {
+    AMapInstance?.remove(animationPassedPolyline)
+  }
+  if (animationRemainingPolyline) {
+    AMapInstance?.remove(animationRemainingPolyline)
+  }
+  if (animationMarker) {
+    AMapInstance?.remove(animationMarker)
+  }
+
+  // 注销动画适配器
+  const { unregisterAdapter } = useAnimationMap()
+  unregisterAdapter()
 
   if (AMapInstance) {
     try {

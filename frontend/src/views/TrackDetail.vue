@@ -230,6 +230,13 @@
               <template v-if="trackWithPoints">
                 <div ref="mapWrapperRef" class="map-wrapper">
                   <div ref="mapElementRef" class="map-content">
+                    <!-- 动画播放器 -->
+                    <TrackAnimationPlayer
+                      v-if="animationConfig"
+                      :config="animationConfig"
+                      :track-id="track.id"
+                      :map-provider="mapProvider"
+                    />
                     <UniversalMap
                       ref="mapRef"
                       :tracks="[trackWithPoints]"
@@ -1007,8 +1014,12 @@ import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type 
 import { liveRecordingApi } from '@/api/liveRecording'
 import { overlayTemplateApi } from '@/api/overlayTemplate'
 import UniversalMap from '@/components/map/UniversalMap.vue'
+import TrackAnimationPlayer from '@/components/animation/TrackAnimationPlayer.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
+import { useAnimationStore } from '@/stores/animation'
+import type { AnimationConfig } from '@/types/animation'
+import { calculateDuration } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
@@ -1021,6 +1032,9 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+
+// 地图提供商
+const mapProvider = computed(() => configStore.getEffectiveProvider())
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)
@@ -1248,7 +1262,7 @@ const isWaitingForPoints = computed(() => {
   return track.value?.is_live_recording && track.value?.live_recording_status === 'active' && points.value.length === 0
 })
 
-// 组合轨迹数据用于地图展示
+  // 组合轨迹数据用于地图展示
 const trackWithPoints = computed(() => {
   if (!track.value || !points.value.length) return null
 
@@ -1282,6 +1296,19 @@ const trackWithPoints = computed(() => {
       road_name: p.road_name,
       road_number: p.road_number,
     })),
+  }
+})
+
+// 动画配置
+const animationConfig = computed<AnimationConfig | null>(() => {
+  if (!track.value || !points.value.length || points.value.length < 2) return null
+
+  return {
+    trackId: track.value.id,
+    trackPoints: points.value,
+    startTime: points.value[0].time || '',
+    endTime: points.value[points.value.length - 1].time || '',
+    duration: calculateDuration(points.value),
   }
 })
 
@@ -1857,6 +1884,16 @@ function handleMapPointHover(point: any, pointIndex: number) {
   }
 
   highlightedPointIndex.value = pointIndex
+}
+
+// 处理动画位置变化
+function handleAnimationPositionChange(position: { lat: number; lng: number; bearing: number; speed: number | null; elevation: number | null; time: string | null }) {
+  // 可以在这里添加自定义逻辑，比如同步到图表等
+}
+
+// 处理动画区段更新
+function handleAnimationSegmentUpdate(passedEnd: number) {
+  highlightedPointIndex.value = passedEnd
 }
 
 // 填充地理信息

@@ -48,6 +48,8 @@ import type { MapLayerConfig, CRSType } from '@/api/admin'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
+import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import type { MarkerPosition } from '@/types/animation'
 // import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
 
 // 类型定义
@@ -170,6 +172,13 @@ const lastHoverIndex = ref(-1)
 const currentHighlightPoint = ref<{ index: number; position: [number, number] } | null>(null)  // 当前高亮的点（detail 模式）
 const currentHoverTrack = ref<{ trackId: number; position: [number, number]; track: Track } | null>(null)  // 当前悬停的轨迹（home 模式）
 
+// 动画相关状态
+let animationPassedPolyline: L.Polyline | null = null
+let animationRemainingPolyline: L.Polyline | null = null
+let animationMarker: L.Marker | null = null
+let animationMarkerIcon: L.DivIcon | null = null
+let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+
 // 道路标志 SVG 缓存
 const roadSignSvgCache = ref<Map<string, string>>(new Map())
 const loadingSigns = ref<Set<string>>(new Set())
@@ -211,6 +220,169 @@ function initMapLayers() {
 // 更新当前地图层配置
 function updateCurrentLayerConfig() {
   currentLayerConfig.value = configStore.getMapLayerById(currentLayerId.value)
+}
+
+// 创建动画标记图标
+function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
+  let html = ''
+  let iconSize: [number, number] = [24, 24]
+  let iconAnchor: [number, number] = [12, 20]
+
+  if (style === 'car') {
+    // 汽车图标 - 使用 vehicle.svg
+    iconSize = [40, 27]
+    iconAnchor = [20, 14]
+    html = `
+      <div class="animation-marker-car" style="
+        width: 40px;
+        height: 27px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+      </div>
+    `
+  } else if (style === 'person') {
+    // 人物图标
+    html = `
+      <div class="animation-marker-person" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="8" r="4" fill="#409eff" />
+          <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+          <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+        </svg>
+      </div>
+    `
+  } else {
+    // 默认箭头图标 - 使用 location.svg
+    html = `
+      <div class="animation-marker-arrow" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/location.svg" width="24" height="24" style="display: block;" />
+      </div>
+    `
+  }
+
+  return L.divIcon({
+    className: 'animation-marker',
+    html,
+    iconSize,
+    iconAnchor,
+  })
+}
+
+// 实现动画地图适配器
+const animationAdapter: AnimationMapAdapter = {
+  setPassedSegment(start: number, end: number) {
+    if (!map.value || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
+
+    const toLatLng = (p: any) => [
+      p.latitude_wgs84 ?? p.latitude,
+      p.longitude_wgs84 ?? p.longitude,
+    ] as [number, number]
+
+    // 移除旧的轨迹
+    if (animationPassedPolyline) {
+      map.value.removeLayer(animationPassedPolyline)
+    }
+    if (animationRemainingPolyline) {
+      map.value.removeLayer(animationRemainingPolyline)
+    }
+
+    // 绘制已过轨迹（蓝色）
+    if (passedPoints.length > 1) {
+      animationPassedPolyline = L.polyline(
+        passedPoints.map(toLatLng),
+        {
+          color: '#409eff',
+          weight: 5,
+          opacity: 0.8,
+        }
+      ).addTo(map.value)
+    }
+
+    // 绘制未过轨迹（灰色）
+    if (remainingPoints.length > 1) {
+      animationRemainingPolyline = L.polyline(
+        remainingPoints.map(toLatLng),
+        {
+          color: '#c0c4cc',
+          weight: 5,
+          opacity: 0.5,
+        }
+      ).addTo(map.value)
+    }
+  },
+
+  setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
+    if (!map.value) return
+
+    const latLng: [number, number] = [position.lat, position.lng]
+
+    if (!animationMarker) {
+      animationMarkerIcon = createAnimationIcon(style)
+      animationMarker = L.marker(latLng, {
+        icon: animationMarkerIcon,
+      }).addTo(map.value)
+      currentAnimationMarkerStyle = style
+    } else {
+      animationMarker.setLatLng(latLng)
+
+      // 检查当前样式是否改变，需要重新创建图标
+      if (currentAnimationMarkerStyle !== style) {
+        animationMarkerIcon = createAnimationIcon(style)
+        animationMarker.setIcon(animationMarkerIcon)
+        currentAnimationMarkerStyle = style
+      }
+
+      // 根据方位旋转标记（所有样式都需要旋转）
+      const icon = animationMarker.getElement()
+      if (icon) {
+        const wrapperDiv = icon.querySelector('div') as HTMLDivElement
+        if (wrapperDiv) {
+          wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+        }
+      }
+    }
+  },
+
+  setCameraToMarker(position: MarkerPosition) {
+    if (!map.value) return
+    map.value.panTo([position.lat, position.lng])
+  },
+
+  setMapRotation(bearing: number) {
+    // Leaflet 默认不支持旋转
+    // 需要使用 leaflet-rotate 插件
+    // 或者使用 CSS transform
+    console.warn('Leaflet rotation requires plugin')
+  },
+
+  getMapRotation() {
+    return 0
+  },
 }
 
 // 根据坐标系类型获取 CRS
@@ -2601,9 +2773,30 @@ onMounted(async () => {
 
   // 监听全屏变化，更新地图尺寸
   document.addEventListener('fullscreenchange', handleFullscreenChange)
+
+  // 注册动画适配器
+  setTimeout(() => {
+    const { registerAdapter } = useAnimationMap()
+    registerAdapter(animationAdapter)
+  }, 100)
 })
 
 onUnmounted(() => {
+  // 清理动画元素
+  if (animationPassedPolyline) {
+    map.value?.removeLayer(animationPassedPolyline)
+  }
+  if (animationRemainingPolyline) {
+    map.value?.removeLayer(animationRemainingPolyline)
+  }
+  if (animationMarker) {
+    map.value?.removeLayer(animationMarker)
+  }
+
+  // 注销动画适配器
+  const { unregisterAdapter } = useAnimationMap()
+  unregisterAdapter()
+
   if (map.value) {
     map.value.remove()
   }

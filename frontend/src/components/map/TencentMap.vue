@@ -12,6 +12,8 @@ import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { gcj02ToWgs84 } from '@/utils/coordTransform'
+import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
 // 类型定义
 interface Point {
@@ -227,6 +229,215 @@ let mouseDownPos: { x: number; y: number } | null = null  // 记录鼠标按下�
 const roadSignSvgCache = new Map<string, string>()
 const loadingSigns = new Set<string>()
 let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
+
+// 动画相关状态
+let animationPassedPolyline: any = null
+let animationRemainingPolyline: any = null
+let animationMarker: any = null
+let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+let currentMapRotation = 0
+
+// 创建动画标记图标
+function createAnimationIcon(style: MarkerStyle = 'arrow'): HTMLElement {
+  const div = document.createElement('div')
+
+  if (style === 'car') {
+    // 汽车图标 - 使用 vehicle.svg
+    div.innerHTML = `
+      <div class="animation-marker-car" style="
+        width: 40px;
+        height: 27px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+      </div>
+    `
+  } else if (style === 'person') {
+    // 行人图标
+    div.innerHTML = `
+      <div class="animation-marker-person" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+          <circle cx="12" cy="8" r="4" fill="#409eff" />
+          <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+          <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+        </svg>
+      </div>
+    `
+  } else {
+    // 箭头图标 - 使用 location.svg
+    div.innerHTML = `
+      <div class="animation-marker-arrow" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/location.svg" width="24" height="24" style="display: block;" />
+      </div>
+    `
+  }
+
+  return div
+}
+
+// 动画地图适配器实现
+const animationAdapter: AnimationMapAdapter = {
+  setPassedSegment(start: number, end: number) {
+    if (!TMapInstance || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
+
+    const TMap = (window as any).TMap
+    const toLatLng = (p: any) => new TMap.LatLng(
+      p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude,
+      p.longitude_gcj02 ?? p.longitude_wgs84 ?? p.longitude
+    )
+
+    // 移除旧的轨迹
+    if (animationPassedPolyline) {
+      animationPassedPolyline.setMap(null)
+    }
+    if (animationRemainingPolyline) {
+      animationRemainingPolyline.setMap(null)
+    }
+
+    // 绘制轨迹
+    if (passedPoints.length > 1) {
+      animationPassedPolyline = new TMap.MultiPolyline({
+        geometries: [{
+          id: 'passed',
+          styleId: 'passed-style',
+          paths: [passedPoints.map(toLatLng)],
+        }],
+        styles: {
+          'passed-style': new TMap.PolylineStyle({
+            color: '#409eff',
+            width: 5,
+            borderWidth: 0,
+          }),
+        },
+      })
+      animationPassedPolyline.setMap(TMapInstance)
+    }
+
+    if (remainingPoints.length > 1) {
+      animationRemainingPolyline = new TMap.MultiPolyline({
+        geometries: [{
+          id: 'remaining',
+          styleId: 'remaining-style',
+          paths: [remainingPoints.map(toLatLng)],
+        }],
+        styles: {
+          'remaining-style': new TMap.PolylineStyle({
+            color: '#c0c4cc',
+            width: 5,
+            borderWidth: 0,
+          }),
+        },
+      })
+      animationRemainingPolyline.setMap(TMapInstance)
+    }
+  },
+
+  setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
+    if (!TMapInstance) return
+
+    const TMap = (window as any).TMap
+    const latLng = new TMap.LatLng(position.lat, position.lng)
+
+    // 根据样式确定标记尺寸和锚点
+    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
+    const iconAnchor = style === 'car' ? { x: 20, y: 20 } : { x: 12, y: 20 }
+
+    if (!animationMarker) {
+      animationMarker = new TMap.MultiMarker({
+        geometries: [{
+          id: 'animation-marker',
+          position: latLng,
+        }],
+        styles: {
+          'animation-marker': new TMap.MarkerStyle({
+            width: iconSize.width,
+            height: iconSize.height,
+            anchor: iconAnchor,
+          }),
+        },
+      })
+      animationMarker.setMap(TMapInstance)
+
+      // 设置标记内容
+      const iconElement = createAnimationIcon(style)
+      const markerDom = animationMarker.getGeometries()[0].getDOM?.()
+      if (markerDom) {
+        markerDom.innerHTML = iconElement.innerHTML
+        markerDom.className = iconElement.className
+      }
+      currentAnimationMarkerStyle = style
+    } else {
+      animationMarker.setGeometries([{
+        id: 'animation-marker',
+        position: latLng,
+      }])
+
+      // 只在样式变化时更新标记内容，避免闪烁
+      const markerDom = animationMarker.getGeometries()[0].getDOM?.()
+      if (markerDom && currentAnimationMarkerStyle !== style) {
+        const iconElement = createAnimationIcon(style)
+        markerDom.innerHTML = iconElement.innerHTML
+        markerDom.className = iconElement.className
+        currentAnimationMarkerStyle = style
+
+        // 需要更新 MarkerStyle 的尺寸和锚点
+        animationMarker.updateStyles({
+          'animation-marker': new TMap.MarkerStyle({
+            width: iconSize.width,
+            height: iconSize.height,
+            anchor: iconAnchor,
+          }),
+        })
+      }
+
+      // 根据方位旋转标记（所有样式都需要旋转）
+      const wrapperDiv = markerDom.querySelector('div') as HTMLDivElement
+      if (wrapperDiv) {
+        wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+      }
+    }
+  },
+
+  setCameraToMarker(position: MarkerPosition) {
+    if (!TMapInstance) return
+    const TMap = (window as any).TMap
+    TMapInstance.setCenter(new TMap.LatLng(position.lat, position.lng))
+  },
+
+  setMapRotation(bearing: number) {
+    if (!TMapInstance) return
+    TMapInstance.setRotation(bearing)
+    currentMapRotation = bearing
+  },
+
+  getMapRotation() {
+    return currentMapRotation
+  },
+}
 
 // 计算两点距离
 function distance(p1: [number, number], p2: [number, number]): number {
@@ -1649,9 +1860,30 @@ watch(() => props.customOverlays, () => {
 // 生命周期
 onMounted(async () => {
   await init()
+
+  // 注册动画适配器
+  setTimeout(() => {
+    const { registerAdapter } = useAnimationMap()
+    registerAdapter(animationAdapter)
+  }, 100)
 })
 
 onUnmounted(() => {
+  // 清理动画元素
+  if (animationPassedPolyline) {
+    animationPassedPolyline.setMap(null)
+  }
+  if (animationRemainingPolyline) {
+    animationRemainingPolyline.setMap(null)
+  }
+  if (animationMarker) {
+    animationMarker.setMap(null)
+  }
+
+  // 注销动画适配器
+  const { unregisterAdapter } = useAnimationMap()
+  unregisterAdapter()
+
   // 清理标记和提示框
   if (mouseMarker) {
     mouseMarker.setMap(null)

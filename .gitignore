@@ -111,5 +111,5 @@ backend/data/area_data/
 
 # Git worktrees
 .worktrees/
-docs/
+# docs/
 .conda/

@@ -159,6 +159,17 @@
           <el-icon><FullScreen /></el-icon>
         </el-button>
       </el-button-group>
+      <!-- 动画播放按钮 -->
+      <el-button
+        v-if="canPlayAnimation"
+        type="success"
+        size="small"
+        class="animation-play-btn"
+        @click="handleAnimationToggle"
+      >
+        <el-icon v-if="!animationStore.showControls"><VideoPlay /></el-icon>
+        <el-icon v-else><Close /></el-icon>
+      </el-button>
     </div>
   </div>
 </template>
@@ -166,7 +177,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
-import { Close, FullScreen, Link } from '@element-plus/icons-vue'
+import { useAnimationStore } from '@/stores/animation'
+import { Close, FullScreen, Link, VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
 import BMap from './BMap.vue'
@@ -272,6 +284,7 @@ const emit = defineEmits<{
 }>()
 
 const configStore = useConfigStore()
+const animationStore = useAnimationStore()
 const amapRef = ref()
 const bmapRef = ref()
 const tencentRef = ref()
@@ -653,6 +666,34 @@ function handleMapClick(lng: number, lat: number) {
   emit('map-click', lng, lat)
 }
 
+// 动画相关状态
+const canPlayAnimation = computed(() => {
+  // 检查是否有轨迹数据可用于动画播放
+  const hasTracks = props.tracks && props.tracks.length > 0
+  const hasPoints = hasTracks && props.tracks[0]?.points && props.tracks[0].points.length >= 2
+  return hasPoints === true
+})
+
+const isPlaying = computed(() => animationStore.isPlaying)
+
+// 处理动画播放/暂停切换（控件开关）
+function handleAnimationToggle() {
+  // 切换控件显示状态
+  if (animationStore.showControls) {
+    // 控件已显示，关闭控件并暂停
+    animationStore.setShowControls(false)
+    if (animationStore.isPlaying) {
+      animationStore.togglePlayPause()
+    }
+  } else {
+    // 控件未显示，显示控件并开始播放
+    animationStore.setShowControls(true)
+    if (!animationStore.isPlaying) {
+      animationStore.togglePlayPause()
+    }
+  }
+}
+
 // 高亮指定点（由图表触发）
 function highlightPoint(index: number) {
   if (useAMapEngine.value && amapRef.value?.highlightPoint) {
@@ -872,7 +913,8 @@ defineExpose({
 
   .fit-bounds-btn,
   .fullscreen-btn,
-  .clear-highlight-btn {
+  .clear-highlight-btn,
+  .animation-play-btn {
     flex-shrink: 0;
   }
 }

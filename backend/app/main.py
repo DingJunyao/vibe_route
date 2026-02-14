@@ -27,7 +27,7 @@ if sys.platform == 'win32':
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates
+from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates, animation
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -382,6 +382,7 @@ app.include_router(user_config.router, prefix=settings.API_V1_PREFIX)
 app.include_router(shared.router, prefix=settings.API_V1_PREFIX)  # 公开分享接口
 app.include_router(interpolation.router, prefix=settings.API_V1_PREFIX)
 app.include_router(overlay_templates.router, prefix=settings.API_V1_PREFIX)  # 覆盖层模板
+app.include_router(animation.router, prefix=settings.API_V1_PREFIX)  # 动画导出
 
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息

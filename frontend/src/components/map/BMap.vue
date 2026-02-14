@@ -11,6 +11,8 @@ import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84 } from '@/utils/coordTransform'
+import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
 // 类型定义
 interface Point {
@@ -222,6 +224,67 @@ let wheelEventHandler: ((e: WheelEvent) => void) | null = null  // 滚轮事件�
 let customOverlayMarkers: any[] = []  // 自定义覆盖层标记（用于绘制路径模式）
 let customOverlayPolylines: any[] = []  // 自定义覆盖层折线（用于绘制路径模式）
 let hasAutoFocused = false  // 标记是否已自动聚焦过（避免用户编辑时重复聚焦）
+
+// 动画相关状态
+let animationPassedPolyline: any = null
+let animationRemainingPolyline: any = null
+let animationMarker: any = null
+let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+
+// 创建动画标记图标
+function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
+  if (style === 'car') {
+    // 汽车图标 - 使用 vehicle.svg
+    return `
+      <div class="animation-marker-car" style="
+        width: 40px;
+        height: 27px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+      </div>
+    `
+  } else if (style === 'person') {
+    // 行人图标
+    return `
+      <div class="animation-marker-person" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+          <circle cx="12" cy="8" r="4" fill="#409eff" />
+          <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+          <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+        </svg>
+      </div>
+    `
+  } else {
+    // 箭头图标 - 使用 location.svg
+    return `
+      <div class="animation-marker-arrow" style="
+        width: 24px;
+        height: 24px;
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transform-origin: center center;
+      ">
+        <img src="/location.svg" width="24" height="24" style="display: block;" />
+      </div>
+    `
+  }
+}
+
 // home 模式：按轨迹分开存储
 const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: number }[]; track: Track }>()
 
@@ -229,6 +292,116 @@ const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: 
 const roadSignSvgCache = new Map<string, string>()
 const loadingSigns = new Set<string>()
 let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
+
+// 动画地图适配器实现
+const animationAdapter: AnimationMapAdapter = {
+  setPassedSegment(start: number, end: number) {
+    if (!BMapInstance || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
+
+    const BMapClass = (window as any).BMap || (window as any).BMapGL
+    const toPoint = (p: any) => new BMapClass.Point(
+      p.longitude_bd09 ?? p.longitude_wgs84 ?? p.longitude,
+      p.latitude_bd09 ?? p.latitude_wgs84 ?? p.latitude
+    )
+
+    // 移除旧的轨迹
+    if (animationPassedPolyline) {
+      BMapInstance.removeOverlay(animationPassedPolyline)
+    }
+    if (animationRemainingPolyline) {
+      BMapInstance.removeOverlay(animationRemainingPolyline)
+    }
+
+    // 绘制轨迹
+    if (passedPoints.length > 1) {
+      animationPassedPolyline = new BMapClass.Polyline(
+        passedPoints.map(toPoint),
+        {
+          strokeColor: '#409eff',
+          strokeWeight: 5,
+          strokeOpacity: 0.8,
+        }
+      )
+      BMapInstance.addOverlay(animationPassedPolyline)
+    }
+
+    if (remainingPoints.length > 1) {
+      animationRemainingPolyline = new BMapClass.Polyline(
+        remainingPoints.map(toPoint),
+        {
+          strokeColor: '#c0c4cc',
+          strokeWeight: 5,
+          strokeOpacity: 0.5,
+        }
+      )
+      BMapInstance.addOverlay(animationRemainingPolyline)
+    }
+  },
+
+  setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
+    if (!BMapInstance) return
+
+    const BMapClass = (window as any).BMap || (window as any).BMapGL
+    const point = new BMapClass.Point(position.lng, position.lat)
+
+    // 根据样式确定标记尺寸和锚点
+    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
+
+    if (!animationMarker) {
+      // 使用 Label 创建自定义 HTML 标记
+      const iconHtml = createAnimationIcon(style)
+      animationMarker = new BMapClass.Label(iconHtml, {
+        position: point,
+        offset: new BMapClass.Size(-iconSize.width / 2, -iconSize.height + 4),
+      })
+      BMapInstance.addOverlay(animationMarker)
+      currentAnimationMarkerStyle = style
+    } else {
+      animationMarker.setPosition(point)
+      // 只在样式变化时更新内容，避免闪烁
+      if (currentAnimationMarkerStyle !== style) {
+        animationMarker.setContent(createAnimationIcon(style))
+        animationMarker.setOffset(new BMapClass.Size(-iconSize.width / 2, -iconSize.height + 4))
+        currentAnimationMarkerStyle = style
+      }
+      // 百度地图不支持直接旋转 Label，跳过旋转
+      // 如需支持旋转，需改用 BMapGL 的 Marker 并设置 rotation 属性
+    }
+  },
+
+  setCameraToMarker(position: MarkerPosition) {
+    if (!BMapInstance) return
+    const BMapClass = (window as any).BMap || (window as any).BMapGL
+    const point = new BMapClass.Point(position.lng, position.lat)
+    BMapInstance.setCenter(point)
+  },
+
+  setMapRotation(bearing: number) {
+    // 百度 Legacy 版本不支持旋转
+    if (props.defaultLayerId === 'baidu_legacy') {
+      console.warn('Baidu Legacy does not support rotation')
+      return
+    }
+    // GL 版本支持
+    const BMapGL = (window as any).BMapGL
+    if (BMapGL && BMapInstance && typeof BMapInstance.setMapStyle === 'function') {
+      // GL 版本的旋转方法（简化）
+      try {
+        BMapInstance.setHeading(bearing)
+      } catch (e) {
+        console.warn('Baidu GL rotation not fully supported')
+      }
+    }
+  },
+
+  getMapRotation() {
+    return 0
+  },
+}
 
 // 初始化
 async function init() {
@@ -1900,6 +2073,12 @@ watch(() => props.customOverlays, (newVal) => {
 // 生命周期
 onMounted(async () => {
   await init()
+
+  // 注册动画适配器
+  setTimeout(() => {
+    const { registerAdapter } = useAnimationMap()
+    registerAdapter(animationAdapter)
+  }, 100)
 })
 
 // 使用 watchEffect 监听 customOverlays 变化，确保在地图初始化后也能绘制
@@ -1969,6 +2148,21 @@ watchEffect(() => {
 })
 
 onUnmounted(() => {
+  // 清理动画元素
+  if (animationPassedPolyline) {
+    BMapInstance?.removeOverlay(animationPassedPolyline)
+  }
+  if (animationRemainingPolyline) {
+    BMapInstance?.removeOverlay(animationRemainingPolyline)
+  }
+  if (animationMarker) {
+    BMapInstance?.removeOverlay(animationMarker)
+  }
+
+  // 注销动画适配器
+  const { unregisterAdapter } = useAnimationMap()
+  unregisterAdapter()
+
   // 清理滚轮事件监听器
   if (wheelEventHandler && mapContainer.value) {
     mapContainer.value.removeEventListener('wheel', wheelEventHandler)
