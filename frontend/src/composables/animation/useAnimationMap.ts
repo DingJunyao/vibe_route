@@ -20,6 +20,9 @@ export interface AnimationMapAdapter {
 
   // 获取当前旋转角度
   getMapRotation(): number
+
+  // 设置动画播放状态（避免双色轨迹闪烁）
+  setAnimationPlaying(playing: boolean): void
 }
 
 // 全局适配器（真正的单例）
@@ -84,6 +87,11 @@ export function useAnimationMap() {
     animate()
   }
 
+  // 设置动画播放状态
+  function setAnimationPlaying(playing: boolean) {
+    globalAdapter?.setAnimationPlaying(playing)
+  }
+
   // 辅助函数
   function calculateShortestRotation(from: number, to: number): number {
     let delta = to - from
@@ -107,5 +115,6 @@ export function useAnimationMap() {
     setMarkerPosition,
     setCameraToMarker,
     setMapRotation,
+    setAnimationPlaying,
   }
 }

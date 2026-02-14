@@ -233,9 +233,11 @@ let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（�
 // 动画相关状态
 let animationPassedPolyline: any = null
 let animationRemainingPolyline: any = null
+let fullTrackPolyline: any = null  // 播放时的完整轨迹
 let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let currentMapRotation = 0
+let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
 // 创建动画标记图标
 function createAnimationIcon(style: MarkerStyle = 'arrow'): HTMLElement {
@@ -298,12 +300,12 @@ function createAnimationIcon(style: MarkerStyle = 'arrow'): HTMLElement {
 // 动画地图适配器实现
 const animationAdapter: AnimationMapAdapter = {
   setPassedSegment(start: number, end: number) {
+    // 播放状态下不更新轨迹，避免闪烁
+    if (isAnimationPlaying) return
+
     if (!TMapInstance || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const passedPoints = points.slice(0, end + 1)
-    const remainingPoints = points.slice(end)
-
     const TMap = (window as any).TMap
     const toLatLng = (p: any) => new TMap.LatLng(
       p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude,
@@ -317,6 +319,10 @@ const animationAdapter: AnimationMapAdapter = {
     if (animationRemainingPolyline) {
       animationRemainingPolyline.setMap(null)
     }
+
+    // 非播放状态：使用双色轨迹显示进度
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
 
     // 绘制轨迹
     if (passedPoints.length > 1) {
@@ -436,6 +442,63 @@ const animationAdapter: AnimationMapAdapter = {
 
   getMapRotation() {
     return currentMapRotation
+  },
+
+  // 设置动画播放状态（避免双色轨迹闪烁）
+  setAnimationPlaying(playing: boolean) {
+    isAnimationPlaying = playing
+
+    if (!TMapInstance || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const TMap = (window as any).TMap
+    const toLatLng = (p: any) => new TMap.LatLng(
+      p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude,
+      p.longitude_gcj02 ?? p.longitude_wgs84 ?? p.longitude
+    )
+
+    if (playing) {
+      // 播放开始：清除双色轨迹，绘制完整灰色轨迹
+      if (animationPassedPolyline) {
+        animationPassedPolyline.setMap(null)
+        animationPassedPolyline = null
+      }
+      if (animationRemainingPolyline) {
+        animationRemainingPolyline.setMap(null)
+        animationRemainingPolyline = null
+      }
+
+      // 强制重新绘制完整灰色轨迹（用于相机模式切换时刷新）
+      if (fullTrackPolyline) {
+        fullTrackPolyline.setMap(null)
+        fullTrackPolyline = null
+      }
+
+      if (points.length > 1) {
+        fullTrackPolyline = new TMap.MultiPolyline({
+          geometries: [{
+            id: 'full-track',
+            styleId: 'full-style',
+            paths: [points.map(toLatLng)],
+          }],
+          styles: {
+            'full-style': new TMap.PolylineStyle({
+              color: '#c0c4cc',
+              width: 5,
+              borderWidth: 0,
+            }),
+          },
+        })
+        fullTrackPolyline.setMap(TMapInstance)
+      }
+    } else {
+      // 播放停止：清除完整灰色轨迹
+      if (fullTrackPolyline) {
+        fullTrackPolyline.setMap(null)
+        fullTrackPolyline = null
+      }
+      // 恢复双色轨迹（由 setPassedSegment 重新绘制）
+    }
   },
 }
 

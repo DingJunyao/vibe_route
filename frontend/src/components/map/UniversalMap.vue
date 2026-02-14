@@ -161,7 +161,7 @@
       </el-button-group>
       <!-- 动画播放按钮 -->
       <el-button
-        v-if="canPlayAnimation"
+        v-if="enableAnimation && canPlayAnimation"
         type="success"
         size="small"
         class="animation-play-btn"
@@ -255,6 +255,7 @@ interface Props {
   availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表（用于插值页面）
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
+  enableAnimation?: boolean  // 是否启用动画回放功能（仅轨迹详情页需要）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -272,6 +273,7 @@ const props = withDefaults(defineProps<Props>(), {
   availableSegments: null,
   disablePointHover: false,
   customOverlays: () => [],
+  enableAnimation: false,
 })
 
 // 定义 emit 事件

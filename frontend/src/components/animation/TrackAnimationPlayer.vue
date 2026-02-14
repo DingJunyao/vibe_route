@@ -70,7 +70,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const animationStore = useAnimationStore()
-const { setMarkerPosition, setPassedSegment, setCameraToMarker } = useAnimationMap()
+const { setMarkerPosition, setPassedSegment, setCameraToMarker, setAnimationPlaying } = useAnimationMap()
 
 // 状态
 const isInitialized = ref(false)
@@ -295,8 +295,18 @@ onUnmounted(() => {
 })
 
 // 监听播放状态变化
-watch(() => animationStore.isPlaying, () => {
+watch(() => animationStore.isPlaying, (isPlaying) => {
   lastTimestamp.value = 0
+  // 通知地图组件更新动画播放状态，避免双色轨迹闪烁
+  setAnimationPlaying(isPlaying)
+})
+
+// 监听相机模式变化，刷新轨迹线
+watch(() => animationStore.cameraMode, () => {
+  // 相机模式切换时，如果是播放状态，重新绘制轨迹线
+  if (animationStore.isPlaying) {
+    setAnimationPlaying(true)
+  }
 })
 
 // 监听标记样式变化，更新地图上的标记

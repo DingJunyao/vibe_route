@@ -244,6 +244,7 @@
                       :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                       :latest-point-index="latestPointIndex"
                       :live-update-time="track.live_recording_status === 'active' ? (track.last_point_created_at || track.last_upload_at) : null"
+                      :enable-animation="true"
                       @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -465,6 +466,7 @@
                     :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                     :latest-point-index="latestPointIndex"
                     :live-update-time="track.live_recording_status === 'active' ? (track.last_point_created_at || track.last_upload_at) : null"
+                    :enable-animation="true"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
                   />
@@ -1032,6 +1034,7 @@ const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 const configStore = useConfigStore()
+const animationStore = useAnimationStore()
 
 // 地图提供商
 const mapProvider = computed(() => configStore.getEffectiveProvider())
@@ -1816,6 +1819,9 @@ function renderChart() {
 
   // 图表鼠标移动事件监听 - 用于反向同步到地图
   chart.on('mousemove', (params: any) => {
+    // 回放期间禁用图表-地图联动
+    if (animationStore.isPlaying) return
+
     // 检查是否在数据系列上
     if (params.componentType === 'series' && params.dataIndex !== undefined) {
       // 使用采样的原始索引（如果有采样数据）
@@ -1830,6 +1836,9 @@ function renderChart() {
 
   // 使用 axis 指针事件更可靠
   chart.on('showTip', (params: any) => {
+    // 回放期间禁用图表-地图联动
+    if (animationStore.isPlaying) return
+
     if (params.dataIndex !== undefined && mapRef.value?.highlightPoint) {
       mapRef.value.highlightPoint(params.dataIndex)
     }

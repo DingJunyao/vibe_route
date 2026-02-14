@@ -175,9 +175,11 @@ const currentHoverTrack = ref<{ trackId: number; position: [number, number]; tra
 // 动画相关状态
 let animationPassedPolyline: L.Polyline | null = null
 let animationRemainingPolyline: L.Polyline | null = null
+let fullTrackPolyline: L.Polyline | null = null  // 播放时的完整轨迹
 let animationMarker: L.Marker | null = null
 let animationMarkerIcon: L.DivIcon | null = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
 // 道路标志 SVG 缓存
 const roadSignSvgCache = ref<Map<string, string>>(new Map())
@@ -292,12 +294,12 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
 // 实现动画地图适配器
 const animationAdapter: AnimationMapAdapter = {
   setPassedSegment(start: number, end: number) {
+    // 播放状态下不更新轨迹，避免闪烁
+    if (isAnimationPlaying) return
+
     if (!map.value || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const passedPoints = points.slice(0, end + 1)
-    const remainingPoints = points.slice(end)
-
     const toLatLng = (p: any) => [
       p.latitude_wgs84 ?? p.latitude,
       p.longitude_wgs84 ?? p.longitude,
@@ -310,6 +312,10 @@ const animationAdapter: AnimationMapAdapter = {
     if (animationRemainingPolyline) {
       map.value.removeLayer(animationRemainingPolyline)
     }
+
+    // 非播放状态：使用双色轨迹显示进度
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
 
     // 绘制已过轨迹（蓝色）
     if (passedPoints.length > 1) {
@@ -382,6 +388,55 @@ const animationAdapter: AnimationMapAdapter = {
 
   getMapRotation() {
     return 0
+  },
+
+  // 设置动画播放状态（避免双色轨迹闪烁）
+  setAnimationPlaying(playing: boolean) {
+    isAnimationPlaying = playing
+
+    if (!map.value || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const toLatLng = (p: any) => [
+      p.latitude_wgs84 ?? p.latitude,
+      p.longitude_wgs84 ?? p.longitude,
+    ] as [number, number]
+
+    if (playing) {
+      // 播放开始：清除双色轨迹，绘制完整灰色轨迹
+      if (animationPassedPolyline) {
+        map.value.removeLayer(animationPassedPolyline)
+        animationPassedPolyline = null
+      }
+      if (animationRemainingPolyline) {
+        map.value.removeLayer(animationRemainingPolyline)
+        animationRemainingPolyline = null
+      }
+
+      // 强制重新绘制完整灰色轨迹（用于相机模式切换时刷新）
+      if (fullTrackPolyline) {
+        map.value.removeLayer(fullTrackPolyline)
+        fullTrackPolyline = null
+      }
+
+      if (points.length > 1) {
+        fullTrackPolyline = L.polyline(
+          points.map(toLatLng),
+          {
+            color: '#c0c4cc',
+            weight: 5,
+            opacity: 0.8,
+          }
+        ).addTo(map.value)
+      }
+    } else {
+      // 播放停止：清除完整灰色轨迹
+      if (fullTrackPolyline) {
+        map.value.removeLayer(fullTrackPolyline)
+        fullTrackPolyline = null
+      }
+      // 恢复双色轨迹（由 setPassedSegment 重新绘制）
+    }
   },
 }
 

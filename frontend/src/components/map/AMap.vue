@@ -220,9 +220,11 @@ let latestPointMarker: any = null  // 实时轨迹最新点标记（绿色）
 // 动画相关状态
 let animationPassedPolyline: any = null
 let animationRemainingPolyline: any = null
+let fullTrackPolyline: any = null  // 播放时的完整轨迹
 let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let currentMapRotation = 0
+let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
 // 存储轨迹点数据用于查询
 let trackPoints: Point[] = []
@@ -482,12 +484,12 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
 // 实现动画地图适配器
 const animationAdapter: AnimationMapAdapter = {
   setPassedSegment(start: number, end: number) {
+    // 播放状态下不更新轨迹，避免闪烁
+    if (isAnimationPlaying) return
+
     if (!AMapInstance || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const passedPoints = points.slice(0, end + 1)
-    const remainingPoints = points.slice(end)
-
     const toLngLat = (p: any) => new AMap.LngLat(
       p.longitude_gcj02 ?? p.longitude_wgs84 ?? p.longitude,
       p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude
@@ -500,6 +502,10 @@ const animationAdapter: AnimationMapAdapter = {
     if (animationRemainingPolyline) {
       AMapInstance.remove(animationRemainingPolyline)
     }
+
+    // 非播放状态：使用双色轨迹显示进度
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
 
     // 绘制已过轨迹（蓝色）
     if (passedPoints.length > 1) {
@@ -591,6 +597,55 @@ const animationAdapter: AnimationMapAdapter = {
 
   getMapRotation() {
     return currentMapRotation
+  },
+
+  // 设置动画播放状态（避免双色轨迹闪烁）
+  setAnimationPlaying(playing: boolean) {
+    isAnimationPlaying = playing
+
+    if (!AMapInstance || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const toLngLat = (p: any) => new AMap.LngLat(
+      p.longitude_gcj02 ?? p.longitude_wgs84 ?? p.longitude,
+      p.latitude_gcj02 ?? p.latitude_wgs84 ?? p.latitude
+    )
+
+    if (playing) {
+      // 播放开始：清除双色轨迹，绘制完整灰色轨迹
+      if (animationPassedPolyline) {
+        AMapInstance.remove(animationPassedPolyline)
+        animationPassedPolyline = null
+      }
+      if (animationRemainingPolyline) {
+        AMapInstance.remove(animationRemainingPolyline)
+        animationRemainingPolyline = null
+      }
+
+      // 强制重新绘制完整灰色轨迹（用于相机模式切换时刷新）
+      if (fullTrackPolyline) {
+        AMapInstance.remove(fullTrackPolyline)
+        fullTrackPolyline = null
+      }
+
+      if (points.length > 1) {
+        fullTrackPolyline = new AMap.Polyline({
+          path: points.map(toLngLat),
+          strokeColor: '#c0c4cc',
+          strokeWeight: 5,
+          strokeOpacity: 0.8,
+          lineJoin: 'round',
+        })
+        AMapInstance.add(fullTrackPolyline)
+      }
+    } else {
+      // 播放停止：清除完整灰色轨迹
+      if (fullTrackPolyline) {
+        AMapInstance.remove(fullTrackPolyline)
+        fullTrackPolyline = null
+      }
+      // 恢复双色轨迹（由 setPassedSegment 重新绘制）
+    }
   },
 }
 
