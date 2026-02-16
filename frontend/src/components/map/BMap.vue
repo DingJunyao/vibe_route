@@ -378,7 +378,7 @@ const animationAdapter: AnimationMapAdapter = {
       const iconHtml = createAnimationIcon(style)
       animationMarker = new BMapClass.Label(iconHtml, {
         position: point,
-        offset: new BMapClass.Size(-iconSize.width / 2, -iconSize.height + 4),
+        offset: new BMapClass.Size(-iconSize.width / 2, -iconSize.height / 2),
       })
       BMapInstance.addOverlay(animationMarker)
       currentAnimationMarkerStyle = style
@@ -392,7 +392,7 @@ const animationAdapter: AnimationMapAdapter = {
       // 只在样式变化时更新内容，避免闪烁
       if (currentAnimationMarkerStyle !== style) {
         animationMarker.setContent(createAnimationIcon(style))
-        animationMarker.setOffset(new BMapClass.Size(-iconSize.width / 2, -iconSize.height + 4))
+        animationMarker.setOffset(new BMapClass.Size(-iconSize.width / 2, -iconSize.height / 2))
         currentAnimationMarkerStyle = style
         // setContent 后需要重新设置旋转
         setTimeout(() => {
