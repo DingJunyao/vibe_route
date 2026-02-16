@@ -221,7 +221,8 @@ function initMapLayers() {
 
 // 更新当前地图层配置
 function updateCurrentLayerConfig() {
-  currentLayerConfig.value = configStore.getMapLayerById(currentLayerId.value)
+  const layerConfig = configStore.getMapLayerById(currentLayerId.value)
+  currentLayerConfig.value = layerConfig
 }
 
 // 创建动画标记图标
@@ -300,10 +301,18 @@ const animationAdapter: AnimationMapAdapter = {
     if (!map.value || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const toLatLng = (p: any) => [
-      p.latitude_wgs84 ?? p.latitude,
-      p.longitude_wgs84 ?? p.longitude,
-    ] as [number, number]
+    const layerConfig = currentLayerConfig.value
+    const crsType = layerConfig?.crs || 'wgs84'
+    const mapId = layerConfig?.id
+
+    // 根据坐标系类型选择正确的坐标字段
+    const toLatLng = (p: any) => {
+      const coords = getCoordsByCRS(p, crsType, mapId)
+      return coords || [
+        p.latitude_wgs84 ?? p.latitude,
+        p.longitude_wgs84 ?? p.longitude,
+      ]
+    }
 
     // 移除旧的轨迹
     if (animationPassedPolyline) {
@@ -353,6 +362,20 @@ const animationAdapter: AnimationMapAdapter = {
         icon: animationMarkerIcon,
       }).addTo(map.value)
       currentAnimationMarkerStyle = style
+
+      // 延迟设置旋转，确保 DOM 已初始化
+      setTimeout(() => {
+        const icon = animationMarker?.getElement()
+        if (icon) {
+          // 使用类选择器找到正确的 inner div，避免选中 Leaflet 的包装 div
+          const innerDiv = icon.querySelector('.animation-marker-car') ||
+                          icon.querySelector('.animation-marker-person') ||
+                          icon.querySelector('.animation-marker-arrow')
+          if (innerDiv) {
+            innerDiv.style.transform = `rotate(${position.bearing}deg)`
+          }
+        }
+      }, 0)
     } else {
       animationMarker.setLatLng(latLng)
 
@@ -366,9 +389,12 @@ const animationAdapter: AnimationMapAdapter = {
       // 根据方位旋转标记（所有样式都需要旋转）
       const icon = animationMarker.getElement()
       if (icon) {
-        const wrapperDiv = icon.querySelector('div') as HTMLDivElement
-        if (wrapperDiv) {
-          wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+        // 使用类选择器找到正确的 inner div，避免选中 Leaflet 的包装 div
+        const innerDiv = icon.querySelector('.animation-marker-car') ||
+                        icon.querySelector('.animation-marker-person') ||
+                        icon.querySelector('.animation-marker-arrow')
+        if (innerDiv) {
+          innerDiv.style.transform = `rotate(${position.bearing}deg)`
         }
       }
     }
@@ -397,10 +423,18 @@ const animationAdapter: AnimationMapAdapter = {
     if (!map.value || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const toLatLng = (p: any) => [
-      p.latitude_wgs84 ?? p.latitude,
-      p.longitude_wgs84 ?? p.longitude,
-    ] as [number, number]
+    const layerConfig = currentLayerConfig.value
+    const crsType = layerConfig?.crs || 'wgs84'
+    const mapId = layerConfig?.id
+
+    // 根据坐标系类型选择正确的坐标字段（与 setPassedSegment 一致）
+    const toLatLng = (p: any) => {
+      const coords = getCoordsByCRS(p, crsType, mapId)
+      return coords || [
+        p.latitude_wgs84 ?? p.latitude,
+        p.longitude_wgs84 ?? p.longitude,
+      ]
+    }
 
     if (playing) {
       // 播放开始：清除双色轨迹，绘制完整灰色轨迹
@@ -441,13 +475,20 @@ const animationAdapter: AnimationMapAdapter = {
 }
 
 // 根据坐标系类型获取 CRS
-// leaflet.chinatmsproviders 会注册 L.CRS.Baidu
+// leaflet.chinatmsproviders 会注册 L.CRS.Baidu 和 L.CRS.GCJ02
 function getCRS(crsType: CRSType): L.CRS {
+  const gcj02CRS = (L.CRS as any).GCJ02
+  const bd09CRS = (L.CRS as any).Baidu
+
   if (crsType === 'bd09') {
     // 百度地图使用专门的 CRS
-    return (L.CRS as any).Baidu || L.CRS.EPSG3857
+    return bd09CRS || L.CRS.EPSG3857
   }
-  // 天地图和高德地图都使用 GCJ02，但天地图不需要特殊的 CRS
+  // 检查是否提供 GCJ02 CRS（天地图、高德、腾讯使用 GCJ02）
+  if (gcj02CRS) {
+    return gcj02CRS
+  }
+  // 如果没有 GCJ02 CRS，回退到 WGS84（OSM）
   return L.CRS.EPSG3857
 }
 
@@ -497,21 +538,14 @@ function initMap() {
   createLatestPointMarker()
   createCustomTooltip()
 
-  // 监听缩放和移动事件（调试日志）
+  // 监听缩放和移动事件
   map.value.on('zoomend', () => {
     try {
       const center = map.value!.getCenter()
       const zoom = map.value!.getZoom()
       const bounds = map.value!.getBounds()
       if (center && bounds) {
-        console.log('[LeafletMap] 缩放结束:', {
-          缩放级别: zoom,
-          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
-          边界: {
-            sw: `${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}`,
-            ne: `${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}`
-          }
-        })
+        // 可以在这里处理缩放结束事件
       }
     } catch (e) {
       // 忽略错误
@@ -523,10 +557,7 @@ function initMap() {
       const center = map.value!.getCenter()
       const zoom = map.value!.getZoom()
       if (center) {
-        console.log('[LeafletMap] 拖动结束:', {
-          缩放级别: zoom,
-          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
-        })
+        // 可以在这里处理拖动结束事件
       }
     } catch (e) {
       // 忽略错误
@@ -1282,21 +1313,14 @@ function recreateMap() {
   createLatestPointMarker()
   createCustomTooltip()
 
-  // 监听缩放和移动事件（调试日志）
+  // 监听缩放和移动事件
   map.value.on('zoomend', () => {
     try {
       const center = map.value!.getCenter()
       const zoom = map.value!.getZoom()
       const bounds = map.value!.getBounds()
       if (center && bounds) {
-        console.log('[LeafletMap] 缩放结束:', {
-          缩放级别: zoom,
-          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
-          边界: {
-            sw: `${bounds.getWest().toFixed(4)}, ${bounds.getSouth().toFixed(4)}`,
-            ne: `${bounds.getEast().toFixed(4)}, ${bounds.getNorth().toFixed(4)}`
-          }
-        })
+        // 可以在这里处理缩放结束事件
       }
     } catch (e) {
       // 忽略错误
@@ -1308,10 +1332,7 @@ function recreateMap() {
       const center = map.value!.getCenter()
       const zoom = map.value!.getZoom()
       if (center) {
-        console.log('[LeafletMap] 拖动结束:', {
-          缩放级别: zoom,
-          中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
-        })
+        // 可以在这里处理拖动结束事件
       }
     } catch (e) {
       // 忽略错误
@@ -1848,25 +1869,26 @@ function handleFullscreenChange() {
 }
 
 // 根据坐标系获取经纬度字段
-// 天地图使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
-// 高德/腾讯 (GCJ02) → latitude_gcj02/longitude_gcj02
+// 天地图/高德/腾讯 (GCJ02) → 根据地图提供商使用不同坐标
+// - 天地图：使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
+// - 高德/腾讯：使用 GCJ02 坐标（leaflet.chinatmsproviders 期望 GCJ02 坐标）
 // OSM (WGS84) → latitude_wgs84/longitude_wgs84
 // 百度 (BD09) → latitude_bd09/longitude_bd09
 function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, number] | null {
   let lat: number | undefined
   let lng: number | undefined
 
-  if (crs === 'wgs84' || mapId === 'tianditu' || mapId?.startsWith('tianditu')) {
-    // 天地图、OSM 都使用 WGS84 坐标（天地图的插件会自动处理转换）
+  // 判断是否为天地图（天地图使用 WGS84 坐标让插件转换）
+  const isTianditu = mapId === 'tianditu' || mapId?.startsWith('tianditu')
+  // 判断是否为高德或腾讯（使用 GCJ02 坐标）
+  const isAmapOrTencent = mapId?.startsWith('amap') || mapId?.startsWith('tencent')
+
+  if (crs === 'gcj02' && isTianditu) {
+    // 天地图：使用 WGS84 坐标（插件会自动转换）
     lat = point.latitude_wgs84 ?? point.latitude
     lng = point.longitude_wgs84 ?? point.longitude
-    // 调试：检查第一个点的坐标
-    if (point.latitude_wgs84) {
-      console.log('[LeafletMap] 坐标来源: latitude_wgs84', { wgs84: [lat, lng], original: [point.latitude, point.longitude] })
-    } else {
-      console.log('[LeafletMap] 坐标来源: 回退到 latitude（可能不是 WGS84）', { lat, lng, hasWgs84: !!point.latitude_wgs84, hasGcj02: !!point.latitude_gcj02 })
-    }
-  } else if (crs === 'gcj02') {
+  } else if (crs === 'gcj02' && isAmapOrTencent) {
+    // 高德/腾讯：使用 GCJ02 坐标（插件期望 GCJ02 坐标）
     lat = point.latitude_gcj02 ?? undefined
     lng = point.longitude_gcj02 ?? undefined
     // 如果 GCJ02 为空，回退到 WGS84
@@ -1874,6 +1896,19 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
       lat = point.latitude_wgs84 ?? point.latitude
       lng = point.longitude_wgs84 ?? point.longitude
     }
+  } else if (crs === 'gcj02') {
+    // 其他 GCJ02 地图（如自定义瓦片），使用 GCJ02 坐标
+    lat = point.latitude_gcj02 ?? undefined
+    lng = point.longitude_gcj02 ?? undefined
+    // 如果 GCJ02 为空，回退到 WGS84
+    if (lat === undefined || lng === undefined) {
+      lat = point.latitude_wgs84 ?? point.latitude
+      lng = point.longitude_wgs84 ?? point.longitude
+    }
+  } else if (crs === 'wgs84') {
+    // OSM 或其他 WGS84 地图：使用 WGS84 坐标
+    lat = point.latitude_wgs84 ?? point.latitude
+    lng = point.longitude_wgs84 ?? point.longitude
   } else if (crs === 'bd09') {
     lat = point.latitude_bd09 ?? undefined
     lng = point.longitude_bd09 ?? undefined
@@ -2310,14 +2345,6 @@ function drawTracks() {
   const crs = currentLayerConfig.value?.crs || 'wgs84'
   const mapId = currentLayerConfig.value?.id
 
-  // 调试：打印地图配置
-  console.log('[LeafletMap] drawTracks:', {
-    mapId,
-    crs,
-    layerConfig: currentLayerConfig.value,
-    firstPoint: props.tracks[0]?.points[0],
-  })
-
   // 重置日志标志
   ;(getCoordsByCRS as any).logged = false
 
@@ -2478,11 +2505,8 @@ function updateTracks() {
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
 function drawCustomOverlays() {
   if (!map.value) {
-    console.log('[LeafletMap] drawCustomOverlays - map 未初始化')
     return
   }
-
-  console.log('[LeafletMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0)
 
   // 清除现有的自定义覆盖层
   customOverlayMarkers.value.forEach(marker => {
@@ -2495,7 +2519,6 @@ function drawCustomOverlays() {
   customOverlayPolylines.value = []
 
   if (!props.customOverlays || props.customOverlays.length === 0) {
-    console.log('[LeafletMap] drawCustomOverlays - 没有覆盖层需要绘制')
     return
   }
 
@@ -2761,18 +2784,6 @@ function fitBounds(paddingPercent: number = 5) {
     const kmPerPixel = targetKm / relevantDim
     const targetZoom = Math.max(3, Math.min(20, Math.round(Math.log2(40075 / (256 * kmPerPixel))) + offset))
 
-    console.log('[LeafletMap] 直接计算缩放:', {
-      轨迹方向: isTrackHorizontal ? '横' : (isTrackVertical ? '竖' : '方'),
-      容器: `${containerWidth}x${containerHeight}`,
-      容器方向: isContainerHorizontal ? '横' : '竖',
-      匹配: isOrientationMatch,
-      使用: isOrientationMatch ? 'maxDim' : 'minDim',
-      边界框: `${boundsKmWidth.toFixed(1)}km x ${boundsKmHeight.toFixed(1)}km`,
-      中心: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
-      目标视野: targetKm.toFixed(1) + 'km',
-      zoom: `→ ${targetZoom}`
-    })
-
     // 直接设置中心和 zoom，不用 fitBounds
     map.value.setView([center.lat, center.lng], targetZoom, { animate: false })
   } else {
@@ -2820,9 +2831,6 @@ onMounted(async () => {
   ;(window as any).setMapZoom = (zoom: number) => {
     if (map.value) {
       map.value.setZoom(zoom)
-      console.log(`[Leaflet] 缩放级别设置为: ${zoom}`)
-    } else {
-      console.warn('[Leaflet] 地图未初始化')
     }
   }
 

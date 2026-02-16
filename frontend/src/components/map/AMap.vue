@@ -1216,7 +1216,6 @@ async function initMap() {
     // 点击地图显示轨迹信息或跳转
     // 定义点击处理函数（桌面端和移动端共用）
     const handleMapClick = (e: any) => {
-      console.log('[AMap] handleMapClick - 触发点击事件:', e)
 
       // 绘制路径模式：直接发射点击事件（转换为 WGS84）
       if (props.disablePointHover) {
@@ -1227,7 +1226,6 @@ async function initMap() {
         }
         // 高德地图使用 GCJ02 坐标，需要转换为 WGS84
         const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
-        console.log('[AMap] handleMapClick - 绘制路径模式，发射 map-click:', wgsLng, wgsLat)
         emit('map-click', wgsLng, wgsLat)
         return
       }
@@ -1505,13 +1503,9 @@ async function initMap() {
         const zoom = AMapInstance.getZoom()
         const bounds = AMapInstance.getBounds()
         if (center && bounds && bounds.southwest && bounds.northeast) {
-          console.log('[AMap] 缩放结束:', {
-            缩放级别: zoom,
-            中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`,
-            边界: {
-              sw: `${bounds.southwest.lng.toFixed(4)}, ${bounds.southwest.lat.toFixed(4)}`,
-              ne: `${bounds.northeast.lng.toFixed(4)}, ${bounds.northeast.lat.toFixed(4)}`
-            }
+          console.log('[AMap] 缩放级别:', zoom, '中心点:', `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`, '边界:', {
+            sw: `${bounds.southwest.lng.toFixed(4)}, ${bounds.southwest.lat.toFixed(4)}`,
+            ne: `${bounds.northeast.lng.toFixed(4)}, ${bounds.northeast.lat.toFixed(4)}`
           })
         }
       } catch (e) {
@@ -1524,10 +1518,7 @@ async function initMap() {
         const center = AMapInstance.getCenter()
         const zoom = AMapInstance.getZoom()
         if (center) {
-          console.log('[AMap] 拖动结束:', {
-            缩放级别: zoom,
-            中心点: `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`
-          })
+          console.log('[AMap] 缩放级别:', zoom, '中心点:', `${center.lng.toFixed(4)}, ${center.lat.toFixed(4)}`)
         }
       } catch (e) {
         // 忽略高德地图内部错误
@@ -1725,12 +1716,10 @@ function updateTracks() {
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
 function drawCustomOverlays() {
   if (!AMapInstance) {
-    console.log('[AMap] drawCustomOverlays - AMapInstance 未初始化')
     return
   }
 
   const AMap = (window as any).AMap
-  console.log('[AMap] drawCustomOverlays - 开始绘制，覆盖层数量:', props.customOverlays?.length || 0)
 
   // 清除现有的自定义覆盖层
   customOverlayMarkers.forEach(marker => {
@@ -1743,7 +1732,6 @@ function drawCustomOverlays() {
   customOverlayPolylines = []
 
   if (!props.customOverlays || props.customOverlays.length === 0) {
-    console.log('[AMap] drawCustomOverlays - 没有覆盖层需要绘制')
     return
   }
 
@@ -1803,7 +1791,6 @@ function drawCustomOverlays() {
         marker.on('click', (e: any) => {
           const lngLat = e.lnglat
           const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
-          console.log('[AMap] Marker 点击，发射 map-click:', wgsLng, wgsLat)
           emit('map-click', wgsLng, wgsLat)
         })
       }
@@ -1845,7 +1832,6 @@ function drawCustomOverlays() {
         polyline.on('click', (e: any) => {
           const lngLat = e.lnglat
           const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
-          console.log('[AMap] Polyline 点击，发射 map-click:', wgsLng, wgsLat)
           emit('map-click', wgsLng, wgsLat)
         })
       }
@@ -2084,7 +2070,7 @@ function fitBounds(paddingPercent: number = 5) {
         const zoomDelta = Math.min(widthZoomDelta, heightZoomDelta)
         const targetZoom = Math.max(3, Math.min(20, zoomAfter + zoomDelta))
 
-        console.log('[AMap] 几何缩放计算:', {
+        console.log('[AMap] fitToTrackSize:', {
           边界框: `(${minLng}, ${minLat}) → (${maxLng}, ${maxLat})`,
           当前像素: `${currentPixelWidth.toFixed(0)}x${currentPixelHeight.toFixed(0)}`,
           容器尺寸: `${containerWidth}x${containerHeight}`,
@@ -2204,7 +2190,6 @@ async function isBlankImage(dataUrl: string): Promise<boolean> {
         }
       }
 
-      console.log('[AMap] Image content check:', hasContent ? 'has content' : 'blank')
       resolve(!hasContent)
     }
     img.onerror = () => resolve(false)
@@ -2242,7 +2227,6 @@ defineExpose({
                   console.warn('[AMap] WebGL maps do not support poster export currently')
                   resolve(null)
                 } else {
-                  console.log('[AMap] Captured image has content')
                   resolve(dataUrl)
                 }
               })

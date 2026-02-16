@@ -298,12 +298,12 @@ let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（�
 // 动画地图适配器实现
 const animationAdapter: AnimationMapAdapter = {
   setPassedSegment(start: number, end: number) {
-    // 播放状态下不更新轨迹，避免闪烁
-    if (isAnimationPlaying) return
-
     if (!BMapInstance || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
+    const passedPoints = points.slice(0, end + 1)
+    const remainingPoints = points.slice(end)
+
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const toPoint = (p: any) => new BMapClass.Point(
       p.longitude_bd09 ?? p.longitude_wgs84 ?? p.longitude,
@@ -317,10 +317,6 @@ const animationAdapter: AnimationMapAdapter = {
     if (animationRemainingPolyline) {
       BMapInstance.removeOverlay(animationRemainingPolyline)
     }
-
-    // 非播放状态：使用双色轨迹显示进度
-    const passedPoints = points.slice(0, end + 1)
-    const remainingPoints = points.slice(end)
 
     // 绘制轨迹
     if (passedPoints.length > 1) {
@@ -354,8 +350,27 @@ const animationAdapter: AnimationMapAdapter = {
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const point = new BMapClass.Point(position.lng, position.lat)
 
+    // 调试：输出标记位置
+    console.log('[BMap] setMarkerPosition:', {
+      lng: position.lng,
+      lat: position.lat,
+      bearing: position.bearing,
+      style
+    })
+
     // 根据样式确定标记尺寸和锚点
     const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
+
+    // 旋转标记
+    function rotateMarker(content: HTMLElement) {
+      // 使用类选择器找到正确的 inner div，避免选中 BMapLabel 的包装 div
+      const innerDiv = content.querySelector('.animation-marker-car') ||
+                       content.querySelector('.animation-marker-person') ||
+                       content.querySelector('.animation-marker-arrow')
+      if (innerDiv) {
+        innerDiv.style.transform = `rotate(${position.bearing}deg)`
+      }
+    }
 
     if (!animationMarker) {
       // 使用 Label 创建自定义 HTML 标记
@@ -366,6 +381,14 @@ const animationAdapter: AnimationMapAdapter = {
       })
       BMapInstance.addOverlay(animationMarker)
       currentAnimationMarkerStyle = style
+
+      // 首次创建时也要设置旋转
+      setTimeout(() => {
+        const content = animationMarker.getContent()
+        if (content && content instanceof HTMLElement) {
+          rotateMarker(content)
+        }
+      }, 0)
     } else {
       animationMarker.setPosition(point)
       // 只在样式变化时更新内容，避免闪烁
@@ -373,9 +396,20 @@ const animationAdapter: AnimationMapAdapter = {
         animationMarker.setContent(createAnimationIcon(style))
         animationMarker.setOffset(new BMapClass.Size(-iconSize.width / 2, -iconSize.height + 4))
         currentAnimationMarkerStyle = style
+        // setContent 后需要重新设置旋转
+        setTimeout(() => {
+          const content = animationMarker.getContent()
+          if (content && content instanceof HTMLElement) {
+            rotateMarker(content)
+          }
+        }, 0)
+      } else {
+        // 通过 CSS transform 旋转 Label 内容
+        const content = animationMarker.getContent()
+        if (content && content instanceof HTMLElement) {
+          rotateMarker(content)
+        }
       }
-      // 百度地图不支持直接旋转 Label，跳过旋转
-      // 如需支持旋转，需改用 BMapGL 的 Marker 并设置 rotation 属性
     }
   },
 
@@ -455,7 +489,6 @@ const animationAdapter: AnimationMapAdapter = {
         BMapInstance.removeOverlay(fullTrackPolyline)
         fullTrackPolyline = null
       }
-      // 恢复双色轨迹（由 setPassedSegment 重新绘制）
     }
   },
 }
@@ -2748,6 +2781,29 @@ defineExpose({
   display: block;
   height: 1.4em;
   width: auto;
+}
+
+/* 动画标记样式覆盖 - 移除 BMapLabel 默认白底红边 */
+:deep(.BMapLabel) {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  color: inherit !important;
+  white-space: nowrap !important;
+  line-height: normal !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+}
+
+/* 动画标记内部容器样式 */
+:deep(.animation-marker-arrow),
+:deep(.animation-marker-car),
+:deep(.animation-marker-person) {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
 }
 
 </style>

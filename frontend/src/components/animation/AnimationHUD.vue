@@ -138,6 +138,10 @@ function formatProgressTooltip(value: number): string {
 }
 
 function handleSeek(value: number) {
+  // 防止无效的 seek 值
+  if (isNaN(value) || value < 0 || value > 100 || props.totalDuration <= 0) {
+    return
+  }
   const time = (props.totalDuration * value) / 100
   emit('seek', time)
 }

@@ -2,6 +2,7 @@
 
 import type { TrackPoint } from '@/types/track'
 import type { MarkerPosition } from '@/types/animation'
+import { convertCoord, type CRSType } from './coordTransform'
 
 /**
  * 计算轨迹持续时间（毫秒）
@@ -102,22 +103,40 @@ export function interpolatePosition(
   useGCJ02 = false,
   useBD09 = false
 ): MarkerPosition {
-  // 根据地图提供商选择正确的坐标系
-  const lat1 = useGCJ02 ? (point1.latitude_gcj02 ?? point1.latitude_wgs84 ?? point1.latitude)
-    : useBD09 ? (point1.latitude_bd09 ?? point1.latitude_wgs84 ?? point1.latitude)
-    : (point1.latitude_wgs84 ?? point1.latitude)
+  // 辅助函数：获取点的坐标
+  function getPointCoords(point: TrackPoint, targetCRS: CRSType): [number, number] {
+    // 首先检查目标坐标系的字段是否存在
+    if (targetCRS === 'bd09' && point.latitude_bd09 !== undefined && point.longitude_bd09 !== undefined) {
+      return [point.longitude_bd09, point.latitude_bd09]
+    }
+    if (targetCRS === 'gcj02' && point.latitude_gcj02 !== undefined && point.longitude_gcj02 !== undefined) {
+      return [point.longitude_gcj02, point.latitude_gcj02]
+    }
+    if (targetCRS === 'wgs84' && point.latitude_wgs84 !== undefined && point.longitude_wgs84 !== undefined) {
+      return [point.longitude_wgs84, point.latitude_wgs84]
+    }
 
-  const lng1 = useGCJ02 ? (point1.longitude_gcj02 ?? point1.longitude_wgs84 ?? point1.longitude)
-    : useBD09 ? (point1.longitude_bd09 ?? point1.longitude_wgs84 ?? point1.longitude)
-    : (point1.longitude_wgs84 ?? point1.longitude)
+    // 如果目标坐标系的字段不存在，尝试从 WGS84 转换
+    if (point.latitude_wgs84 !== undefined && point.longitude_wgs84 !== undefined) {
+      const [lng, lat] = convertCoord(
+        point.longitude_wgs84,
+        point.latitude_wgs84,
+        'wgs84',
+        targetCRS
+      )
+      return [lng, lat]
+    }
 
-  const lat2 = useGCJ02 ? (point2.latitude_gcj02 ?? point2.latitude_wgs84 ?? point2.latitude)
-    : useBD09 ? (point2.latitude_bd09 ?? point2.latitude_wgs84 ?? point2.latitude)
-    : (point2.latitude_wgs84 ?? point2.latitude)
+    // 最后回退到原始坐标
+    return [point.longitude ?? 0, point.latitude ?? 0]
+  }
 
-  const lng2 = useGCJ02 ? (point2.longitude_gcj02 ?? point2.longitude_wgs84 ?? point2.longitude)
-    : useBD09 ? (point2.longitude_bd09 ?? point2.longitude_wgs84 ?? point2.longitude)
-    : (point2.longitude_wgs84 ?? point2.longitude)
+  // 确定目标坐标系
+  const targetCRS: CRSType = useGCJ02 ? 'gcj02' : useBD09 ? 'bd09' : 'wgs84'
+
+  // 获取两个点的坐标
+  const [lng1, lat1] = getPointCoords(point1, targetCRS)
+  const [lng2, lat2] = getPointCoords(point2, targetCRS)
 
   const lat = lat1 + (lat2 - lat1) * progress
   const lng = lng1 + (lng2 - lng1) * progress

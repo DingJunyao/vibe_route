@@ -95,10 +95,14 @@ const absoluteCurrentTime = computed(() => {
 })
 
 // 获取当前地图提供商的坐标类型
-const isGCJ02Provider = computed(() =>
-  ['amap', 'tencent', 'tianditu'].includes(props.mapProvider)
-)
+const isGCJ02Provider = computed(() => {
+  // AMap 引擎、Tencent 引擎、高德 Leaflet、腾讯 Leaflet 使用 GCJ02 坐标
+  return props.mapProvider === 'amap' || props.mapProvider === 'tencent'
+})
 const isBD09Provider = computed(() => props.mapProvider === 'baidu')
+
+watch(() => props.mapProvider, (newProvider) => {
+}, { immediate: true })
 
 const currentPosition = computed<MarkerPosition | null>(() => {
   const { index, progress } = findPointIndexByTime(
@@ -111,7 +115,7 @@ const currentPosition = computed<MarkerPosition | null>(() => {
     // 到达终点
     const lastPoint = points.value[points.value.length - 1]
     if (lastPoint) {
-      return {
+      const pos = {
         lat: isGCJ02Provider.value ? (lastPoint.latitude_gcj02 ?? lastPoint.latitude_wgs84 ?? lastPoint.latitude)
           : isBD09Provider.value ? (lastPoint.latitude_bd09 ?? lastPoint.latitude_wgs84 ?? lastPoint.latitude)
           : (lastPoint.latitude_wgs84 ?? lastPoint.latitude),
@@ -123,6 +127,7 @@ const currentPosition = computed<MarkerPosition | null>(() => {
         elevation: lastPoint.elevation ?? null,
         time: lastPoint.time ?? null,
       }
+      return pos
     }
   }
 

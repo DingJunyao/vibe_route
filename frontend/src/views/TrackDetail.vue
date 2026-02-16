@@ -246,7 +246,8 @@
                       :live-update-time="track.live_recording_status === 'active' ? (track.last_point_created_at || track.last_upload_at) : null"
                       :enable-animation="true"
                       @point-hover="handleMapPointHover"
-                    @clear-segment-highlight="clearSegmentHighlight"
+                      @clear-segment-highlight="clearSegmentHighlight"
+                      @map-provider-changed="handleMapProviderChanged"
                   />
                   </div>
                 </div>
@@ -1036,8 +1037,14 @@ const authStore = useAuthStore()
 const configStore = useConfigStore()
 const animationStore = useAnimationStore()
 
-// 地图提供商
-const mapProvider = computed(() => configStore.getEffectiveProvider())
+// 地图提供商（使用 ref 以便响应实际地图变化）
+const mapProvider = ref(configStore.getEffectiveProvider())
+
+// 处理地图提供商变化
+function handleMapProviderChanged(provider: string) {
+  console.log('[TrackDetail] Map provider changed:', provider)
+  mapProvider.value = provider
+}
 
 // 响应式：判断是否为移动端
 const screenWidth = ref(window.innerWidth)

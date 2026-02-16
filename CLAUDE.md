@@ -8,13 +8,15 @@ Vibe Route - 全栈 Web 轨迹管理系统
 
 ## 开发环境
 
-**Python**: Anaconda 环境 `vibe_route`，所有 Python 操作需切换到此环境。
+**Python**: Anaconda 环境 `vibe_route`，所有 Python 操作需切换到此环境。如果没有 Anaconda，请寻找项目是否有 venv。
 **数据库**: 查看 `backend/.env` 确定。
-**浏览器**: Edge（开发者），需远程调试时运行：
+**浏览器**: 如果是在 Windows 上，开发者用的是 Edge，需远程调试时，让用户运行：
 
 ```powershell
 Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -ArgumentList "--remote-debugging-port=9222"
 ```
+
+在 Linux 上，用的是 Chromium。
 
 **开发服务**: 前后端热重载已开启，任务中不再启动/关闭服务。
 
@@ -37,6 +39,8 @@ Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "
 - 保持文件大小 < 40KB（压缩历史版本到独立文件）
 
 ### tips
+
+当遇到 Edit 失败报错时，使用 serena 来编辑代码。
 
 For map coordinate conversions, always use the MapService.covert_coords method with provider-specific transformations. AMap/Tencent use GCJ-02, Baidu uses BD-09, Leaflet uses WGS-84.
 
@@ -507,3 +511,13 @@ frontend/src/
   - 所有标记样式支持方位旋转
   - 使用 `vehicle.svg` 和 `location.svg` 图标替代 CSS 绘制
   - 添加样式缓存避免标记闪烁
+- **Leaflet 地图坐标系统修复**：
+  - 修复了百度地图标记旋转问题（使用 class 选择器而非通用 div 选择器）
+  - 修改了 `getCoordsByCRS()` 函数，根据地图提供商选择正确坐标系：
+    - 天地图：使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
+    - 高德/腾讯地图：使用 GCJ02 坐标（插件期望 GCJ02 坐标）
+    - 百度地图：使用 BD09 坐标
+  - 修改了 `TrackAnimationPlayer.vue` 的 `isGCJ02Provider` 逻辑，正确识别高德/腾讯地图
+  - 修复了 `setAnimationPlaying()` 函数，让灰色轨迹也使用 `getCoordsByCRS()` 来正确选择坐标系统（之前硬编码 WGS84）
+  - 减少了调试日志输出，保持关键信息
+  - 结果：所有 Leaflet 地图的轨迹（红色/灰色）和标记点现在都正确

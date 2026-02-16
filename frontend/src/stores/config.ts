@@ -158,13 +158,13 @@ export const useConfigStore = defineStore('config', () => {
   // 获取有效的地图提供商（考虑用户配置）
   function getEffectiveProvider(): string {
     const userConfigStore = useUserConfigStore()
-    return userConfigStore.getEffectiveProvider
+    return userConfigStore.getEffectiveProvider.value || defaultMapProvider.value
   }
 
   // 获取有效的地图层（考虑用户配置）
   function getEffectiveLayers(): Record<string, MapLayerConfig> {
     const userConfigStore = useUserConfigStore()
-    return userConfigStore.getEffectiveLayers
+    return userConfigStore.getEffectiveLayers.value || mapLayers.value
   }
 
   // 根据地图层 ID 获取地图层配置（优先用户配置）

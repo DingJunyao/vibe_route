@@ -177,6 +177,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
+import { useUserConfigStore } from '@/stores/userConfig'
 import { useAnimationStore } from '@/stores/animation'
 import { Close, FullScreen, Link, VideoPlay, VideoPause } from '@element-plus/icons-vue'
 import LeafletMap from './LeafletMap.vue'
@@ -283,9 +284,11 @@ const emit = defineEmits<{
   (e: 'track-click', trackId: number): void
   (e: 'clear-segment-highlight'): void
   (e: 'map-click', lng: number, lat: number): void  // 地图点击事件（用于添加控制点）
+  (e: 'map-provider-changed', provider: string): void  // 地图提供商变化
 }>()
 
 const configStore = useConfigStore()
+const userConfigStore = useUserConfigStore()
 const animationStore = useAnimationStore()
 const amapRef = ref()
 const bmapRef = ref()
@@ -535,6 +538,21 @@ function switchLayer(layerId: string) {
   // 保存到本地存储
   saveLocalMapPreference(layerId)
 
+  // 将 layerId 映射到 map_provider 并更新用户配置
+  let mapProvider = 'osm' // 默认
+  if (layerId.startsWith('baidu')) {
+    mapProvider = 'baidu'
+  } else if (layerId.startsWith('amap')) {
+    mapProvider = 'amap'
+  } else if (layerId.startsWith('tencent')) {
+    mapProvider = 'tencent'
+  }
+
+  // 异步更新用户配置（不等待完成）
+  userConfigStore.updateConfig({ map_provider: mapProvider }).catch((err) => {
+    console.error('[UniversalMap] Failed to update map_provider:', err)
+  })
+
   // 等待新地图初始化后恢复视角
   nextTick(() => {
     setTimeout(() => {
@@ -751,6 +769,25 @@ onMounted(async () => {
   // 使用本地偏好（如果存在且可用），否则使用默认值
   currentLayerId.value = getEffectiveMapLayer(availableLayerIds, defaultLayer)
 
+  // 初始设置后也要发出地图提供商变化事件
+  nextTick(() => {
+    const initialLayerId = currentLayerId.value
+    let provider = 'osm' // 默认
+    if (initialLayerId.startsWith('baidu')) {
+      provider = 'baidu'
+    } else if (initialLayerId.startsWith('amap')) {
+      provider = 'amap'
+    } else if (initialLayerId.startsWith('tencent')) {
+      provider = 'tencent'
+    } else if (initialLayerId.startsWith('tianditu')) {
+      provider = 'tianditu'
+    } else if (initialLayerId.startsWith('leaflet') || initialLayerId === 'osm') {
+      provider = 'osm'
+    }
+    // Initial emit
+    emit('map-provider-changed', provider)
+  })
+
   // 启动时间刷新定时器
   if (props.liveUpdateTime) {
     updateTimer = window.setInterval(() => {
@@ -768,8 +805,22 @@ onUnmounted(() => {
 })
 
 // 监听 currentLayerId 变化
-watch(currentLayerId, () => {
-  // 图层切换时重新渲染
+watch(currentLayerId, (newLayerId) => {
+  // 确定地图提供商
+  let provider = 'osm' // 默认
+  if (newLayerId.startsWith('baidu')) {
+    provider = 'baidu'
+  } else if (newLayerId.startsWith('amap')) {
+    provider = 'amap'
+  } else if (newLayerId.startsWith('tencent')) {
+    provider = 'tencent'
+  } else if (newLayerId.startsWith('tianditu')) {
+    provider = 'tianditu'
+  } else if (newLayerId.startsWith('leaflet') || newLayerId === 'osm') {
+    provider = 'osm'
+  }
+  // 发出地图提供商变化事件
+  emit('map-provider-changed', provider)
 })
 
 // 监听 defaultLayerId prop 变化

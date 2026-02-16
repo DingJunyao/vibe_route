@@ -372,6 +372,9 @@ const animationAdapter: AnimationMapAdapter = {
     const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
     const iconAnchor = style === 'car' ? { x: 20, y: 20 } : { x: 12, y: 20 }
 
+    // 生成标记 HTML 内容
+    const iconElement = createAnimationIcon(style)
+
     if (!animationMarker) {
       animationMarker = new TMap.MultiMarker({
         geometries: [{
@@ -383,19 +386,24 @@ const animationAdapter: AnimationMapAdapter = {
             width: iconSize.width,
             height: iconSize.height,
             anchor: iconAnchor,
+            // 使用 styleId 对应的 HTML 内容
           }),
         },
       })
       animationMarker.setMap(TMapInstance)
-
-      // 设置标记内容
-      const iconElement = createAnimationIcon(style)
-      const markerDom = animationMarker.getGeometries()[0].getDOM?.()
-      if (markerDom) {
-        markerDom.innerHTML = iconElement.innerHTML
-        markerDom.className = iconElement.className
-      }
       currentAnimationMarkerStyle = style
+
+      // 延迟设置标记内容，确保 DOM 已渲染
+      setTimeout(() => {
+        const geom = animationMarker.getGeometries()[0]
+        if (geom && typeof geom.getDOM === 'function') {
+          const markerDom = geom.getDOM()
+          if (markerDom) {
+            markerDom.innerHTML = iconElement.innerHTML
+            markerDom.className = iconElement.className
+          }
+        }
+      }, 0)
     } else {
       animationMarker.setGeometries([{
         id: 'animation-marker',
@@ -403,12 +411,15 @@ const animationAdapter: AnimationMapAdapter = {
       }])
 
       // 只在样式变化时更新标记内容，避免闪烁
-      const markerDom = animationMarker.getGeometries()[0].getDOM?.()
-      if (markerDom && currentAnimationMarkerStyle !== style) {
-        const iconElement = createAnimationIcon(style)
-        markerDom.innerHTML = iconElement.innerHTML
-        markerDom.className = iconElement.className
-        currentAnimationMarkerStyle = style
+      if (currentAnimationMarkerStyle !== style) {
+        const geom = animationMarker.getGeometries()[0]
+        if (geom && typeof geom.getDOM === 'function') {
+          const markerDom = geom.getDOM()
+          if (markerDom) {
+            markerDom.innerHTML = iconElement.innerHTML
+            markerDom.className = iconElement.className
+          }
+        }
 
         // 需要更新 MarkerStyle 的尺寸和锚点
         animationMarker.updateStyles({
@@ -418,12 +429,19 @@ const animationAdapter: AnimationMapAdapter = {
             anchor: iconAnchor,
           }),
         })
+        currentAnimationMarkerStyle = style
       }
 
       // 根据方位旋转标记（所有样式都需要旋转）
-      const wrapperDiv = markerDom.querySelector('div') as HTMLDivElement
-      if (wrapperDiv) {
-        wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+      const geom = animationMarker.getGeometries()[0]
+      if (geom && typeof geom.getDOM === 'function') {
+        const markerDom = geom.getDOM()
+        if (markerDom) {
+          const wrapperDiv = markerDom.querySelector('div') as HTMLDivElement
+          if (wrapperDiv) {
+            wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+          }
+        }
       }
     }
   },
