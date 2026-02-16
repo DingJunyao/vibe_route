@@ -236,65 +236,171 @@ let animationRemainingPolyline: any = null
 let fullTrackPolyline: any = null  // 播放时的完整轨迹
 let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
+let currentAnimationBearing = 0
 let currentMapRotation = 0
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
+
+// 标记图标缓存（避免重复加载和绘制）
+const markerIconCache = new Map<string, string>()
+
+// 图标 URL 配置
+const ICON_URLS = {
+  car: '/vehicle.svg',
+  arrow: '/location.svg',
+  person: '',  // person 使用 SVG 字符串
+}
 
 // 创建动画标记图标
 function createAnimationIcon(style: MarkerStyle = 'arrow'): HTMLElement {
   const div = document.createElement('div')
+  div.style.cssText = 'width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; transform-origin: center center;'
+
+  const innerDiv = document.createElement('div')
 
   if (style === 'car') {
     // 汽车图标 - 使用 vehicle.svg
-    div.innerHTML = `
-      <div class="animation-marker-car" style="
-        width: 40px;
-        height: 27px;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transform-origin: center center;
-      ">
-        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
-      </div>
+    innerDiv.className = 'animation-marker-car'
+    innerDiv.style.cssText = `
+      width: 40px;
+      height: 27px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center center;
     `
+    const img = document.createElement('img')
+    img.src = '/vehicle.svg'
+    img.width = 40
+    img.height = 27
+    img.style.display = 'block'
+    innerDiv.appendChild(img)
   } else if (style === 'person') {
     // 行人图标
-    div.innerHTML = `
-      <div class="animation-marker-person" style="
-        width: 24px;
-        height: 24px;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transform-origin: center center;
-      ">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-          <circle cx="12" cy="8" r="4" fill="#409eff" />
-          <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
-          <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
-        </svg>
-      </div>
+    innerDiv.className = 'animation-marker-person'
+    innerDiv.style.cssText = `
+      width: 24px;
+      height: 24px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center center;
+    `
+    innerDiv.innerHTML = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <circle cx="12" cy="8" r="4" fill="#409eff" />
+        <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+        <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+      </svg>
     `
   } else {
     // 箭头图标 - 使用 location.svg
-    div.innerHTML = `
-      <div class="animation-marker-arrow" style="
-        width: 24px;
-        height: 24px;
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transform-origin: center center;
-      ">
-        <img src="/location.svg" width="24" height="24" style="display: block;" />
-      </div>
+    innerDiv.className = 'animation-marker-arrow'
+    innerDiv.style.cssText = `
+      width: 24px;
+      height: 24px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform-origin: center center;
     `
+    const img = document.createElement('img')
+    img.src = '/location.svg'
+    img.width = 24
+    img.height = 24
+    img.style.display = 'block'
+    innerDiv.appendChild(img)
   }
 
+  div.appendChild(innerDiv)
   return div
+}
+
+// 生成旋转后的标记图标数据 URL
+async function generateRotatedMarkerIcon(style: MarkerStyle, bearing: number): Promise<string> {
+  const cacheKey = `${style}-${Math.round(bearing)}`
+  if (markerIconCache.has(cacheKey)) {
+    return markerIconCache.get(cacheKey)!
+  }
+
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')!
+  let width = 24, height = 24, anchor = { x: 12, y: 20 }
+
+  if (style === 'car') {
+    width = 40
+    height = 27
+    anchor = { x: 20, y: 20 }
+  }
+
+  // 设置画布大小（考虑旋转后的尺寸）
+  const diagonal = Math.sqrt(width * width + height * height)
+  canvas.width = diagonal + 10
+  canvas.height = diagonal + 10
+
+  // 保存上下文并平移到中心
+  ctx.save()
+  ctx.translate(canvas.width / 2, canvas.height / 2)
+  ctx.rotate((bearing * Math.PI) / 180)
+  ctx.translate(-width / 2, -height / 2)
+
+  if (style === 'person') {
+    // 绘制行人图标
+    // 头部
+    ctx.fillStyle = '#409eff'
+    ctx.beginPath()
+    ctx.arc(width / 2, width / 4, width / 6, 0, Math.PI * 2)
+    ctx.fill()
+
+    // 身体
+    ctx.strokeStyle = '#409eff'
+    ctx.lineWidth = 3
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(width / 2, width / 4 + width / 6 + 2)
+    ctx.lineTo(width / 2, height - 2)
+    ctx.stroke()
+
+    // 手臂
+    ctx.beginPath()
+    ctx.moveTo(width / 2, height / 2)
+    ctx.lineTo(width / 6, height / 2)
+    ctx.stroke()
+  } else {
+    // 加载并绘制 SVG 图标（car 或 arrow）
+    return new Promise((resolve) => {
+      const img = new Image()
+      img.crossOrigin = 'anonymous'
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, width, height)
+        ctx.restore()
+
+        const dataUrl = canvas.toDataURL('image/png')
+        markerIconCache.set(cacheKey, dataUrl)
+        resolve(dataUrl)
+      }
+      img.onerror = () => {
+        // 加载失败时绘制备用图标
+        ctx.fillStyle = style === 'car' ? '#e98f36' : '#1296db'
+        ctx.beginPath()
+        ctx.arc(width / 2, height / 2, Math.min(width, height) / 3, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+
+        const dataUrl = canvas.toDataURL('image/png')
+        markerIconCache.set(cacheKey, dataUrl)
+        resolve(dataUrl)
+      }
+      img.src = style === 'car' ? '/vehicle.svg' : '/location.svg'
+    })
+  }
+
+  ctx.restore()
+  const dataUrl = canvas.toDataURL('image/png')
+  markerIconCache.set(cacheKey, dataUrl)
+  return dataUrl
 }
 
 // 动画地图适配器实现
@@ -372,78 +478,73 @@ const animationAdapter: AnimationMapAdapter = {
     const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
     const iconAnchor = style === 'car' ? { x: 20, y: 20 } : { x: 12, y: 20 }
 
-    // 生成标记 HTML 内容
-    const iconElement = createAnimationIcon(style)
-
-    if (!animationMarker) {
-      animationMarker = new TMap.MultiMarker({
-        geometries: [{
-          id: 'animation-marker',
-          position: latLng,
-        }],
-        styles: {
-          'animation-marker': new TMap.MarkerStyle({
-            width: iconSize.width,
-            height: iconSize.height,
-            anchor: iconAnchor,
-            // 使用 styleId 对应的 HTML 内容
-          }),
-        },
-      })
-      animationMarker.setMap(TMapInstance)
-      currentAnimationMarkerStyle = style
-
-      // 延迟设置标记内容，确保 DOM 已渲染
-      setTimeout(() => {
-        const geom = animationMarker.getGeometries()[0]
-        if (geom && typeof geom.getDOM === 'function') {
-          const markerDom = geom.getDOM()
-          if (markerDom) {
-            markerDom.innerHTML = iconElement.innerHTML
-            markerDom.className = iconElement.className
-          }
-        }
-      }, 0)
-    } else {
-      animationMarker.setGeometries([{
-        id: 'animation-marker',
-        position: latLng,
-      }])
-
-      // 只在样式变化时更新标记内容，避免闪烁
-      if (currentAnimationMarkerStyle !== style) {
-        const geom = animationMarker.getGeometries()[0]
-        if (geom && typeof geom.getDOM === 'function') {
-          const markerDom = geom.getDOM()
-          if (markerDom) {
-            markerDom.innerHTML = iconElement.innerHTML
-            markerDom.className = iconElement.className
-          }
-        }
-
-        // 需要更新 MarkerStyle 的尺寸和锚点
-        animationMarker.updateStyles({
-          'animation-marker': new TMap.MarkerStyle({
-            width: iconSize.width,
-            height: iconSize.height,
-            anchor: iconAnchor,
-          }),
+    // 生成旋转后的标记数据 URL（异步）
+    generateRotatedMarkerIcon(style, position.bearing).then(dataUrl => {
+      if (!animationMarker) {
+        animationMarker = new TMap.MultiMarker({
+          map: TMapInstance,
+          styles: {
+            'animation-marker': new TMap.MarkerStyle({
+              width: iconSize.width,
+              height: iconSize.height,
+              anchor: iconAnchor,
+              src: dataUrl,
+            }),
+          },
+          geometries: [{
+            id: 'animation-marker',
+            styleId: 'animation-marker',
+            position: latLng,
+          }],
         })
         currentAnimationMarkerStyle = style
-      }
+        currentAnimationBearing = position.bearing
+      } else {
+        // 更新位置
+        animationMarker.setGeometries([{
+          id: 'animation-marker',
+          styleId: 'animation-marker',
+          position: latLng,
+        }])
 
-      // 根据方位旋转标记（所有样式都需要旋转）
-      const geom = animationMarker.getGeometries()[0]
-      if (geom && typeof geom.getDOM === 'function') {
-        const markerDom = geom.getDOM()
-        if (markerDom) {
-          const wrapperDiv = markerDom.querySelector('div') as HTMLDivElement
-          if (wrapperDiv) {
-            wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+        // 只在样式或方位变化时更新标记样式
+        if (currentAnimationMarkerStyle !== style || Math.abs(currentAnimationBearing - position.bearing) > 1) {
+          // 腾讯地图 MultiMarker 不支持 updateStyles，需要使用 setStyles
+          try {
+            animationMarker.setStyles({
+              'animation-marker': new TMap.MarkerStyle({
+                width: iconSize.width,
+                height: iconSize.height,
+                anchor: iconAnchor,
+                src: dataUrl,
+              }),
+            })
+          } catch (e) {
+            // 如果 setStyles 也失败，则删除并重新创建标记
+            console.warn('[TencentMap] setStyles failed, recreating marker:', e)
+            animationMarker.setMap(null)
+            animationMarker = new TMap.MultiMarker({
+              map: TMapInstance,
+              styles: {
+                'animation-marker': new TMap.MarkerStyle({
+                  width: iconSize.width,
+                  height: iconSize.height,
+                  anchor: iconAnchor,
+                  src: dataUrl,
+                }),
+              },
+              geometries: [{
+                id: 'animation-marker',
+                styleId: 'animation-marker',
+                position: latLng,
+              }],
+            })
           }
+          currentAnimationMarkerStyle = style
+          currentAnimationBearing = position.bearing
         }
       }
-    }
+    })
   },
 
   setCameraToMarker(position: MarkerPosition) {
@@ -1246,8 +1347,16 @@ async function initMap() {
       const clickHandler = (e: Event) => {
         if (!TMapInstance) return
 
-        // 检查点击的是否是 InfoWindow 中的 tooltip
         const target = e.target as HTMLElement
+
+        // 检查点击的是否是回放控制浮窗的元素
+        const hudEl = target?.closest('.track-animation-player, .animation-hud, .hud-content') as HTMLElement
+        if (hudEl) {
+          // 点击的是回放控制浮窗，不处理
+          return
+        }
+
+        // 检查点击的是否是 InfoWindow 中的 tooltip
         const tooltipEl = target?.closest('.track-tooltip') as HTMLElement
         if (tooltipEl) {
           const trackId = tooltipEl.getAttribute('data-track-id')
@@ -1482,7 +1591,7 @@ async function initMap() {
         mouseDownPos = { x: e.clientX, y: e.clientY }
       }, true)
 
-      // 监听点击事件（桌面端）
+      // 监听点击事件（桌面端）- 使用冒泡阶段，让 HUD 元素先响应
       mapContainer.value.addEventListener('click', (e: Event) => {
         // 移动端：如果刚处理完 touchend，跳过 click 事件
         if (isClickProcessing) return
@@ -1500,9 +1609,9 @@ async function initMap() {
         mouseDownPos = null
 
         clickHandler(e)
-      }, true)
+      }, false)
 
-      // 同时监听触摸事件（移动端）
+      // 同时监听触摸事件（移动端）- 使用冒泡阶段，让 HUD 元素先响应
       mapContainer.value.addEventListener('touchend', (e: Event) => {
         // 防止 touchend 后立即触发 click 导致重复处理
         e.preventDefault()
@@ -1512,7 +1621,7 @@ async function initMap() {
         setTimeout(() => {
           isClickProcessing = false
         }, 300)
-      }, true)
+      }, false)
 
     // 监听地图移动/缩放事件，更新 tooltip 位置
     const updateTooltipPosition = () => {

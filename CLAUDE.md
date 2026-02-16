@@ -521,3 +521,9 @@ frontend/src/
   - 修复了 `setAnimationPlaying()` 函数，让灰色轨迹也使用 `getCoordsByCRS()` 来正确选择坐标系统（之前硬编码 WGS84）
   - 减少了调试日志输出，保持关键信息
   - 结果：所有 Leaflet 地图的轨迹（红色/灰色）和标记点现在都正确
+- **腾讯地图动画标记和 HUD 控制修复**：
+  - 动画标记显示默认样式：`TMap.DOMOverlay.extend` 不是一个函数，改用 Canvas 绘制旋转后的图标并转换为 data URL
+  - HUD 控制无响应：点击事件监听使用了 `useCapture: true`，改为 `useCapture: false` 让事件在冒泡阶段处理
+  - `updateStyles` API 错误：`TMap.MultiMarker` 没有 `updateStyles` 方法，改用 `setStyles` 方法
+  - HUD 被覆盖：腾讯地图的控件层（`z-index: 1000`）覆盖了 HUD，将 HUD 的 `z-index` 提高到 `10000`
+  - 结果：腾讯地图的动画标记和 HUD 控制都正常工作

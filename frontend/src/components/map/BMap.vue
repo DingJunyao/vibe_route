@@ -232,6 +232,7 @@ let fullTrackPolyline: any = null  // 播放时的完整轨迹
 let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
+const ANIMATION_MARKER_ID = 'bmap-animation-marker'  // 动画标记的唯一 ID
 
 // 创建动画标记图标
 function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
@@ -284,6 +285,17 @@ function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
         <img src="/location.svg" width="24" height="24" style="display: block;" />
       </div>
     `
+  }
+}
+
+// 旋转百度地图标记
+function rotateBaiduMarker(bearing: number) {
+  // 百度地图的 Label 会创建一个带有 class="BMapLabel" 的 div
+  // 我们需要找到这个元素内部的 .animation-marker-* 元素并旋转它
+  const labelDiv = document.querySelector(`.BMapLabel .${currentAnimationMarkerStyle === 'car' ? 'animation-marker-car' : currentAnimationMarkerStyle === 'person' ? 'animation-marker-person' : 'animation-marker-arrow'}`)
+  if (labelDiv && labelDiv instanceof HTMLElement) {
+    labelDiv.style.transform = `rotate(${bearing}deg)`
+    console.log('[BMap] rotateMarker applied:', { bearing, element: labelDiv })
   }
 }
 
@@ -361,17 +373,6 @@ const animationAdapter: AnimationMapAdapter = {
     // 根据样式确定标记尺寸和锚点
     const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
 
-    // 旋转标记
-    function rotateMarker(content: HTMLElement) {
-      // 使用类选择器找到正确的 inner div，避免选中 BMapLabel 的包装 div
-      const innerDiv = content.querySelector('.animation-marker-car') ||
-                       content.querySelector('.animation-marker-person') ||
-                       content.querySelector('.animation-marker-arrow')
-      if (innerDiv) {
-        innerDiv.style.transform = `rotate(${position.bearing}deg)`
-      }
-    }
-
     if (!animationMarker) {
       // 使用 Label 创建自定义 HTML 标记
       const iconHtml = createAnimationIcon(style)
@@ -384,10 +385,7 @@ const animationAdapter: AnimationMapAdapter = {
 
       // 首次创建时也要设置旋转
       setTimeout(() => {
-        const content = animationMarker.getContent()
-        if (content && content instanceof HTMLElement) {
-          rotateMarker(content)
-        }
+        rotateBaiduMarker(position.bearing)
       }, 0)
     } else {
       animationMarker.setPosition(point)
@@ -398,17 +396,11 @@ const animationAdapter: AnimationMapAdapter = {
         currentAnimationMarkerStyle = style
         // setContent 后需要重新设置旋转
         setTimeout(() => {
-          const content = animationMarker.getContent()
-          if (content && content instanceof HTMLElement) {
-            rotateMarker(content)
-          }
+          rotateBaiduMarker(position.bearing)
         }, 0)
       } else {
-        // 通过 CSS transform 旋转 Label 内容
-        const content = animationMarker.getContent()
-        if (content && content instanceof HTMLElement) {
-          rotateMarker(content)
-        }
+        // 直接旋转标记
+        rotateBaiduMarker(position.bearing)
       }
     }
   },
