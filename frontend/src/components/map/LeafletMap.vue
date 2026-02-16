@@ -228,39 +228,39 @@ function updateCurrentLayerConfig() {
 // 创建动画标记图标
 function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
   let html = ''
-  let iconSize: [number, number] = [24, 24]
-  let iconAnchor: [number, number] = [12, 20]
+  let iconSize: [number, number] = [36, 36]
+  let iconAnchor: [number, number] = [18, 30]
 
   if (style === 'car') {
     // 汽车图标 - 使用 vehicle.svg
-    iconSize = [40, 27]
-    iconAnchor = [20, 14]
+    iconSize = [60, 40]
+    iconAnchor = [30, 20]
     html = `
       <div class="animation-marker-car" style="
-        width: 40px;
-        height: 27px;
+        width: 60px;
+        height: 40px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
     // 人物图标
     html = `
       <div class="animation-marker-person" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="12" cy="8" r="4" fill="#409eff" />
           <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
           <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
@@ -271,15 +271,15 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
     // 默认箭头图标 - 使用 location.svg
     html = `
       <div class="animation-marker-arrow" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/location.svg" width="24" height="24" style="display: block;" />
+        <img src="/location.svg" width="36" height="36" style="display: block;" />
       </div>
     `
   }

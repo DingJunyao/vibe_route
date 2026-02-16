@@ -429,30 +429,30 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
     // 汽车图标 - 使用 vehicle.svg
     div.innerHTML = `
       <div class="animation-marker-car" style="
-        width: 40px;
-        height: 27px;
+        width: 60px;
+        height: 40px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
     // 人物图标
     div.innerHTML = `
       <div class="animation-marker-person" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="currentColor">
           <circle cx="12" cy="10" r="8" fill="#4CAF50" />
           <circle cx="9" cy="9" r="2" fill="#333" />
           <circle cx="15" cy="9" r="2" fill="#333" />
@@ -465,15 +465,15 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
     // 默认箭头图标 - 使用 location.svg
     div.innerHTML = `
       <div class="animation-marker-arrow" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/location.svg" width="24" height="24" style="display: block;" />
+        <img src="/location.svg" width="36" height="36" style="display: block;" />
       </div>
     `
   }
@@ -539,8 +539,8 @@ const animationAdapter: AnimationMapAdapter = {
     const lngLat = new AMap.LngLat(position.lng, position.lat)
 
     // 根据样式确定标记尺寸和锚点
-    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
-    const offset = style === 'car' ? { x: -20, y: -14 } : { x: -12, y: -10 }
+    const iconSize = style === 'car' ? { width: 60, height: 40 } : { width: 36, height: 36 }
+    const offset = style === 'car' ? { x: -30, y: -20 } : { x: -18, y: -15 }
 
     if (!animationMarker) {
       animationMarker = new AMap.Marker({

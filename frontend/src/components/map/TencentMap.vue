@@ -5,6 +5,152 @@
   </div>
 </template>
 
+<script lang="ts">
+// 动画 DOM Overlay 类（使用 CSS transform 旋转，避免 Canvas 变形）
+class AnimationDOMOverlay {
+  private map: any
+  private mapContainer: HTMLElement | null = null
+  private position: { lat: number; lng: number } | null = null
+  private style: 'arrow' | 'car' | 'person' = 'arrow'
+  private bearing: number = 0
+  private element: HTMLElement
+  private innerElement: HTMLElement
+  private onMoveEndHandler: (() => void) | null = null
+  private onZoomEndHandler: (() => void) | null = null
+
+  constructor(map: any) {
+    this.map = map
+
+    // 创建外部容器（绝对定位）
+    this.element = document.createElement('div')
+    this.element.style.cssText = 'position: absolute; pointer-events: none; z-index: 999;'
+
+    // 创建内部元素（用于旋转）
+    this.innerElement = document.createElement('div')
+    this.innerElement.style.cssText = 'position: relative; transform-origin: center center;'
+
+    this.element.appendChild(this.innerElement)
+
+    // 获取地图容器并添加元素
+    this.addToMap()
+
+    // 初始化样式
+    this.updateContent()
+  }
+
+  private addToMap() {
+    // 腾讯地图的 DOM 结构：容器 -> div.tmap-base-layer -> canvas
+    // 我们需要找到第一个 canvas 父级作为容器
+    const mapDiv = this.map?.getContainer?.()
+    if (mapDiv) {
+      this.mapContainer = mapDiv as HTMLElement
+      this.mapContainer.appendChild(this.element)
+
+      // 监听地图移动/缩放事件，更新标记位置
+      this.onMoveEndHandler = () => this.updatePosition()
+      this.onZoomEndHandler = () => this.updatePosition()
+      this.map.on('moveend', this.onMoveEndHandler)
+      this.map.on('zoomend', this.onZoomEndHandler)
+    }
+  }
+
+  private removeFromMap() {
+    if (this.mapContainer && this.element.parentNode === this.mapContainer) {
+      this.mapContainer.removeChild(this.element)
+    }
+    // 移除事件监听器
+    if (this.onMoveEndHandler) {
+      this.map.off('moveend', this.onMoveEndHandler)
+      this.onMoveEndHandler = null
+    }
+    if (this.onZoomEndHandler) {
+      this.map.off('zoomend', this.onZoomEndHandler)
+      this.onZoomEndHandler = null
+    }
+  }
+
+  setPosition(lat: number, lng: number) {
+    this.position = { lat, lng }
+    this.updatePosition()
+  }
+
+  setStyle(style: 'arrow' | 'car' | 'person') {
+    this.style = style
+    this.updateContent()
+    this.updatePosition() // 样式可能改变尺寸
+  }
+
+  setBearing(bearing: number) {
+    this.bearing = bearing
+    this.innerElement.style.transform = `rotate(${bearing}deg)`
+  }
+
+  setMap(map: any | null) {
+    if (map) {
+      this.map = map
+      if (!this.mapContainer) {
+        this.addToMap()
+      }
+      this.updatePosition()
+    } else {
+      this.removeFromMap()
+    }
+  }
+
+  private updatePosition() {
+    if (!this.position || !this.map) return
+
+    const TMap = (window as any).TMap
+    const latLng = new TMap.LatLng(this.position.lat, this.position.lng)
+
+    // 使用 projectToContainer 将地理坐标转换为容器像素坐标
+    const pointPixel = this.map.projectToContainer(latLng)
+    if (!pointPixel) return
+
+    // 获取 DOM 元素的尺寸
+    const width = this.style === 'car' ? 60 : 36
+    const height = this.style === 'car' ? 40 : 36
+
+    // 设置位置（居中锚点）
+    this.element.style.left = `${pointPixel.x - width / 2}px`
+    this.element.style.top = `${pointPixel.y - height / 2}px`
+  }
+
+  private updateContent() {
+    // car: 60×40，arrow/person: 36×36
+    const width = this.style === 'car' ? 60 : 36
+    const height = this.style === 'car' ? 40 : 36
+
+    this.innerElement.style.width = `${width}px`
+    this.innerElement.style.height = `${height}px`
+    this.innerElement.style.display = 'flex'
+    this.innerElement.style.alignItems = 'center'
+    this.innerElement.style.justifyContent = 'center'
+
+    if (this.style === 'car') {
+      this.innerElement.className = 'animation-marker-car'
+      this.innerElement.innerHTML = `
+        <img src="/vehicle.svg" style="display: block; width: ${width}px; height: ${height}px;" />
+      `
+    } else if (this.style === 'person') {
+      this.innerElement.className = 'animation-marker-person'
+      this.innerElement.innerHTML = `
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="${width}" height="${height}">
+          <circle cx="12" cy="8" r="4" fill="#409eff" />
+          <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+          <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
+        </svg>
+      `
+    } else {
+      this.innerElement.className = 'animation-marker-arrow'
+      this.innerElement.innerHTML = `
+        <img src="/location.svg" style="display: block; width: ${width}px; height: ${height}px;" />
+      `
+    }
+  }
+}
+</script>
+
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useConfigStore } from '@/stores/config'
@@ -234,174 +380,9 @@ let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（�
 let animationPassedPolyline: any = null
 let animationRemainingPolyline: any = null
 let fullTrackPolyline: any = null  // 播放时的完整轨迹
-let animationMarker: any = null
-let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
-let currentAnimationBearing = 0
+let animationMarker: AnimationDOMOverlay | null = null
 let currentMapRotation = 0
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
-
-// 标记图标缓存（避免重复加载和绘制）
-const markerIconCache = new Map<string, string>()
-
-// 图标 URL 配置
-const ICON_URLS = {
-  car: '/vehicle.svg',
-  arrow: '/location.svg',
-  person: '',  // person 使用 SVG 字符串
-}
-
-// 创建动画标记图标
-function createAnimationIcon(style: MarkerStyle = 'arrow'): HTMLElement {
-  const div = document.createElement('div')
-  div.style.cssText = 'width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; transform-origin: center center;'
-
-  const innerDiv = document.createElement('div')
-
-  if (style === 'car') {
-    // 汽车图标 - 使用 vehicle.svg
-    innerDiv.className = 'animation-marker-car'
-    innerDiv.style.cssText = `
-      width: 40px;
-      height: 27px;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transform-origin: center center;
-    `
-    const img = document.createElement('img')
-    img.src = '/vehicle.svg'
-    img.width = 40
-    img.height = 27
-    img.style.display = 'block'
-    innerDiv.appendChild(img)
-  } else if (style === 'person') {
-    // 行人图标
-    innerDiv.className = 'animation-marker-person'
-    innerDiv.style.cssText = `
-      width: 24px;
-      height: 24px;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transform-origin: center center;
-    `
-    innerDiv.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
-        <circle cx="12" cy="8" r="4" fill="#409eff" />
-        <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
-        <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
-      </svg>
-    `
-  } else {
-    // 箭头图标 - 使用 location.svg
-    innerDiv.className = 'animation-marker-arrow'
-    innerDiv.style.cssText = `
-      width: 24px;
-      height: 24px;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transform-origin: center center;
-    `
-    const img = document.createElement('img')
-    img.src = '/location.svg'
-    img.width = 24
-    img.height = 24
-    img.style.display = 'block'
-    innerDiv.appendChild(img)
-  }
-
-  div.appendChild(innerDiv)
-  return div
-}
-
-// 生成旋转后的标记图标数据 URL
-async function generateRotatedMarkerIcon(style: MarkerStyle, bearing: number): Promise<string> {
-  const cacheKey = `${style}-${Math.round(bearing)}`
-  if (markerIconCache.has(cacheKey)) {
-    return markerIconCache.get(cacheKey)!
-  }
-
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')!
-  let width = 24, height = 24, anchor = { x: 12, y: 20 }
-
-  if (style === 'car') {
-    width = 40
-    height = 27
-    anchor = { x: 20, y: 20 }
-  }
-
-  // 设置画布大小（考虑旋转后的尺寸）
-  const diagonal = Math.sqrt(width * width + height * height)
-  canvas.width = diagonal + 10
-  canvas.height = diagonal + 10
-
-  // 保存上下文并平移到中心
-  ctx.save()
-  ctx.translate(canvas.width / 2, canvas.height / 2)
-  ctx.rotate((bearing * Math.PI) / 180)
-  ctx.translate(-width / 2, -height / 2)
-
-  if (style === 'person') {
-    // 绘制行人图标
-    // 头部
-    ctx.fillStyle = '#409eff'
-    ctx.beginPath()
-    ctx.arc(width / 2, width / 4, width / 6, 0, Math.PI * 2)
-    ctx.fill()
-
-    // 身体
-    ctx.strokeStyle = '#409eff'
-    ctx.lineWidth = 3
-    ctx.lineCap = 'round'
-    ctx.beginPath()
-    ctx.moveTo(width / 2, width / 4 + width / 6 + 2)
-    ctx.lineTo(width / 2, height - 2)
-    ctx.stroke()
-
-    // 手臂
-    ctx.beginPath()
-    ctx.moveTo(width / 2, height / 2)
-    ctx.lineTo(width / 6, height / 2)
-    ctx.stroke()
-  } else {
-    // 加载并绘制 SVG 图标（car 或 arrow）
-    return new Promise((resolve) => {
-      const img = new Image()
-      img.crossOrigin = 'anonymous'
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, width, height)
-        ctx.restore()
-
-        const dataUrl = canvas.toDataURL('image/png')
-        markerIconCache.set(cacheKey, dataUrl)
-        resolve(dataUrl)
-      }
-      img.onerror = () => {
-        // 加载失败时绘制备用图标
-        ctx.fillStyle = style === 'car' ? '#e98f36' : '#1296db'
-        ctx.beginPath()
-        ctx.arc(width / 2, height / 2, Math.min(width, height) / 3, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.restore()
-
-        const dataUrl = canvas.toDataURL('image/png')
-        markerIconCache.set(cacheKey, dataUrl)
-        resolve(dataUrl)
-      }
-      img.src = style === 'car' ? '/vehicle.svg' : '/location.svg'
-    })
-  }
-
-  ctx.restore()
-  const dataUrl = canvas.toDataURL('image/png')
-  markerIconCache.set(cacheKey, dataUrl)
-  return dataUrl
-}
 
 // 动画地图适配器实现
 const animationAdapter: AnimationMapAdapter = {
@@ -469,83 +450,26 @@ const animationAdapter: AnimationMapAdapter = {
   },
 
   setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
-    if (!TMapInstance) return
-
-    const TMap = (window as any).TMap
-    const latLng = new TMap.LatLng(position.lat, position.lng)
-
-    // 根据样式确定标记尺寸和锚点
-    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
-    const iconAnchor = style === 'car' ? { x: 20, y: 20 } : { x: 12, y: 20 }
-
-    // 生成旋转后的标记数据 URL（异步）
-    generateRotatedMarkerIcon(style, position.bearing).then(dataUrl => {
-      if (!animationMarker) {
-        animationMarker = new TMap.MultiMarker({
-          map: TMapInstance,
-          styles: {
-            'animation-marker': new TMap.MarkerStyle({
-              width: iconSize.width,
-              height: iconSize.height,
-              anchor: iconAnchor,
-              src: dataUrl,
-            }),
-          },
-          geometries: [{
-            id: 'animation-marker',
-            styleId: 'animation-marker',
-            position: latLng,
-          }],
-        })
-        currentAnimationMarkerStyle = style
-        currentAnimationBearing = position.bearing
-      } else {
-        // 更新位置
-        animationMarker.setGeometries([{
-          id: 'animation-marker',
-          styleId: 'animation-marker',
-          position: latLng,
-        }])
-
-        // 只在样式或方位变化时更新标记样式
-        if (currentAnimationMarkerStyle !== style || Math.abs(currentAnimationBearing - position.bearing) > 1) {
-          // 腾讯地图 MultiMarker 不支持 updateStyles，需要使用 setStyles
-          try {
-            animationMarker.setStyles({
-              'animation-marker': new TMap.MarkerStyle({
-                width: iconSize.width,
-                height: iconSize.height,
-                anchor: iconAnchor,
-                src: dataUrl,
-              }),
-            })
-          } catch (e) {
-            // 如果 setStyles 也失败，则删除并重新创建标记
-            console.warn('[TencentMap] setStyles failed, recreating marker:', e)
-            animationMarker.setMap(null)
-            animationMarker = new TMap.MultiMarker({
-              map: TMapInstance,
-              styles: {
-                'animation-marker': new TMap.MarkerStyle({
-                  width: iconSize.width,
-                  height: iconSize.height,
-                  anchor: iconAnchor,
-                  src: dataUrl,
-                }),
-              },
-              geometries: [{
-                id: 'animation-marker',
-                styleId: 'animation-marker',
-                position: latLng,
-              }],
-            })
-          }
-          currentAnimationMarkerStyle = style
-          currentAnimationBearing = position.bearing
-        }
+  if (!TMapInstance) return
+  if (!animationMarker) {
+    // 地图可能还未初始化，延迟创建标记
+    setTimeout(() => {
+      if (!animationMarker && TMapInstance) {
+        animationMarker = new AnimationDOMOverlay(TMapInstance)
+        animationMarker.setPosition(position.lat, position.lng)
+        animationMarker.setStyle(style)
+        animationMarker.setBearing(position.bearing)
       }
-    })
-  },
+    }, 0)
+  } else {
+    // 更新位置
+    animationMarker.setPosition(position.lat, position.lng)
+
+    // 更新样式和旋转
+    animationMarker.setStyle(style)
+    animationMarker.setBearing(position.bearing)
+  }
+},
 
   setCameraToMarker(position: MarkerPosition) {
     if (!TMapInstance) return

@@ -31,7 +31,7 @@ Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "
 ### 2. 代码修改验证
 - 所有代码更改必须编译通过
 - 运行相关测试确保功能正常
-- 前端: `npm run build`，后端: Python 语法检查
+- 前端:在 `frontend` 目录中运行 `npm run build`，后端: Python 语法检查
 
 ### 3. 任务完成标准
 - 编译通过，测试通过
@@ -527,3 +527,12 @@ frontend/src/
   - `updateStyles` API 错误：`TMap.MultiMarker` 没有 `updateStyles` 方法，改用 `setStyles` 方法
   - HUD 被覆盖：腾讯地图的控件层（`z-index: 1000`）覆盖了 HUD，将 HUD 的 `z-index` 提高到 `10000`
   - 结果：腾讯地图的动画标记和 HUD 控制都正常工作
+- **腾讯地图动画标记 DOM 实现重构**（2026-02-17）：
+  - 问题：Canvas 方式导致标记旋转时变形和闪烁
+  - 解决方案：重写 `AnimationDOMOverlay` 类，使用普通 DOM 元素 + CSS transform
+  - 核心实现：
+    - 使用 `TMap.projectToContainer()` 将地理坐标转换为像素坐标（而非不存在的 `mapFromLngLat`）
+    - 外层 `element` 绝对定位，内层 `innerElement` 用于 CSS `rotate()` 旋转
+    - 监听 `moveend` 和 `zoomend` 事件，确保地图移动/缩放时标记自动更新位置
+    - 标记尺寸：car 60×40，arrow/person 36×36
+    - z-index: 999，确保在 HUD（10000）下方

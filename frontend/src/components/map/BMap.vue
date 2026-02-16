@@ -240,30 +240,30 @@ function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
     // 汽车图标 - 使用 vehicle.svg
     return `
       <div class="animation-marker-car" style="
-        width: 40px;
-        height: 27px;
+        width: 60px;
+        height: 40px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="40" height="27" style="display: block;" />
+        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
     // 行人图标
     return `
       <div class="animation-marker-person" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="36" height="36">
           <circle cx="12" cy="8" r="4" fill="#409eff" />
           <path d="M12 13 L12 22" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
           <path d="M8 16 L16 16" stroke="#409eff" stroke-width="3" stroke-linecap="round" />
@@ -274,15 +274,15 @@ function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
     // 箭头图标 - 使用 location.svg
     return `
       <div class="animation-marker-arrow" style="
-        width: 24px;
-        height: 24px;
+        width: 36px;
+        height: 36px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/location.svg" width="24" height="24" style="display: block;" />
+        <img src="/location.svg" width="36" height="36" style="display: block;" />
       </div>
     `
   }
@@ -370,8 +370,8 @@ const animationAdapter: AnimationMapAdapter = {
       style
     })
 
-    // 根据样式确定标记尺寸和锚点
-    const iconSize = style === 'car' ? { width: 40, height: 27 } : { width: 24, height: 24 }
+    // 根据样式确定标记尺寸和锚点（car 宽高比 1.5:1）
+    const iconSize = style === 'car' ? { width: 60, height: 40 } : { width: 36, height: 36 }
 
     if (!animationMarker) {
       // 使用 Label 创建自定义 HTML 标记
