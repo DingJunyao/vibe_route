@@ -1,21 +1,8 @@
 <!-- frontend/src/components/animation/AnimationHUD.vue -->
 <template>
   <div class="animation-hud">
-    <div class="hud-content">
-      <!-- 第一行：播放状态 + 倍速 -->
-      <div class="hud-row hud-controls">
-        <el-button
-          :icon="isPlaying ? VideoPause : VideoPlay"
-          circle
-          size="small"
-          @click="$emit('toggle-play')"
-        />
-        <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
-          {{ playbackSpeed }}x
-        </div>
-      </div>
-
-      <!-- 第二行：进度条 -->
+    <div class="hud-content" ref="hudContentRef">
+      <!-- 第一行：进度条 -->
       <div class="hud-row hud-progress">
         <el-slider
           :model-value="progressPercent"
@@ -27,8 +14,17 @@
         </div>
       </div>
 
-      <!-- 第三行：功能按钮 -->
-      <div class="hud-row hud-actions">
+      <!-- 第二行：播放控制 + 倍速 + 功能按钮 -->
+      <div class="hud-row hud-controls">
+        <el-button
+          :icon="isPlaying ? VideoPause : VideoPlay"
+          size="small"
+          @click="$emit('toggle-play')"
+        />
+        <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
+          {{ playbackSpeed }}x
+        </div>
+        <div class="divider" />
         <el-tooltip :content="cameraModeTooltip">
           <el-button
             :icon="getCameraModeIcon()"
@@ -76,7 +72,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import {
   VideoPlay,
   VideoPause,
@@ -112,10 +108,37 @@ const emit = defineEmits<{
   (e: 'toggle-info-panel'): void
   (e: 'cycle-marker-style'): void
   (e: 'export'): void
+  (e: 'height-changed', height: number): void
 }>()
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4, 8, 16] as const
 const showSpeedMenu = ref(false)
+const hudContentRef = ref<HTMLElement | null>(null)
+
+// 计算 HUD 高度并 emit
+function emitHeight() {
+  if (hudContentRef.value) {
+    const height = hudContentRef.value.offsetHeight
+    emit('height-changed', height)
+  }
+}
+
+onMounted(() => {
+  // 初始计算高度
+  emitHeight()
+
+  // 监听尺寸变化（比如倍速菜单展开/收起）
+  if (hudContentRef.value) {
+    const resizeObserver = new ResizeObserver(() => {
+      emitHeight()
+    })
+    resizeObserver.observe(hudContentRef.value)
+
+    onUnmounted(() => {
+      resizeObserver.disconnect()
+    })
+  }
+})
 
 const progressPercent = computed(() => {
   if (props.totalDuration === 0) return 0
@@ -137,12 +160,13 @@ function formatProgressTooltip(value: number): string {
   return formatTime(time)
 }
 
-function handleSeek(value: number) {
+function handleSeek(value: number | number[]) {
   // 防止无效的 seek 值
-  if (isNaN(value) || value < 0 || value > 100 || props.totalDuration <= 0) {
+  const numValue = Array.isArray(value) ? value[0] : value
+  if (numValue === undefined || isNaN(numValue) || numValue < 0 || numValue > 100 || props.totalDuration <= 0) {
     return
   }
-  const time = (props.totalDuration * value) / 100
+  const time = (props.totalDuration * numValue) / 100
   emit('seek', time)
 }
 
@@ -185,7 +209,14 @@ function getCameraModeIcon() {
 }
 
 .hud-controls {
-  justify-content: space-between;
+  justify-content: center;
+}
+
+.divider {
+  width: 1px;
+  height: 16px;
+  background-color: var(--el-border-color-lighter);
+  margin: 0 4px;
 }
 
 .speed-display {
@@ -203,23 +234,20 @@ function getCameraModeIcon() {
 }
 
 .hud-progress {
-  flex-direction: column;
-  align-items: stretch;
+  align-items: center;
+  flex: 1;
 }
 
 .hud-progress :deep(.el-slider) {
   margin: 0;
+  flex: 1;
 }
 
 .time-display {
-  text-align: center;
   font-size: 12px;
   color: var(--el-text-color-secondary);
-  margin-top: 4px;
-}
-
-.hud-actions {
-  justify-content: center;
+  min-width: 100px;
+  text-align: center;
 }
 
 .speed-menu {

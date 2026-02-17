@@ -472,6 +472,16 @@ const animationAdapter: AnimationMapAdapter = {
       // 恢复双色轨迹（由 setPassedSegment 重新绘制）
     }
   },
+
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  fitTrackWithPadding(bottomPaddingPx: number) {
+    if (!map.value) return
+    // 计算底部 padding 的百分比（相对于容器高度）
+    const containerHeight = map.value.getContainer().offsetHeight
+    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
+    // 调用现有的 fitBounds 方法，使用额外的底部 padding
+    fitBounds(paddingPercent)
+  },
 }
 
 // 根据坐标系类型获取 CRS
@@ -2494,6 +2504,24 @@ function clearTracks() {
     map.value!.removeLayer(marker)
   })
   markers.value = []
+
+  // 清除动画相关元素
+  if (animationMarker) {
+    map.value!.removeLayer(animationMarker)
+    animationMarker = null
+  }
+  if (animationPassedPolyline) {
+    map.value!.removeLayer(animationPassedPolyline)
+    animationPassedPolyline = null
+  }
+  if (animationRemainingPolyline) {
+    map.value!.removeLayer(animationRemainingPolyline)
+    animationRemainingPolyline = null
+  }
+  if (fullTrackPolyline) {
+    map.value!.removeLayer(fullTrackPolyline)
+    fullTrackPolyline = null
+  }
 }
 
 // 更新轨迹（当底图切换或数据变化时）

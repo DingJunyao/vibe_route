@@ -295,7 +295,6 @@ function rotateBaiduMarker(bearing: number) {
   const labelDiv = document.querySelector(`.BMapLabel .${currentAnimationMarkerStyle === 'car' ? 'animation-marker-car' : currentAnimationMarkerStyle === 'person' ? 'animation-marker-person' : 'animation-marker-arrow'}`)
   if (labelDiv && labelDiv instanceof HTMLElement) {
     labelDiv.style.transform = `rotate(${bearing}deg)`
-    console.log('[BMap] rotateMarker applied:', { bearing, element: labelDiv })
   }
 }
 
@@ -362,14 +361,6 @@ const animationAdapter: AnimationMapAdapter = {
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const point = new BMapClass.Point(position.lng, position.lat)
 
-    // 调试：输出标记位置
-    console.log('[BMap] setMarkerPosition:', {
-      lng: position.lng,
-      lat: position.lat,
-      bearing: position.bearing,
-      style
-    })
-
     // 根据样式确定标记尺寸和锚点（car 宽高比 1.5:1）
     const iconSize = style === 'car' ? { width: 60, height: 40 } : { width: 36, height: 36 }
 
@@ -432,6 +423,14 @@ const animationAdapter: AnimationMapAdapter = {
 
   getMapRotation() {
     return 0
+  },
+
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  fitTrackWithPadding(bottomPaddingPx: number) {
+    if (!BMapInstance) return
+    const containerHeight = BMapInstance.getSize().height
+    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
+    fitBounds(paddingPercent)
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）

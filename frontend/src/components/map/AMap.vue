@@ -647,6 +647,16 @@ const animationAdapter: AnimationMapAdapter = {
       // 恢复双色轨迹（由 setPassedSegment 重新绘制）
     }
   },
+
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  fitTrackWithPadding(bottomPaddingPx: number) {
+    if (!AMapInstance) return
+    // 计算底部 padding 的百分比（相对于容器高度）
+    const containerHeight = (AMapInstance.getSize() as any).height
+    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
+    // 调用现有的 fitBounds 方法，使用额外的底部 padding
+    fitBounds(paddingPercent)
+  },
 }
 
 // 计算点到线段的最近点
@@ -1705,6 +1715,40 @@ function clearTracks() {
     }
   })
   coloredPolylines = []
+
+  // 清除动画相关元素
+  if (animationMarker) {
+    try {
+      AMapInstance.remove(animationMarker)
+    } catch (e) {
+      // ignore
+    }
+    animationMarker = null
+  }
+  if (animationPassedPolyline) {
+    try {
+      AMapInstance.remove(animationPassedPolyline)
+    } catch (e) {
+      // ignore
+    }
+    animationPassedPolyline = null
+  }
+  if (animationRemainingPolyline) {
+    try {
+      AMapInstance.remove(animationRemainingPolyline)
+    } catch (e) {
+      // ignore
+    }
+    animationRemainingPolyline = null
+  }
+  if (fullTrackPolyline) {
+    try {
+      AMapInstance.remove(fullTrackPolyline)
+    } catch (e) {
+      // ignore
+    }
+    fullTrackPolyline = null
+  }
 }
 
 // 更新轨迹

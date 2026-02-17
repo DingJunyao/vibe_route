@@ -19,6 +19,7 @@
       @toggle-info-panel="handleToggleInfoPanel"
       @cycle-marker-style="handleCycleMarkerStyle"
       @export="handleExport"
+      @height-changed="handleHeightChanged"
     />
 
     <!-- 信息浮层 -->
@@ -43,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAnimationStore } from '@/stores/animation'
 import { useAnimationMap } from '@/composables/animation/useAnimationMap'
 import AnimationHUD from './AnimationHUD.vue'
@@ -70,7 +71,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const animationStore = useAnimationStore()
-const { setMarkerPosition, setPassedSegment, setCameraToMarker, setAnimationPlaying } = useAnimationMap()
+const { setMarkerPosition, setPassedSegment, setCameraToMarker, setAnimationPlaying, fitTrackWithPadding } = useAnimationMap()
 
 // 状态
 const isInitialized = ref(false)
@@ -78,6 +79,7 @@ const animationFrameId = ref<number | null>(null)
 const lastTimestamp = ref(0)
 const lastUpdateTime = ref(0)  // 上次更新地图的时间
 const showExportDialog = ref(false)
+const hudHeight = ref(0)
 
 // 地图更新节流：每帧最多更新一次
 const UPDATE_THROTTLE_MS = 33  // 约30fps
@@ -206,9 +208,7 @@ async function handleExportVideo(config: ExportConfig) {
       const downloadUrl = await exportWithPlaywright(
         props.trackId,
         config,
-        (progress) => {
-          console.log('Export progress:', progress)
-        }
+        () => {}
       )
       downloadFile(downloadUrl, generateExportFilename(props.trackId, config.format))
       ElMessage.success('导出完成')
@@ -224,6 +224,17 @@ async function handleExportVideo(config: ExportConfig) {
   } catch (e: any) {
     console.error('Export error:', e)
     ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
+  }
+}
+
+// HUD 高度变化处理
+function handleHeightChanged(height: number) {
+  hudHeight.value = height
+  // 如果当前是全轨迹画面模式，立即调整地图视野
+  if (animationStore.cameraMode === 'full') {
+    // 额外增加 20px 作为间距
+    const padding = height + 20
+    fitTrackWithPadding(padding)
   }
 }
 
@@ -307,10 +318,38 @@ watch(() => animationStore.isPlaying, (isPlaying) => {
 })
 
 // 监听相机模式变化，刷新轨迹线
-watch(() => animationStore.cameraMode, () => {
+watch(() => animationStore.cameraMode, (newMode) => {
   // 相机模式切换时，如果是播放状态，重新绘制轨迹线
   if (animationStore.isPlaying) {
     setAnimationPlaying(true)
+  }
+  // 切换到全轨迹画面时，调整地图视野以避免 HUD 遮挡
+  if (newMode === 'full' && hudHeight.value > 0) {
+    const padding = hudHeight.value + 20
+    fitTrackWithPadding(padding)
+  }
+})
+
+// 监听 HUD 高度变化
+watch(hudHeight, (newHeight) => {
+  // 如果是全轨迹画面模式，调整地图视野
+  if (animationStore.cameraMode === 'full' && newHeight > 0) {
+    const padding = newHeight + 20
+    fitTrackWithPadding(padding)
+  }
+})
+
+// 监听地图切换，全轨迹模式下重新调整视野
+watch(() => props.mapProvider, () => {
+  // 如果是全轨迹画面模式，重新调整地图视野
+  if (animationStore.cameraMode === 'full' && hudHeight.value > 0) {
+    // 延迟执行，等待地图初始化完成
+    nextTick(() => {
+      setTimeout(() => {
+        const padding = hudHeight.value + 20
+        fitTrackWithPadding(padding)
+      }, 500)
+    })
   }
 })
 

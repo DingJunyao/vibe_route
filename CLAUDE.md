@@ -536,3 +536,16 @@ frontend/src/
     - 监听 `moveend` 和 `zoomend` 事件，确保地图移动/缩放时标记自动更新位置
     - 标记尺寸：car 60×40，arrow/person 36×36
     - z-index: 999，确保在 HUD（10000）下方
+
+### 2026-02-18
+
+- **轨迹动画功能完善**：
+  - 在 BMap.vue 的 `animationAdapter` 中添加了缺失的 `fitTrackWithPadding(bottomPaddingPx: number)` 方法
+  - 修复了全轨迹模式下切换地图时百度地图不缩放的问题
+  - 清理了回放时产生的大量调试日志：
+    - 删除了 `[BMap] setMarkerPosition` 每帧输出
+    - 删除了 `[BMap] rotateMarker applied` 标记旋转日志
+    - 删除了 `[AnimationMap]` composable 中的所有日志（adapter registered/unregistered, setPassedSegment, setMarkerPosition, setCameraToMarker, fitTrackWithPadding）
+    - 删除了 `[TrackAnimationPlayer]` 中的 export progress 和地图切换日志
+  - 保留了错误相关的 `console.warn`（如不支持旋转、无法获取坐标等）
+  - 结果：回放时日志输出大幅减少，便于调试查看重要信息

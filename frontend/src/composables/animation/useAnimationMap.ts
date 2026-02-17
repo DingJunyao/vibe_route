@@ -23,6 +23,9 @@ export interface AnimationMapAdapter {
 
   // 设置动画播放状态（避免双色轨迹闪烁）
   setAnimationPlaying(playing: boolean): void
+
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  fitTrackWithPadding?(bottomPaddingPx: number): void
 }
 
 // 全局适配器（真正的单例）
@@ -36,30 +39,25 @@ export function useAnimationMap() {
   // 注册适配器
   function registerAdapter(adapter: AnimationMapAdapter) {
     globalAdapter = adapter
-    console.log('[AnimationMap] Adapter registered:', adapter)
   }
 
   // 取消注册
   function unregisterAdapter() {
     globalAdapter = null
-    console.log('[AnimationMap] Adapter unregistered')
   }
 
   // 设置双色轨迹
   function setPassedSegment(start: number, end: number) {
-    console.log('[AnimationMap] setPassedSegment:', start, '->', end)
     globalAdapter?.setPassedSegment(start, end)
   }
 
   // 设置移动标记
   function setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
-    console.log('[AnimationMap] setMarkerPosition:', position, 'style:', style)
     globalAdapter?.setMarkerPosition(position, style)
   }
 
   // 设置地图中心
   function setCameraToMarker(position: MarkerPosition) {
-    console.log('[AnimationMap] setCameraToMarker:', position)
     globalAdapter?.setCameraToMarker(position)
   }
 
@@ -92,6 +90,11 @@ export function useAnimationMap() {
     globalAdapter?.setAnimationPlaying(playing)
   }
 
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  function fitTrackWithPadding(bottomPaddingPx: number) {
+    globalAdapter?.fitTrackWithPadding?.(bottomPaddingPx)
+  }
+
   // 辅助函数
   function calculateShortestRotation(from: number, to: number): number {
     let delta = to - from
@@ -116,5 +119,6 @@ export function useAnimationMap() {
     setCameraToMarker,
     setMapRotation,
     setAnimationPlaying,
+    fitTrackWithPadding,
   }
 }

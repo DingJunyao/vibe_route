@@ -543,6 +543,16 @@ const animationAdapter: AnimationMapAdapter = {
       // 恢复双色轨迹（由 setPassedSegment 重新绘制）
     }
   },
+
+  // 调整地图视野以适应轨迹（添加底部 padding）
+  fitTrackWithPadding(bottomPaddingPx: number) {
+    if (!TMapInstance) return
+    // 计算底部 padding 的百分比（相对于容器高度）
+    const containerHeight = TMapInstance.getContainer().offsetHeight
+    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
+    // 调用现有的 fitBounds 方法，使用额外的底部 padding
+    fitBounds(paddingPercent)
+  },
 }
 
 // 计算两点距离
@@ -1634,6 +1644,40 @@ function drawTracks() {
     }
   })
   coloredPolylineLayers = []
+
+  // 清除动画相关元素
+  if (animationMarker) {
+    try {
+      animationMarker.destroy()
+    } catch (e) {
+      // ignore
+    }
+    animationMarker = null
+  }
+  if (animationPassedPolyline) {
+    try {
+      animationPassedPolyline.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+    animationPassedPolyline = null
+  }
+  if (animationRemainingPolyline) {
+    try {
+      animationRemainingPolyline.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+    animationRemainingPolyline = null
+  }
+  if (fullTrackPolyline) {
+    try {
+      fullTrackPolyline.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+    fullTrackPolyline = null
+  }
 
   // 重置轨迹点数据
   trackPoints = []
