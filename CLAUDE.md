@@ -2,550 +2,106 @@
 
 Vibe Route - 全栈 Web 轨迹管理系统
 
-## 项目概述
+## 开发情况
 
-基于 [gpxutil](https://github.com/DingJunyao/gpxutil) 构建。用户上传 GPX 文件，系统解析轨迹、坐标转换（WGS84/GCJ02/BD09）、地理编码填充、地图可视化。
+本项目为 monorepo 项目，包含前端和后端。
 
-## 开发环境
+### 前端
 
-**Python**: Anaconda 环境 `vibe_route`，所有 Python 操作需切换到此环境。如果没有 Anaconda，请寻找项目是否有 venv。
-**数据库**: 查看 `backend/.env` 确定。
-**浏览器**: 如果是在 Windows 上，开发者用的是 Edge，需远程调试时，让用户运行：
+技术栈：TypeScrpt + Vue + Vite + Element UI
 
-```powershell
-Stop-Process -Name msedge -Force; Start-Sleep -Milliseconds 500; Start-Process "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" -ArgumentList "--remote-debugging-port=9222"
-```
+目录：`frontend`，所有前端相关操作均在此目录下进行。
 
-在 Linux 上，用的是 Chromium。
+开发 URL：`http://localhost:5173`
 
-**开发服务**: 前后端热重载已开启，任务中不再启动/关闭服务。
+通常会打开浏览器调试。如有需要，可以使用 Chrome 开发者工具 MCP 查看页面情况，操作页面。由于一般情况下已经打开了页面，所以不要使用 Playwright。
 
-## 工作流规范
+响应式设计，移动端和桌面端的断点为 1366 px。
 
-### 1. 问题诊断流程
-- 优先使用 Chrome DevTools MCP 分析：控制台错误、网络请求、DOM 结构
-- 难以描述时添加调试日志，通过 MCP 或用户提供结果分析
-- 检查数据库状态（使用 MCP 或 SQL 查询）
-- 检查前端显示效果（使用 MCP 截图）
+开发时要兼顾不同地图引擎和桌面、移动端的体验。
 
-### 2. 代码修改验证
-- 所有代码更改必须编译通过
-- 运行相关测试确保功能正常
-- 前端:在 `frontend` 目录中运行 `npm run build`，后端: Python 语法检查
+目前需要考虑的地图引擎如下：
 
-### 3. 任务完成标准
-- 编译通过，测试通过
-- 大任务完成后整理要点到本文件
-- 保持文件大小 < 40KB（压缩历史版本到独立文件）
+- 高德地图
+- 百度地图（分为 GL 版本和 Legacy 版本，前者常用，后者只在一些特殊场景下使用）
+- 腾讯地图
+- Leaflet：目前支持高德地图、百度地图、腾讯地图、天地图、OpenStreetMap。
 
-### tips
+### 后端
 
-当遇到 Edit 失败报错时，使用 serena 来编辑代码。
+技术栈：Python + FastAPI
 
-For map coordinate conversions, always use the MapService.covert_coords method with provider-specific transformations. AMap/Tencent use GCJ-02, Baidu uses BD-09, Leaflet uses WGS-84.
+目录：`backend`，所有后端相关操作均在此目录下进行，并且使用虚拟环境。
 
-For text alignment and wrapping features: always test justify overflow, control point positioning when toggling wrap mode, and width adjustment in non-wrap mode before considering implementation complete.
+虚拟环境：先找 `conda` 下的 `vibe_route` 环境，没有则使用 `.venv` 下的环境。
 
-When handling Chinese characters in font uploads or text display, always use UTF-8 encoding and check for full-width vs single-width quote/comparison operator issues.
+### 数据库
 
-For undo/redo implementation: always debounce state recording during drag operations, avoid naming conflicts with browser 'history' object, and test multi-step undo jumps.
+数据库：`backend/.env` 文件中指定。一般情况下为 `backend/data/vibe_route.db`。
 
-For control handles on bounding boxes: use shouldShowHandle function instead of hasLineHeight in v-if conditions, align handles to bounding box edges, and display N/S handles when acting as anchors even without line wrapping.
+数据库操作优先使用相应的 MCP。
 
-Before fixing any UI bug, first use chrome-devtools to take a snapshot and inspect the computed CSS styles, Vue component state, and actual rendered DOM. Then identify the root cause before editing code.
+开发过程中不要自行修改数据库，除非开发者明确允许此操作。
 
-After implementing any text alignment or control point feature, test: (1) justify mode overflow, (2) wrap mode toggle detaching controls, (3) width adjustment when wrap disabled, (4) coordinate switching across AMap/Baidu/Tencent/Leaflet, (5) control point display after provider switch. Only consider complete when all pass.
+表结构需要变动时，除了维护 alembic 外，还需要提供对应的 SQL 脚本，包括一下数据库引擎的版本：
 
-For any coordinate or marker-related fix: (1) Test coordinate conversion works for all four providers (AMap=GCJ-02, Baidu=BD-09, Tencent=GCJ-02, Leaflet=WGS-84), (2) Verify green latest-point markers display correctly on each, (3) Switch between providers and confirm control points still render, (4) Use MapService.convert_coords consistently, never manually transform coordinates.
+- SQLite
+- MySQL
+- PostgreSQL（未启用 PostGIS 支持）
+- PostgreSQL（启用 PostGIS 支持）（如与 PostGIS 无关，则不需要此项）
 
-## 快速命令
+### 测试
 
-**ARM 架构（树莓派等）**：
+所有操作均需确保无语法层面上的报错，构建、编译通过。
 
-> **注意**：piwheels 上某些包（如 uvicorn 旧版本）存在元数据损坏，会导致 pip 依赖解析卡住。建议直接从 PyPI 安装所有依赖。
+### 记录要点
 
-```bash
-# 1. 安装 Rust 工具链（编译 bcrypt、asyncmy 等）
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source $HOME/.cargo/env
+当某项开发工作完成、告一段落或有关键性进展时，需要自动记录要点。用户要求记录要点时，也要记录。
 
-# 2. 安装系统编译依赖
-sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
+要点按照以下的索引记录。
 
-# 3. 安装 Python 依赖
-cd backend
-python -m venv venv
-source venv/bin/activate
+注意：为了节约 token，即便用户要求记录到 CLAUDE.md，也要按照下面的索引记录。
 
-# 4. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+## 项目索引
 
-# 5. 安装 Playwright 浏览器
-playwright install chromium
+本项目文档已模块化拆分，按需加载以提高性能。详细信息请查看 `./cc` 目录下的对应文件。
 
-# 6. 配置环境
-cp .env.example .env
-mkdir -p data/uploads data/temp data/exports data/road_signs
+### 文档模块
 
-# 7. 运行
-uvicorn app.main:app --reload
-alembic upgrade head
-```
+| 文件 | 描述 | 加载场景 |
+|------|------|----------|
+| [`cc/overview.md`](./cc/overview.md) | 项目概述、开发环境 | 项目初始化、环境配置 |
+| [`cc/workflow.md`](./cc/workflow.md) | 工作流规范、测试、审查 | 问题诊断、代码审查 |
+| [`cc/quick-commands.md`](./cc/quick-commands.md) | 快速命令（ARM/x86） | 环境搭建、服务启动 |
+| [`cc/architecture.md`](./cc/architecture.md) | 架构核心、认证、多坐标系 | 架构设计、功能开发 |
+| [`cc/map-components.md`](./cc/map-components.md) | 地图组件、缩放 | 地图相关开发 |
+| [`cc/features.md`](./cc/features.md) | 各功能模块详解 | 功能开发、问题修复 |
+| [`cc/development.md`](./cc/development.md) | 开发规范、UI规范 | 新功能开发、UI 调整 |
+| [`cc/changelog.md`](./cc/changelog.md) | 变更历史 | 版本升级、问题排查 |
 
-**x86/x64 架构**：
+## 快速导航
 
-```bash
-# 后端
-cd backend && uvicorn app.main:app --reload
+### 环境搭建
+- ARM 平台安装 → [`cc/quick-commands.md`](./cc/quick-commands.md)
+- x86 平台安装 → [`cc/quick-commands.md`](./cc/quick-commands.md)
 
-# 前端
-cd frontend && npm run dev
+### 问题诊断
+- 诊断流程 → [`cc/workflow.md`](./cc/workflow.md)
+- MCP 使用 → [`cc/workflow.md`](./cc/workflow.md)
 
-# 数据库迁移
-cd backend && alembic upgrade head
-```
+### 开发任务
+- 添加 API 端点 → [`cc/development.md`](./cc/development.md)
+- 添加前端页面 → [`cc/development.md`](./cc/development.md)
+- 数据库模型 → [`cc/architecture.md`](./cc/architecture.md)
 
-## 架构核心
+### 地图相关
+- Tooltip 定位 → [`cc/map-components.md`](./cc/map-components.md)
+- 坐标系转换 → [`cc/architecture.md`](./cc/architecture.md)
+- 地图缩放 → [`cc/map-components.md`](./cc/map-components.md)
 
-### 认证
-- 前端 SHA256 加密 → 后端 bcrypt 二次哈希
-- 公开配置 `/api/auth/config` vs 管理员 `/admin/config`
-
-### 多坐标系
-- WGS84（GPS 原始）、GCJ02（高德/腾讯）、BD09（百度）
-- 地图组件自动切换对应坐标
-
-前端运行在 `http://localhost:5173`
-
-### Testing
-
-用户会在开发过程中对项目多次测试。当用户对项目中存在的问题询问时，除一般的逻辑外，还应当考虑到：
-
-- 数据库里面的数据
-- 前端的显示效果
-
-这些都可以使用插件或 MCP 解决。优先考虑 MCP。
-
-### Reviewing
-
-在合适的情况下，或者是用户提出审查项目时，使用 code-review-excellence skill 来审查这个项目。排除 ./ref_gpxutil。
-
-审查结果存入 ./ref/CODE_REVIEW_REPORT.md，如果已存在，则覆盖它。
-
-## Summarize
-
-每次大的更改，当用户提出整理要点，都要把要点记录在本文件中。
-
-## Architecture Overview
-
-### 数据库驱动与平台兼容性
-
-项目支持三种数据库：SQLite、MySQL、PostgreSQL。不同平台下驱动选择：
-
-| 驱动 | 用途 | x86/x64 | ARM (树莓派) |
-|------|------|---------|--------------|
-| `aiosqlite` | SQLite 异步 | ✅ wheel | ✅ wheel |
-| `asyncmy` | MySQL 异步（高性能） | ✅ wheel | ❌ 需 Rust 编译 |
-| `aiomysql` | MySQL 异步（纯 Python） | ✅ | ✅ wheel |
-| `asyncpg` | PostgreSQL 异步 | ✅ wheel | ❌ 需编译 |
-| `pymysql` | Alembic 迁移（MySQL） | ✅ | ✅ wheel |
-| `psycopg2-binary` | Alembic 迁移（PostgreSQL） | ✅ wheel | ❌ 需编译 |
-| `bcrypt` | 密码哈希 | ✅ wheel | ❌ 需 Rust 编译 |
-
-**ARM 平台安装注意事项**：
-
-1. **必须安装 Rust 工具链**：编译 `bcrypt` 和 `asyncmy`
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   source $HOME/.cargo/env
-   ```
-
-2. **从 PyPI 安装**：piwheels 可能没有某些包的 wheel
-   ```bash
-   pip install asyncmy bcrypt psycopg2-binary asyncpg --index-url https://pypi.org/simple
-   ```
-
-3. **系统依赖**：
-   ```bash
-   sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
-   ```
-
-### 认证流程（双重加密）
-
-密码在传输和存储过程中经过两次加密：
-
-1. **前端加密** ([`crypto.ts`](frontend/src/utils/crypto.ts))：SHA256 加密
-2. **后端存储** ([`security.py`](backend/app/core/security.py))：bcrypt 二次哈希
-
-### 公开配置 vs 管理员配置
-
-- **公开配置** (`GET /api/auth/config`)：任何用户可访问，只返回地图相关配置
-- **管理员配置** (`GET /api/admin/config`)：需要管理员权限，返回完整配置
-
-前端 [`config.ts`](frontend/src/stores/config.ts) store 会根据用户权限自动选择合适的 API。
-
-### 多坐标系支持
-
-轨迹点存储三种坐标系：
-
-- **WGS84**: 国际标准坐标系（GPS 原始坐标）
-- **GCJ02**: 中国火星坐标系（高德、腾讯地图、天地图）
-- **BD09**: 百度坐标系
-
-地图组件根据选择的底图自动使用对应坐标。
-
-### 用户状态字段
-
-- **`is_valid`**: 软删除标记，查询用户时会过滤 `is_valid = False` 的记录
-- **`is_active`**: 账户启用状态，控制用户能否登录
-
-用户创建时会复用已删除（`is_valid = False`）用户的记录。
-
-### 数据库模型
-
-核心模型：
-
-- [`User`](backend/app/models/user.py): 用户表，首位注册用户自动成为管理员
-- [`Track`](backend/app/models/track.py): 轨迹表
-- [`TrackPoint`](backend/app/models/track.py): 轨迹点表
-- [`Task`](backend/app/models/task.py): 异步任务
-- [`Config`](backend/app/models/config.py): 系统配置
-- [`LiveRecording`](backend/app/models/live_recording.py): 实时记录
-
-所有模型继承 [`AuditMixin`](backend/app/models/base.py)，包含 `created_at`, `updated_at`, `created_by`, `updated_by`, `is_valid` 字段。
-### 用户状态
-- `is_valid`: 软删除标记
-- `is_active`: 账户启用状态
-- 创建时复用已删除用户记录
-
-### 路由守卫
-- `guest`: 未登录可访问
-- `requiresAuth`: 需登录
-- `requiresAdmin`: 需管理员
-
-## 响应式设计
-
-- 移动端断点: `screenWidth <= 1366px`
-- 高度单位: `vh` 实现，如 `height: calc(100vh - 60px)`
-- 地图重绘: `ResizeObserver` 监听容器变化
-
-### 布局规则
-| 页面 | 桌面端 (height>=800px) | 桌面端 (height<800px) | 移动端 |
-|------|------------------------|----------------------|--------|
-| 首页 | 统计固定 + 地图填充 | 独立滚动 | 单列流式 |
-| 详情页 | 左侧固定 + 右侧滚动 | 地图 40vh + 图表 22vh | 地图 30vh + 图表 20vh |
-
-## 地图组件
-
-### Tooltip 定位（重要）
-- **问题**: AMap 内部元素阻止事件冒泡
-- **解决**: document 级别监听 mousemove，检查鼠标是否在容器内
-- **关键代码** ([`AMap.vue`](frontend/src/components/map/AMap.vue)):
-  ```typescript
-  documentMouseMoveHandler = (e: MouseEvent) => {
-    // 图表容器检测 - 避免与图表 tooltip 冲突
-    const chartContainer = document.querySelector('.chart')
-    if (chartContainer?.contains(e.target)) return
-
-    // 容器边界检测
-    const rect = mapContainer.value.getBoundingClientRect()
-    if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
-      hideMarker()
-      return
-    }
-    // 坐标转换处理...
-  }
-  ```
-
-### 地图引擎差异
-| 功能 | 高德 | 百度 GL | 百度 Legacy | 腾讯 | Leaflet |
-|------|------|---------|-------------|--------|---------|
-| 坐标转像素 | `lngLatToContainer` | `pointToOverlayPixel` | `pointToPixel` | `projectToContainer` | `latLngToContainerPoint` |
-| Zoom 范围 | 3-20 | 3-20 | 3-18 | 3-20 | 1-20 |
-| 事件监听 | DOM 捕获 | addEventListener | addEventListener | DOM 容器 | 地图实例 |
-
-### 百度地图特殊处理
-1. InfoWindow 冲突: 先 `closeInfoWindow()` 再 `setTimeout(() => openInfoWindow(), 0)`
-2. 海报生成: 强制使用后端 Playwright（前端 html2canvas 无法捕获 SVG 轨迹）
-
-## 地图缩放（海报导出）
-
-**公式**: `targetContentWidth = containerWidth * 0.9 / scale`
-
-### 各地图缩放方式
-- **高德/腾讯/百度 GL**: fitBounds → 延迟获取 zoom → 像素测量 → `Math.log2(targetWidth/currentWidth)` 调整
-- **百度 Legacy**: 先 zoom=12 建立基准 → 测量 → 智能舍入（≥0.9 尝试+1 级验证）→ setZoom
-- **Leaflet**: 直接地理范围计算，`targetZoom = Math.log2(40075km / (256 * kmPerPixel)) + offset`
-
-## 实时记录
-
-### 时间字段规范
-| 字段 | 含义 | 用途 |
-|------|------|------|
-| `last_upload_at` | LiveRecording 上传时间 | 备用 |
-| `last_point_time` | GPS 时间 | 对话框"轨迹点时间" |
-| `last_point_created_at` | 服务器接收时间 | **"最近更新"统一使用此字段** |
-
-### 核心逻辑
-- **乱序处理**: 前端接收新点后按 `time` 排序
-- **point_index**: 实时记录期间可能不准，停止时自动修复
-- **查询排序**: 始终使用 `.order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())`
-
-### WebSocket
-- 连接: `/api/ws/live-recording/{recording_id}?token={TOKEN}`
-- 自动重连: 3 秒间隔
-- 地址动态适配: [`origin.ts`](frontend/src/utils/origin.ts) 根据访问地址判断
-
-## 地理编码
-
-### 本地反向编码
-- **边界框过滤**: 快速获取候选区域
-- **Shapely 精确匹配**: `polygon.contains(point)` 判断
-- **无 geometry**: 跳过（不回退到边界框）
-
-### DataV 导入
-- **在线数据**: GCJ02 坐标，导入时转 WGS84
-- **压缩包**: 假设 WGS84
-- **特殊行政区划**:
-  - 直辖市 (110000/120000/310000/500000): 区县直属省级
-  - 不设区地级市 (东莞/中山/儋州/嘉峪关): 保留市级，无镇级
-  - 省辖县级 (仙桃/潜江/天门/济源): 分类为 `area` 级别
-
-## PostGIS
-
-### 架构
-- `admin_divisions.geometry`: GeoJSON 多边形（shapely 用）
-- `admin_divisions_spatial.geom`: PostGIS 几何（空间查询用）
-- **手动同步**: 后台管理提供同步功能
-
-## 地理信息编辑器
-
-### 撤销/重做
-- 快捷键: Ctrl+Z 撤销, Ctrl+Y 重做
-- 历史结构: `history[i].after` 是撤销后应恢复的状态
-- 类型扩展: `'edit' | 'resize' | 'move'`
-
-### 刻度条
-- 边界扩展: 基于可视区域点时间扩展
-- 点索引定位: `findPointIndexByTime` 确保刻度与点一致
-- 级别去重: 主刻度 5%, 次刻度 1%, 三级 0.2%
-
-## 轨迹插值
-
-### 三阶段流程
-1. **选择区段**: 表格展示可插值区段（间隔 ≥ 最小间隔）
-2. **绘制路径**: 地图点击添加控制点，支持拖拽、撤销/重做
-3. **预览结果**: 禁用编辑，确认后保存
-
-### 控制点手柄
-- `handlesLocked = true`: 拖拽一个手柄，另一个对称移动
-- `handlesLocked = false`: 手柄独立移动
-
-## 覆盖层模板编辑器
-
-### 坐标系统规范
-| 数据 | 单位 | 范围 |
-|------|------|------|
-| `position.x/y` | 画布比例 | -0.5 到 0.5 |
-| `layout.width/height` | 画布比例 | 0 到 1 |
-| `style.font_size` | 画布比例 | 正数 |
-
-### 转换公式
-```javascript
-// 画布比例 → 画布像素
-offsetX = element.position.x * canvasWidth
-
-// 画布像素 → 预览百分比 (0-100)
-leftPct = (elemX * scaleToPreviewX) / previewBaseWidth * 100
-
-// 预览百分比 → 画布比例
-deltaCanvasPct = deltaPreviewPct / 100
-```
-
-### 容器锚点
-- **始终相对于画布计算**，不受 `use_safe_area` 影响
-- 公式: `final_x = container_x + offset_x - elem_anchor_x`
-
-### 空格键拖动
-- 滚动区域: 容器尺寸 150%
-- 拖动时: 禁用滚动条 (`overflow: hidden !important`)
-- 初始居中: `(wrapperWidth - containerWidth) / 2`
-
-## 海报生成
-
-### 前端生成
-- iframe 加载 [`TrackMapOnly.vue`](frontend/src/views/TrackMapOnly.vue)
-- 等待 `window.mapReady === true`
-- html2canvas 截取 `.map-only-page`（不截 `.map-wrapper-container`）
-
-### 后端生成
-- Playwright 访问 `/tracks/{id}/map-only`
-- 等待 `window.mapReady === true`
-- 使用 `clip` 参数截取
-
-### 百度地图
-- **强制后端生成**: Legacy 版本 DOM 渲染，html2canvas 无法正确捕获
-
-### 缩放等待时间
-- 动态: `baseWait + (mapScale - 100) * multiplier`
-
-## 分享嵌入模式
-
-- URL: `/s/{token}?embed=true`
-- 只显示地图，隐藏其他元素
-- "查看轨迹详情"按钮跳转完整分享页
-
-## 文件结构
-
-```
-backend/app/
-├── api/              # API 路由
-├── core/             # 配置、依赖注入、安全
-├── models/           # SQLAlchemy 模型
-├── schemas/          # Pydantic schemas
-├── services/         # 业务逻辑
-└── gpxutil_wrapper/  # gpxutil 集成
-
-frontend/src/
-├── api/              # API 客户端
-├── components/map/   # 地图组件
-├── stores/           # Pinia stores
-├── utils/            # 工具函数
-└── views/            # 页面组件
-```
-
-## 常用模式
-
-### 添加 API 端点
-1. [`backend/app/api/`](backend/app/api/) 创建路由
-2. 依赖注入: `current_user: User = Depends(get_current_user)`
-3. 管理员: `current_user: User = Depends(get_current_admin_user)`
-4. [`main.py`](backend/app/main.py) 注册路由
-
-### 添加前端页面
-1. [`frontend/src/views/`](frontend/src/views/) 创建组件
-2. [`router/index.ts`](frontend/src/router/index.ts) 添加路由
-3. `meta: { requiresAuth: true }` 或 `requiresAdmin: true }`
-
-### Pinia Store
-- Composition API 风格
-- `ref()` state, `computed()` getters
-- token 同步 localStorage
-
-## UI 规范
-
-### Header
-- 默认高度: `60px`（不显式定义）
-- 导航按钮: `padding: 8px`
-
-### 图标
-- 上传: `Plus`
-- 后退: `ArrowLeft`
-- 主页: `HomeFilled`
-
-### 下拉菜单顺序
-**主页移动端**: 轨迹列表 > 上传 > 实时记录 > 道路标志 > ── > 后台管理 > 退出
-**轨迹列表移动端**: 上传 > 实时记录 > ── > 后台管理 > 退出
-**轨迹详情移动端**: 配置 > 编辑 > 导入 > 导出 > ── > 后台管理 > 退出
-
-### 分割线
-```vue
-<el-dropdown-item class="dropdown-divider" :disabled="true" />
-```
-```css
-.dropdown-divider { margin: 4px 0; height: 1px; background-color: var(--el-border-color-lighter); }
-```
-
-## 重要提醒
-
-1. **密码**: 前端 `hashPassword()` → 后端 bcrypt
-2. **配置**: 普通用户 `/auth/config`，管理员 `/admin/config`
-3. **CORS**: 开发环境允许所有来源
-4. **首用户**: 自动成为管理员
-5. **Viewport**: `maximum-scale=1.0, user-scalable=no`
-6. **Git**: 临时修改用 `git update-index --skip-worktree <file>`
-
-## 变更历史
-
-详细历史版本已归档到 `ref/CLAUDE_ARCHIVE.md`，以下是简要记录：
-
-### 2026-01
-- DateTime 时区统一为 timezone-naive UTC
-- 地理编码失败跟踪
-- PostGIS 空间计算支持
-- 实时记录架构改进（一对一 Track）
-- 地理编码服务配置缓存
-
-### 2026-02
-
-- 多边形几何字段 + Shapely 精确匹配
-- 省辖县级行政单位分类修复
-- 地理信息编辑器（刻度条、撤销/重做、空块操作）
-- 地图缩放（海报导出）
-- 分享嵌入模式
-- 轨迹插值功能
-- 覆盖层模板编辑器（空格键拖动、坐标系统重构）
-- **文本对齐功能完善**：
-  - 添加垂直对齐控制（上/中/下）
-  - 两端对齐对所有行生效
-  - 添加"自定义文本"数据源选项
-  - 示例文本支持多行输入
-  - 修正文本整体高度计算（排除最后一行下方空间）
-- **GB 5765 字体支持**：
-  - 后端启动时预转换为 WOFF2 格式（`_convert_gb5765_fonts_to_woff2()`）
-  - 删除问题表（VDMX、GASP、GDEF、GPOS、GSUB、gasp、gvar、fvar、STAT、trak、kern、vhea、vmtx）
-  - 重建最小化 post 表（format 3.0）
-  - WOFF2 缓存机制（`backend/data/fonts/woff2_cache/`）
-  - 前端动态加载字体（`user_font_${fontId}` 命名）
-  - `OverlayTemplateEditor.getFontFamilyName()` 支持用户字体映射
-  - `FontSelector` 为 GB 5765 字体添加时间戳绕过浏览器缓存
-- **覆盖层模板编辑器 UI 完善**：
-  - 安全区输入框宽度统一（使用 visibility: hidden 占位）
-  - 前缀后缀输入框支持多行文本（textarea, 2 行）
-  - 示例文本输入框高度与描述输入框一致（2 行）
-  - 画布宽高输入框和字体下拉框宽度延伸到右边（100%）
-  - 画布渲染支持用户/管理员上传字体
-- **轨迹动画功能完善**：
-  - 标记样式切换（箭头/汽车/人员）
-  - 播放控件显示控制（默认隐藏，点击播放按钮后显示）
-  - 所有标记样式支持方位旋转
-  - 使用 `vehicle.svg` 和 `location.svg` 图标替代 CSS 绘制
-  - 添加样式缓存避免标记闪烁
-- **Leaflet 地图坐标系统修复**：
-  - 修复了百度地图标记旋转问题（使用 class 选择器而非通用 div 选择器）
-  - 修改了 `getCoordsByCRS()` 函数，根据地图提供商选择正确坐标系：
-    - 天地图：使用 WGS84 坐标（leaflet.chinatmsproviders 会自动转换）
-    - 高德/腾讯地图：使用 GCJ02 坐标（插件期望 GCJ02 坐标）
-    - 百度地图：使用 BD09 坐标
-  - 修改了 `TrackAnimationPlayer.vue` 的 `isGCJ02Provider` 逻辑，正确识别高德/腾讯地图
-  - 修复了 `setAnimationPlaying()` 函数，让灰色轨迹也使用 `getCoordsByCRS()` 来正确选择坐标系统（之前硬编码 WGS84）
-  - 减少了调试日志输出，保持关键信息
-  - 结果：所有 Leaflet 地图的轨迹（红色/灰色）和标记点现在都正确
-- **腾讯地图动画标记和 HUD 控制修复**：
-  - 动画标记显示默认样式：`TMap.DOMOverlay.extend` 不是一个函数，改用 Canvas 绘制旋转后的图标并转换为 data URL
-  - HUD 控制无响应：点击事件监听使用了 `useCapture: true`，改为 `useCapture: false` 让事件在冒泡阶段处理
-  - `updateStyles` API 错误：`TMap.MultiMarker` 没有 `updateStyles` 方法，改用 `setStyles` 方法
-  - HUD 被覆盖：腾讯地图的控件层（`z-index: 1000`）覆盖了 HUD，将 HUD 的 `z-index` 提高到 `10000`
-  - 结果：腾讯地图的动画标记和 HUD 控制都正常工作
-- **腾讯地图动画标记 DOM 实现重构**（2026-02-17）：
-  - 问题：Canvas 方式导致标记旋转时变形和闪烁
-  - 解决方案：重写 `AnimationDOMOverlay` 类，使用普通 DOM 元素 + CSS transform
-  - 核心实现：
-    - 使用 `TMap.projectToContainer()` 将地理坐标转换为像素坐标（而非不存在的 `mapFromLngLat`）
-    - 外层 `element` 绝对定位，内层 `innerElement` 用于 CSS `rotate()` 旋转
-    - 监听 `moveend` 和 `zoomend` 事件，确保地图移动/缩放时标记自动更新位置
-    - 标记尺寸：car 60×40，arrow/person 36×36
-    - z-index: 999，确保在 HUD（10000）下方
-
-### 2026-02-18
-
-- **轨迹动画功能完善**：
-  - 在 BMap.vue 的 `animationAdapter` 中添加了缺失的 `fitTrackWithPadding(bottomPaddingPx: number)` 方法
-  - 修复了全轨迹模式下切换地图时百度地图不缩放的问题
-  - 清理了回放时产生的大量调试日志：
-    - 删除了 `[BMap] setMarkerPosition` 每帧输出
-    - 删除了 `[BMap] rotateMarker applied` 标记旋转日志
-    - 删除了 `[AnimationMap]` composable 中的所有日志（adapter registered/unregistered, setPassedSegment, setMarkerPosition, setCameraToMarker, fitTrackWithPadding）
-    - 删除了 `[TrackAnimationPlayer]` 中的 export progress 和地图切换日志
-  - 保留了错误相关的 `console.warn`（如不支持旋转、无法获取坐标等）
-  - 结果：回放时日志输出大幅减少，便于调试查看重要信息
+### 功能模块
+- 实时记录 → [`cc/features.md`](./cc/features.md)
+- 地理编码 → [`cc/features.md`](./cc/features.md)
+- 轨迹插值 → [`cc/features.md`](./cc/features.md)
+- 覆盖层模板 → [`cc/features.md`](./cc/features.md)
+- 海报生成 → [`cc/features.md`](./cc/features.md)
