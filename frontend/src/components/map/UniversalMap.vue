@@ -772,6 +772,7 @@ onMounted(async () => {
   // 初始设置后也要发出地图提供商变化事件
   nextTick(() => {
     const initialLayerId = currentLayerId.value
+    console.log('[UniversalMap] Initial layerId:', initialLayerId)
     let provider = 'osm' // 默认
     if (initialLayerId.startsWith('baidu')) {
       provider = 'baidu'
@@ -784,6 +785,7 @@ onMounted(async () => {
     } else if (initialLayerId.startsWith('leaflet') || initialLayerId === 'osm') {
       provider = 'osm'
     }
+    console.log('[UniversalMap] Emitting map-provider-changed:', provider)
     // Initial emit
     emit('map-provider-changed', provider)
   })
@@ -806,6 +808,7 @@ onUnmounted(() => {
 
 // 监听 currentLayerId 变化
 watch(currentLayerId, (newLayerId) => {
+  console.log('[UniversalMap] Layer changed (watch):', newLayerId)
   // 确定地图提供商
   let provider = 'osm' // 默认
   if (newLayerId.startsWith('baidu')) {
@@ -819,6 +822,7 @@ watch(currentLayerId, (newLayerId) => {
   } else if (newLayerId.startsWith('leaflet') || newLayerId === 'osm') {
     provider = 'osm'
   }
+  console.log('[UniversalMap] Emitting map-provider-changed from watch:', provider)
   // 发出地图提供商变化事件
   emit('map-provider-changed', provider)
 })
@@ -906,7 +910,7 @@ defineExpose({
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 1000;
+  z-index: 1001;
   display: flex;
   gap: 8px;
   align-items: center;
@@ -964,11 +968,21 @@ defineExpose({
     display: block;
   }
 
+  .map-controls {
+    top: 5px;
+    right: 5px;
+  }
+
   .fit-bounds-btn,
   .fullscreen-btn,
   .clear-highlight-btn,
   .animation-play-btn {
     flex-shrink: 0;
+  }
+
+  /* 移动端增加按钮点击区域 */
+  .animation-play-btn {
+    padding: 8px 12px !important;
   }
 }
 </style>

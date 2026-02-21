@@ -470,6 +470,7 @@
                     :enable-animation="true"
                     @point-hover="handleMapPointHover"
                     @clear-segment-highlight="clearSegmentHighlight"
+                    @map-provider-changed="handleMapProviderChanged"
                   />
                 </div>
               </template>
@@ -485,6 +486,15 @@
                 </div>
               </template>
             </el-card>
+
+            <!-- 移动端：动画播放器（放在地图卡片外部） -->
+            <div v-if="animationConfig" class="mobile-animation-container">
+              <TrackAnimationPlayer
+                :config="animationConfig"
+                :track-id="track.id"
+                :map-provider="mapProvider"
+              />
+            </div>
 
             <!-- 海拔和速度图表 -->
             <el-card class="chart-card" shadow="never">
@@ -1038,7 +1048,27 @@ const configStore = useConfigStore()
 const animationStore = useAnimationStore()
 
 // 地图提供商（使用 ref 以便响应实际地图变化）
-const mapProvider = ref(configStore.getEffectiveProvider())
+// 初始化时将层 ID 转换为基础提供商名称（tencent_vec -> tencent）
+const initEffectiveProvider = configStore.getEffectiveProvider()
+console.log('[TrackDetail] Initial effectiveProvider:', initEffectiveProvider)
+const mapProvider = ref(getProviderFromLayerId(initEffectiveProvider))
+console.log('[TrackDetail] Initial mapProvider after conversion:', mapProvider.value)
+
+// 将层 ID 转换为基础提供商名称
+function getProviderFromLayerId(layerId: string): string {
+  if (layerId.startsWith('baidu')) {
+    return 'baidu'
+  } else if (layerId.startsWith('amap')) {
+    return 'amap'
+  } else if (layerId.startsWith('tencent')) {
+    return 'tencent'
+  } else if (layerId.startsWith('tianditu')) {
+    return 'tianditu'
+  } else if (layerId.startsWith('leaflet') || layerId === 'osm') {
+    return 'osm'
+  }
+  return layerId
+}
 
 // 处理地图提供商变化
 function handleMapProviderChanged(provider: string) {
@@ -1313,13 +1343,14 @@ const trackWithPoints = computed(() => {
 const animationConfig = computed<AnimationConfig | null>(() => {
   if (!track.value || !points.value.length || points.value.length < 2) return null
 
-  return {
+  const config = {
     trackId: track.value.id,
     trackPoints: points.value,
     startTime: points.value[0].time || '',
     endTime: points.value[points.value.length - 1].time || '',
     duration: calculateDuration(points.value),
   }
+  return config
 })
 
 // 处理用户下拉菜单命令
@@ -3436,17 +3467,52 @@ onUnmounted(() => {
   }
 
   .fixed-left .map-card :deep(.el-card__body) {
-    height: auto;
+    height: 30vh;
+    min-height: 200px;
+    overflow: visible;
   }
 
   .map-wrapper {
     height: 30vh;
     min-height: 200px;
+    position: relative;
+    overflow: visible;
   }
 
   .map-content {
     width: 100%;
     height: 100%;
+  }
+
+  /* 移动端常规布局地图容器 */
+  .normal-map-container {
+    height: 30vh;
+    min-height: 200px;
+    position: relative;
+    overflow: visible;
+  }
+
+  /* 移动端动画播放器容器（放在地图卡片外部） */
+  .mobile-animation-container {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 9999;
+    pointer-events: none;
+  }
+
+  .mobile-animation-container :deep(.track-animation-player) {
+    position: static;
+    height: auto;
+    bottom: auto;
+    left: auto;
+    right: auto;
+    top: auto;
+  }
+
+  .mobile-animation-container :deep(.track-animation-player > *) {
+    pointer-events: auto;
   }
 
   .scrollable-right {

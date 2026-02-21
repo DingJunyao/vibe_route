@@ -99,11 +99,18 @@ const absoluteCurrentTime = computed(() => {
 // 获取当前地图提供商的坐标类型
 const isGCJ02Provider = computed(() => {
   // AMap 引擎、Tencent 引擎、高德 Leaflet、腾讯 Leaflet 使用 GCJ02 坐标
-  return props.mapProvider === 'amap' || props.mapProvider === 'tencent'
+  const result = props.mapProvider === 'amap' || props.mapProvider === 'tencent'
+  console.log('[TrackAnimationPlayer] isGCJ02Provider:', result, 'mapProvider:', props.mapProvider)
+  return result
 })
-const isBD09Provider = computed(() => props.mapProvider === 'baidu')
+const isBD09Provider = computed(() => {
+  const result = props.mapProvider === 'baidu'
+  console.log('[TrackAnimationPlayer] isBD09Provider:', result, 'mapProvider:', props.mapProvider)
+  return result
+})
 
 watch(() => props.mapProvider, (newProvider) => {
+  console.log('[TrackAnimationPlayer] mapProvider changed to:', newProvider)
 }, { immediate: true })
 
 const currentPosition = computed<MarkerPosition | null>(() => {
@@ -141,6 +148,7 @@ const currentPosition = computed<MarkerPosition | null>(() => {
   }
 
   const result = interpolatePosition(point, nextPoint, progress, isGCJ02Provider.value, isBD09Provider.value)
+  console.log('[TrackAnimationPlayer] interpolatePosition result:', result)
   return result
 })
 
@@ -230,12 +238,23 @@ async function handleExportVideo(config: ExportConfig) {
 // HUD 高度变化处理
 function handleHeightChanged(height: number) {
   hudHeight.value = height
-  // 如果当前是全轨迹画面模式，立即调整地图视野
+  // 桌面端需要调整地图视野以避免 HUD 遮挡
+  // 移动端 HUD 固定在屏幕底部，但切换到全轨迹画面时需要调整视野
   if (animationStore.cameraMode === 'full') {
-    // 额外增加 20px 作为间距
-    const padding = height + 20
-    fitTrackWithPadding(padding)
+    if (isMobile()) {
+      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
+      fitTrackWithPadding(5)
+    } else {
+      // 桌面端：添加底部 padding 避免遮挡
+      const padding = height + 20
+      fitTrackWithPadding(padding)
+    }
   }
+}
+
+// 检测是否为移动端
+function isMobile(): boolean {
+  return window.innerWidth <= 1366
 }
 
 // 动画循环
@@ -323,10 +342,16 @@ watch(() => animationStore.cameraMode, (newMode) => {
   if (animationStore.isPlaying) {
     setAnimationPlaying(true)
   }
-  // 切换到全轨迹画面时，调整地图视野以避免 HUD 遮挡
-  if (newMode === 'full' && hudHeight.value > 0) {
-    const padding = hudHeight.value + 20
-    fitTrackWithPadding(padding)
+  // 切换到全轨迹画面时，调整地图视野
+  if (newMode === 'full') {
+    if (isMobile()) {
+      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
+      fitTrackWithPadding(5)
+    } else if (hudHeight.value > 0) {
+      // 桌面端：添加底部 padding 避免遮挡
+      const padding = hudHeight.value + 20
+      fitTrackWithPadding(padding)
+    }
   }
 })
 
@@ -334,20 +359,32 @@ watch(() => animationStore.cameraMode, (newMode) => {
 watch(hudHeight, (newHeight) => {
   // 如果是全轨迹画面模式，调整地图视野
   if (animationStore.cameraMode === 'full' && newHeight > 0) {
-    const padding = newHeight + 20
-    fitTrackWithPadding(padding)
+    if (isMobile()) {
+      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
+      fitTrackWithPadding(5)
+    } else {
+      // 桌面端：添加底部 padding 避免遮挡
+      const padding = newHeight + 20
+      fitTrackWithPadding(padding)
+    }
   }
 })
 
 // 监听地图切换，全轨迹模式下重新调整视野
 watch(() => props.mapProvider, () => {
   // 如果是全轨迹画面模式，重新调整地图视野
-  if (animationStore.cameraMode === 'full' && hudHeight.value > 0) {
+  if (animationStore.cameraMode === 'full') {
     // 延迟执行，等待地图初始化完成
     nextTick(() => {
       setTimeout(() => {
-        const padding = hudHeight.value + 20
-        fitTrackWithPadding(padding)
+        if (isMobile()) {
+          // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
+          fitTrackWithPadding(5)
+        } else if (hudHeight.value > 0) {
+          // 桌面端：添加底部 padding 避免遮挡
+          const padding = hudHeight.value + 20
+          fitTrackWithPadding(padding)
+        }
       }, 500)
     })
   }
