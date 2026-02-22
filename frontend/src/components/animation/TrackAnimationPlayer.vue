@@ -213,8 +213,8 @@ function handleHeightChanged(height: number) {
   // 移动端 HUD 固定在屏幕底部，但切换到全轨迹画面时需要调整视野
   if (animationStore.cameraMode === 'full') {
     if (isMobile()) {
-      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
-      fitTrackWithPadding(5)
+      // 移动端：使用与 drawTracks 相同的 padding（100px）
+      fitTrackWithPadding(100)
     } else {
       // 桌面端：添加底部 padding 避免遮挡
       const padding = height + 20
@@ -338,8 +338,8 @@ watch(() => animationStore.cameraMode, (newMode) => {
   // 切换到全轨迹画面时，调整地图视野
   if (newMode === 'full') {
     if (isMobile()) {
-      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
-      fitTrackWithPadding(5)
+      // 移动端：使用与 drawTracks 相同的 padding（100px）
+      fitTrackWithPadding(100)  // 改为 100px，与 drawTracks 保持一致
     } else if (hudHeight.value > 0) {
       // 桌面端：添加底部 padding 避免遮挡
       const padding = hudHeight.value + 20
@@ -353,8 +353,8 @@ watch(hudHeight, (newHeight) => {
   // 如果是全轨迹画面模式，调整地图视野
   if (animationStore.cameraMode === 'full' && newHeight > 0) {
     if (isMobile()) {
-      // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
-      fitTrackWithPadding(5)
+      // 移动端：使用与 drawTracks 相同的 padding（100px）
+      fitTrackWithPadding(100)
     } else {
       // 桌面端：添加底部 padding 避免遮挡
       const padding = newHeight + 20

@@ -44,7 +44,6 @@ class AnimationDOMOverlay {
   private onMoveEndHandler: (() => void) | null = null
   private onZoomEndHandler: (() => void) | null = null
   private lastPixelPos: { x: number; y: number } | null = null // 缓存上次像素位置，减少闪烁
-  private lastGeoPos: { lat: number; lng: number } | null = null // 缓存上次地理坐标
   private updatePending = false // 防抖标记，避免频繁更新
   private rafId: number | null = null // requestAnimationFrame ID
 
@@ -53,9 +52,8 @@ class AnimationDOMOverlay {
 
     // 创建外部容器（绝对定位）
     this.element = document.createElement('div')
-    // z-index: 500 确保在地图控件之下但在地图内容之上
-    // 设置 top: 0; left: 0; 确保从容器左上角开始定位
-    this.element.style.cssText = 'position: absolute; top: 0; left: 0; pointer-events: none; z-index: 500;'
+    // 提高 z-index 到 9999，确保在所有元素之上（包括 HUD）
+    this.element.style.cssText = 'position: absolute; pointer-events: none; z-index: 9999;'
 
     // 创建内部元素（用于旋转）
     this.innerElement = document.createElement('div')
@@ -84,48 +82,56 @@ class AnimationDOMOverlay {
     })
 
     if (mapDiv) {
-      // 检查容器的定位属性
-      const containerStyle = window.getComputedStyle(mapDiv)
-      addTencentLog('addToMap', 'container styles', {
-        position: containerStyle.position,
-        overflow: containerStyle.overflow,
-        width: containerStyle.width,
-        height: containerStyle.height,
-        clientWidth: mapDiv.clientWidth,
-        clientHeight: mapDiv.clientHeight
+      // 记录地图容器的子元素结构
+      const childCount = mapDiv.children.length
+      const childInfo: any[] = []
+      for (let i = 0; i < Math.min(childCount, 10); i++) {
+        const child = mapDiv.children[i] as HTMLElement
+        childInfo.push({
+          index: i,
+          tag: child.tagName,
+          class: child.className,
+          zIndex: child.style.zIndex || window.getComputedStyle(child).zIndex,
+          position: child.style.position || window.getComputedStyle(child).position
+        })
+      }
+      addTencentLog('addToMap', 'container children', {
+        childCount,
+        children: childInfo
       })
 
-      // 查找正确的容器 - 需要是具有 position: relative/absolute/fixed 的容器
-      // 避免添加到可能被其他样式影响的容器中
+      // 尝试找到 canvas 元素的父级，将标记添加到那个层级
+      // 腾讯地图的 overlay 层级可能在特定的子容器中
       let targetContainer = mapDiv as HTMLElement
-
-      // 尝试查找第一个 canvas 的直接父级（通常是地图渲染层）
-      const canvas = mapDiv.querySelector('canvas')
-      if (canvas && canvas.parentElement) {
-        const canvasParent = canvas.parentElement
-        const parentStyle = window.getComputedStyle(canvasParent)
-        addTencentLog('addToMap', 'canvas parent found', {
-          tagName: canvasParent.tagName,
-          className: canvasParent.className,
-          position: parentStyle.position,
-          overflow: parentStyle.overflow
+      const canvasElement = mapDiv.querySelector('canvas')
+      if (canvasElement && canvasElement.parentElement && canvasElement.parentElement !== mapDiv) {
+        // 找到 canvas 的直接父级，标记应该添加到这里
+        targetContainer = canvasElement.parentElement
+        addTencentLog('addToMap', 'Using canvas parent as container', {
+          parentTag: targetContainer.tagName,
+          parentClass: targetContainer.className
         })
-
-        // 如果 canvas 父级有定位属性，使用它作为目标容器
-        if (parentStyle.position !== 'static') {
-          targetContainer = canvasParent as HTMLElement
-          addTencentLog('addToMap', 'using canvas parent as target container')
-        }
       }
 
       this.mapContainer = targetContainer
       this.mapContainer.appendChild(this.element)
 
+      // 记录更多 DOM 结构信息
+      const zIndex = this.element.style.zIndex
+      const position = this.element.style.position
+      const display = this.element.style.display
+
       addTencentLog('addToMap', 'element appended', {
         mapContainerClass: this.mapContainer.className,
         mapContainerTag: this.mapContainer.tagName,
         elementParent: this.element.parentElement?.className || this.element.parentElement?.tagName || 'none',
-        elementInContainer: this.mapContainer.contains(this.element)
+        elementInContainer: this.mapContainer.contains(this.element),
+        containerChildCount: this.mapContainer.children.length,
+        elementZIndex: zIndex,
+        elementPosition: position,
+        elementDisplay: display,
+        elementOffset: `${this.element.offsetLeft}, ${this.element.offsetTop}`,
+        elementRect: `${this.element.offsetLeft}, ${this.element.offsetTop}, ${this.element.offsetWidth}, ${this.element.offsetHeight}`
       })
 
       // 监听地图移动/缩放事件，更新标记位置
@@ -157,22 +163,6 @@ class AnimationDOMOverlay {
 
   setPosition(lat: number, lng: number) {
     this.position = { lat, lng }
-
-    // 检查地理坐标是否发生了变化
-    // 如果变化超过阈值，清除 lastPixelPos 以强制更新
-    const geoChanged = !this.lastGeoPos ||
-      Math.abs(lat - this.lastGeoPos.lat) > 0.0001 ||
-      Math.abs(lng - this.lastGeoPos.lng) > 0.0001
-
-    if (geoChanged && this.lastPixelPos) {
-      this.lastPixelPos = null
-      addTencentLog('setPosition', 'geographic position changed, forcing update', {
-        oldPos: this.lastGeoPos,
-        newPos: { lat, lng }
-      })
-    }
-
-    this.lastGeoPos = { lat, lng }
     this.updatePosition()
   }
 
@@ -204,33 +194,33 @@ class AnimationDOMOverlay {
   }
 
   private updatePosition() {
-    if (!this.position || !this.map) {
-      addTencentLog('updatePosition', 'early return - missing data', {
-        hasPosition: !!this.position,
-        hasMap: !!this.map
-      })
-      return
-    }
+    if (!this.position || !this.map) return
 
     const TMap = (window as any).TMap
     const latLng = new TMap.LatLng(this.position.lat, this.position.lng)
 
     // 使用 projectToContainer 将地理坐标转换为容器像素坐标
     const pointPixel = this.map.projectToContainer(latLng)
-
-    // 记录 projectToContainer 返回的原始值
-    addTencentLog('updatePosition', 'projectToContainer result', {
-      latLng: `${this.position.lat.toFixed(6)}, ${this.position.lng.toFixed(6)}`,
-      pointPixelX: pointPixel.x,
-      pointPixelY: pointPixel.y,
-      lastPixelPos: this.lastPixelPos
-    })
-
     if (!pointPixel) {
       addTencentLog('updatePosition', 'pointPixel is null', {
         position: `${this.position.lat.toFixed(6)}, ${this.position.lng.toFixed(6)}`
       })
       return
+    }
+
+    // 获取容器尺寸
+    const container = this.map.getContainer()
+    const containerWidth = container?.offsetWidth || 0
+    const containerHeight = container?.offsetHeight || 0
+
+    // 记录容器信息（用于诊断）
+    if (containerWidth === 0 || containerHeight === 0) {
+      addTencentLog('updatePosition', 'WARNING: container size is zero', {
+        containerWidth,
+        containerHeight,
+        containerClassName: container?.className || 'none',
+        mapContainerClassName: this.mapContainer?.className || 'none'
+      })
     }
 
     // 获取 DOM 元素的尺寸
@@ -241,64 +231,64 @@ class AnimationDOMOverlay {
     const newLeft = pointPixel.x - width / 2
     const newTop = pointPixel.y - height / 2
 
-    // 强制更新 DOM 位置，确保标记总是可见
+    // 检查标记是否在容器边界内
+    const isXInBounds = newLeft >= -width && newLeft <= containerWidth
+    const isYInBounds = newTop >= -height && newTop <= containerHeight
+    const isInContainer = isXInBounds && isYInBounds
+
+    // 记录日志
+    addTencentLog('updatePosition', 'position calculation', {
+      latLng: `${this.position.lat.toFixed(6)}, ${this.position.lng.toFixed(6)}`,
+      pointPixel: `${pointPixel.x.toFixed(0)}, ${pointPixel.y.toFixed(0)}`,
+      newLeft: newLeft.toFixed(0),
+      newTop: newTop.toFixed(0),
+      containerSize: `${containerWidth}x${containerHeight}`,
+      markerSize: `${width}x${height}`,
+      isInContainer,
+      isXInBounds,
+      isYInBounds
+    })
+
+    // 只有位置变化超过阈值时才更新 DOM，减少闪烁
+    const threshold = 2 // 增加像素阈值
+    const shouldUpdate = !this.lastPixelPos ||
+      Math.abs(newLeft - this.lastPixelPos.x) > threshold ||
+      Math.abs(newTop - this.lastPixelPos.y) > threshold
+
+    // 始终更新 transform（即使位置没变，确保初始设置）
     this.element.style.transform = `translate3d(${newLeft}px, ${newTop}px, 0)`
     this.lastPixelPos = { x: newLeft, y: newTop }
 
-      // 检查元素的实际渲染状态
-      setTimeout(() => {
-        const rect = this.element.getBoundingClientRect()
-        const parent = this.element.parentElement
-        const parentRect = parent?.getBoundingClientRect()
-        const computedStyle = window.getComputedStyle(this.element)
-
-        addTencentLog('updatePosition', 'after transform update', {
-          elementRect: {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-            top: rect.top,
-            left: rect.left
-          },
-          parentRect: parentRect ? {
-            top: parentRect.top,
-            left: parentRect.left,
-            width: parentRect.width,
-            height: parentRect.height
-          } : null,
-          elementOffset: {
-            offsetTop: this.element.offsetTop,
-            offsetLeft: this.element.offsetLeft,
-            offsetWidth: this.element.offsetWidth,
-            offsetHeight: this.element.offsetHeight
-          },
-          styles: {
-            transform: computedStyle.transform,
-            display: computedStyle.display,
-            visibility: computedStyle.visibility,
-            opacity: computedStyle.opacity,
-            zIndex: computedStyle.zIndex,
-            position: computedStyle.position
-          },
-          innerHtml: this.innerElement.innerHTML.substring(0, 50),
-          innerElementChildren: this.innerElement.children.length
-        })
-      }, 0)
-
-      addTencentLog('updatePosition', 'transform updated', {
-        transform: this.element.style.transform,
-        newLeft,
-        newTop,
-        markerSize: `${width}x${height}`,
-        wasNull: !this.lastPixelPos
+    // 检查标记元素的实际样式
+    setTimeout(() => {
+      const computedStyle = window.getComputedStyle(this.element)
+      const actualTransform = computedStyle.transform
+      const parent = this.element.parentElement
+      addTencentLog('updatePosition', 'after update', {
+        elementInDocument: document.body.contains(this.element),
+        parentExists: !!parent,
+        parentTag: parent?.tagName || 'none',
+        display: computedStyle.display,
+        visibility: computedStyle.visibility,
+        opacity: computedStyle.opacity,
+        zIndex: computedStyle.zIndex,
+        transform: actualTransform,
+        elementRect: `${this.element.offsetLeft}, ${this.element.offsetTop}, ${this.element.offsetWidth}, ${this.element.offsetHeight}`,
+        shouldUpdate
       })
+    }, 0)
   }
 
   private updateContent() {
     // car: 60×40，arrow/person: 36×36
     const width = this.style === 'car' ? 60 : 36
     const height = this.style === 'car' ? 40 : 36
+
+    this.innerElement.style.width = `${width}px`
+    this.innerElement.style.height = `${height}px`
+    this.innerElement.style.display = 'flex'
+    this.innerElement.style.alignItems = 'center'
+    this.innerElement.style.justifyContent = 'center'
 
     addTencentLog('updateContent', 'called', {
       style: this.style,
@@ -309,12 +299,6 @@ class AnimationDOMOverlay {
       innerElementInDocument: document.body.contains(this.innerElement),
       elementInDocument: document.body.contains(this.element)
     })
-
-    this.innerElement.style.width = `${width}px`
-    this.innerElement.style.height = `${height}px`
-    this.innerElement.style.display = 'flex'
-    this.innerElement.style.alignItems = 'center'
-    this.innerElement.style.justifyContent = 'center'
 
     if (this.style === 'car') {
       this.innerElement.className = 'animation-marker-car'
@@ -337,7 +321,7 @@ class AnimationDOMOverlay {
       `
     }
 
-    // 延迟检查内部元素的实际状态
+    // 检查内部元素的实际状态
     setTimeout(() => {
       const img = this.innerElement.querySelector('img')
       const svg = this.innerElement.querySelector('svg')
@@ -593,7 +577,7 @@ let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹
 
 // 动画地图适配器实现
 const animationAdapter: AnimationMapAdapter = {
-  setPassedSegment(start, end) {
+  setPassedSegment(start: number, end: number) {
     // 播放状态下不更新轨迹，避免闪烁
     if (isAnimationPlaying) return
 
@@ -656,7 +640,7 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setMarkerPosition(position, style = 'arrow') {
+  setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
   addTencentLog('setMarkerPosition', 'called', { position: `${position.lat.toFixed(6)}, ${position.lng.toFixed(6)}`, style })
   addTencentLog('setMarkerPosition', 'status', {
     TMapInstance: !!TMapInstance,
@@ -688,6 +672,28 @@ const animationAdapter: AnimationMapAdapter = {
     })
   } catch (e) {
     addTencentLog('setMarkerPosition', 'Map state check error', { error: String(e) })
+  }
+
+  // 重新定位标记到正确的容器
+  if (animationMarker) {
+    // 销毁并重新创建标记，确保它被添加到正确的容器
+    try {
+      animationMarker.destroy()
+    } catch (e) {
+      // ignore
+    }
+    animationMarker = null
+
+    addTencentLog('setMarkerPosition', 'Recreating animationMarker to ensure correct container')
+    setTimeout(() => {
+      if (TMapInstance) {
+        animationMarker = new AnimationDOMOverlay(TMapInstance)
+        animationMarker.setPosition(position.lat, position.lng)
+        animationMarker.setStyle(style)
+        animationMarker.setBearing(position.bearing)
+      }
+    }, 0)
+    return
   }
 
   if (!animationMarker) {
@@ -729,24 +735,16 @@ const animationAdapter: AnimationMapAdapter = {
         })
       }
     }, 0)
-  } else {
-    // 更新位置
-    addTencentLog('setMarkerPosition', 'Updating existing animationMarker')
-    animationMarker.setPosition(position.lat, position.lng)
-
-    // 更新样式和旋转
-    animationMarker.setStyle(style)
-    animationMarker.setBearing(position.bearing)
   }
-},
 
-  setCameraToMarker(position) {
+  setCameraToMarker(position: MarkerPosition): void {
     if (!TMapInstance) return
     const TMap = (window as any).TMap
     TMapInstance.setCenter(new TMap.LatLng(position.lat, position.lng))
   },
 
-  setMapRotation(bearing) {
+
+  setMapRotation(bearing: number) {
     if (!TMapInstance) return
     TMapInstance.setRotation(bearing)
     currentMapRotation = bearing
@@ -757,7 +755,7 @@ const animationAdapter: AnimationMapAdapter = {
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）
-  setAnimationPlaying(playing) {
+  setAnimationPlaying(playing: boolean) {
     isAnimationPlaying = playing
 
     if (!TMapInstance || !props.tracks[0]?.points) return
@@ -815,7 +813,7 @@ const animationAdapter: AnimationMapAdapter = {
 
   // 调整地图视野以适应轨迹（添加底部 padding）
   // 注意：bottomPaddingPx 可以是像素值或百分比（<=100）
-  fitTrackWithPadding(bottomPaddingPx) {
+  fitTrackWithPadding(bottomPaddingPx: number) {
     if (!TMapInstance) return
 
     let paddingPercent: number
