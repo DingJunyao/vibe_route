@@ -98,3 +98,40 @@
   - 删除了 `[TrackAnimationPlayer]` 中的 export progress 和地图切换日志
 - 保留了错误相关的 `console.warn`（如不支持旋转、无法获取坐标等）
 - 结果：回放时日志输出大幅减少，便于调试查看重要信息
+
+## 2026-02-22
+
+### 移动端轨迹回放功能修复
+
+- **动画标记显示问题**：
+  - 在 `TrackAnimationPlayer.vue` 中添加播放状态变化和 seek 操作时的 `updateAnimation()` 调用
+  - 添加 `position-changed` 事件监听到 `TrackDetail.vue`，用于更新 HUD 的位置数据
+  - 在移动端布局中添加 `TrackAnimationPlayer` 组件（之前只在桌面端）
+  - 修复 `updateAndEmitPosition` 缺失 `getLastPosition` 方法的问题，添加位置缓存机制
+
+- **HUD 位置信息更新问题**：
+  - 在 `TrackDetail.vue` 中添加 `handleAnimationPositionChanged` 函数处理 `position-changed` 事件
+  - `currentPosition` ref 正确接收并传递给 `AnimationHUD` 组件
+
+- **图表渲染问题**：
+  - 为桌面端和移动端使用不同的 chartRef（`desktopChartRef` 和 `mobileChartRef`）
+  - 修复骨架屏 `loading` 变量未定义问题（改为 `!track && !loadFailed`）
+  - 移除错误的 `loading.value = false` 赋值
+
+- **进度条时间计算错误**：
+  - 修复 `duration` 计算错误，移除多余的 `* 1000`（`calculateDuration` 已返回毫秒）
+
+- **标记样式按钮显示问题**：
+  - 恢复移动端标记样式按钮显示，移除 `v-if="!isMobile"` 条件
+
+- **调试工具**：
+  - 启用 eruda 调试工具（开发环境）
+  - 添加关键位置的调试日志（播放状态、位置更新、图表渲染等）
+
+- **结果**：
+  - 移动端轨迹回放功能完全修复
+  - 地图动画标记正常显示
+  - 进度条和播放时间正确显示
+  - 海拔和速度图表正常渲染
+  - HUD 位置信息（时间、速度、海拔）正确更新
+  - 标记样式按钮在移动端正常显示

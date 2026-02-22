@@ -13,16 +13,16 @@ import 'leaflet/dist/leaflet.css'
 // 地理信息编辑器公共样式变量
 import './components/geo-editor/styles/common.css'
 
-// // 初始化远程日志
-// initRemoteLog()
+// 初始化远程日志
+initRemoteLog()
 
 // 移动端调试工具（开发环境）
-// if (import.meta.env.DEV) {
-//   import('eruda').then((eruda) => {
-//     eruda.default?.init()
-//     console.log('Eruda 调试工具已启用')
-//   })
-// }
+if (import.meta.env.DEV) {
+  import('eruda').then((eruda) => {
+    eruda.default?.init()
+    console.log('Eruda 调试工具已启用')
+  })
+}
 
 const app = createApp(App)
 

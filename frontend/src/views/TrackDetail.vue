@@ -139,7 +139,7 @@
 
     <el-main class="main" :class="{ 'main-fixed': isTallScreen }">
       <!-- 加载中显示骨架屏 -->
-      <div v-if="loading" class="detail-skeleton">
+      <div v-if="!track && !loadFailed" class="detail-skeleton">
         <!-- 固定布局骨架屏 -->
         <template v-if="isTallScreen">
           <div class="fixed-layout">
@@ -236,6 +236,7 @@
                       :config="animationConfig"
                       :track-id="track.id"
                       :map-provider="mapProvider"
+                      @position-changed="handleAnimationPositionChanged"
                     />
                     <UniversalMap
                       ref="mapRef"
@@ -270,7 +271,7 @@
               <template #header>
                 <span>海拔与速度变化</span>
               </template>
-              <div ref="chartRef" class="chart"></div>
+              <div ref="desktopChartRef" class="chart"></div>
             </el-card>
           </div>
 
@@ -456,10 +457,16 @@
             <!-- 地图 -->
             <el-card class="map-card" shadow="never">
               <template v-if="trackWithPoints">
-                <!-- <div style="background: #e5e5e5; padding: 10px; font-size: 12px; color: #666;">
-                  调试: trackWithPoints 存在，轨迹点数: {{ trackWithPoints.points.length }}
-                </div> -->
-                <div ref="mapElementRef" class="normal-map-container">
+                <div class="map-wrapper">
+                  <!-- 动画播放器 -->
+                  <TrackAnimationPlayer
+                    v-if="animationConfig"
+                    :config="animationConfig"
+                    :track-id="track.id"
+                    :map-provider="mapProvider"
+                    @position-changed="handleAnimationPositionChanged"
+                  />
+                  <div ref="mapElementRef" class="normal-map-container">
                   <UniversalMap
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
@@ -473,6 +480,7 @@
                     @map-provider-changed="handleMapProviderChanged"
                   />
                 </div>
+              </div>
               </template>
               <template v-else>
                 <div class="map-placeholder">
@@ -487,21 +495,36 @@
               </template>
             </el-card>
 
-            <!-- 移动端：动画播放器（放在地图卡片外部） -->
-            <div v-if="animationConfig" class="mobile-animation-container">
-              <TrackAnimationPlayer
-                :config="animationConfig"
-                :track-id="track.id"
-                :map-provider="mapProvider"
+            <!-- 移动端：动画控制卡片（点击右上角回放按钮后显示） -->
+            <el-card v-if="animationConfig && isMobile && animationControlsVisible" class="animation-card" shadow="never">
+              <AnimationHUD
+                :is-playing="animationStore.isPlaying"
+                :current-time="animationStore.currentTime"
+                :total-duration="duration"
+                :playback-speed="animationStore.playbackSpeed"
+                :camera-mode="animationStore.cameraMode"
+                :orientation-mode="animationStore.orientationMode"
+                :show-info-panel="animationStore.showInfoPanel"
+                :marker-style="animationStore.markerStyle"
+                :position="currentPosition"
+                @toggle-play="handleTogglePlay"
+                @seek="handleAnimationSeek"
+                @set-speed="animationStore.setSpeed"
+                @toggle-camera-mode="animationStore.toggleCameraMode"
+                @toggle-orientation-mode="animationStore.toggleOrientationMode"
+                @toggle-info-panel="animationStore.toggleInfoPanel"
+                @cycle-marker-style="animationStore.cycleMarkerStyle"
+                @export="handleExport"
+                @height-changed="() => {}"
               />
-            </div>
+            </el-card>
 
             <!-- 海拔和速度图表 -->
             <el-card class="chart-card" shadow="never">
               <template #header>
                 <span>海拔与速度变化</span>
               </template>
-              <div ref="chartRef" class="chart"></div>
+              <div ref="mobileChartRef" class="chart"></div>
             </el-card>
           </div>
 
@@ -1028,11 +1051,12 @@ import { liveRecordingApi } from '@/api/liveRecording'
 import { overlayTemplateApi } from '@/api/overlayTemplate'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import TrackAnimationPlayer from '@/components/animation/TrackAnimationPlayer.vue'
+import AnimationHUD from '@/components/animation/AnimationHUD.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useAnimationStore } from '@/stores/animation'
 import type { AnimationConfig } from '@/types/animation'
-import { calculateDuration } from '@/utils/animationUtils'
+import { calculateDuration, findPointIndexByTime, interpolatePosition } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
@@ -1046,6 +1070,12 @@ const router = useRouter()
 const authStore = useAuthStore()
 const configStore = useConfigStore()
 const animationStore = useAnimationStore()
+
+// 动画控制卡片可见性（点击右上角回放按钮后显示）
+const animationControlsVisible = ref(false)
+
+// 当前回放位置（用于 AnimationHUD 显示）
+const currentPosition = ref<any>(null)
 
 // 地图提供商（使用 ref 以便响应实际地图变化）
 // 初始化时将层 ID 转换为基础提供商名称（tencent_vec -> tencent）
@@ -1084,13 +1114,114 @@ const isMobile = computed(() => screenWidth.value <= 1366)
 const screenHeight = ref(window.innerHeight)
 const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
 
+// 监听动画播放状态，更新当前位置（用于移动端 AnimationHUD）
+watch(() => [animationStore.isPlaying, animationStore.currentTime], () => {
+  if (animationStore.isPlaying && animationConfig.value) {
+    const { index, progress } = findPointIndexByTime(
+      new Date(animationConfig.value.startTime).getTime() + animationStore.currentTime,
+      points.value,
+      animationConfig.value.startTime
+    )
+    if (index >= points.value.length - 1) {
+      // 到达终点
+      const lastPoint = points.value[points.value.length - 1]
+      if (lastPoint) {
+        currentPosition.value = {
+          lat: lastPoint.latitude_wgs84 ?? lastPoint.latitude,
+          lng: lastPoint.longitude_wgs84 ?? lastPoint.longitude,
+          bearing: lastPoint.bearing ?? 0,
+          speed: lastPoint.speed ?? null,
+          elevation: lastPoint.elevation ?? null,
+          time: lastPoint.time ?? null,
+        }
+      }
+    } else {
+      const point = points.value[index]
+      const nextPoint = points.value[index + 1]
+      if (point && nextPoint) {
+        const result = interpolatePosition(point, nextPoint, progress)
+        currentPosition.value = result
+      }
+    }
+  }
+})
+
 // 监听窗口大小变化
 function handleResize() {
   screenWidth.value = window.innerWidth
   screenHeight.value = window.innerHeight
 }
 
-const loading = ref(true)
+// 监听动画控件显示状态，同步移动端控制卡片
+watch(() => animationStore.showControls, (showControls) => {
+  console.log('[TrackDetail] animationStore.showControls changed:', showControls, 'isMobile:', isMobile.value)
+  if (showControls && isMobile.value) {
+    // 在移动端，当控件显示时自动显示控制卡片
+    animationControlsVisible.value = true
+  } else if (!showControls && isMobile.value) {
+    // 在移动端，当控件隐藏时自动隐藏控制卡片
+    animationControlsVisible.value = false
+  }
+})
+
+// 处理动画播放/暂停
+function handleTogglePlay() {
+  console.log('[TrackDetail] handleTogglePlay called')
+  console.log('[TrackDetail] Before toggle: isPlaying:', animationStore.isPlaying)
+  animationStore.togglePlayPause()
+  console.log('[TrackDetail] After toggle: isPlaying:', animationStore.isPlaying)
+}
+
+// 处理动画进度条拖动
+function handleAnimationSeek(time: number) {
+  animationStore.setPlaybackState('currentTime', time)
+}
+
+// 处理动画区段更新
+function handleAnimationSegmentUpdate(passedEnd: number) {
+  highlightedPointIndex.value = passedEnd
+}
+
+// 处理动画位置变化（用于移动端 HUD 显示）
+function handleAnimationPositionChanged(position: {
+  lat: number
+  lng: number
+  bearing: number
+  speed: number | null
+  elevation: number | null
+  time: string | null
+}) {
+  console.log('[TrackDetail] handleAnimationPositionChanged called:', position)
+  currentPosition.value = position
+  console.log('[TrackDetail] currentPosition.value updated:', currentPosition.value)
+}
+
+// 导出处理
+async function handleExport(config: ExportConfig) {
+  try {
+    const downloadUrl = await exportWithPlaywright(
+      trackId.value,
+      config,
+      exportApi,
+      trackApi
+    )
+    if (downloadUrl) {
+      downloadFile(downloadUrl, generateExportFilename(trackId.value, config.format))
+      ElMessage.success('导出完成')
+    } else {
+      const prerequisites = checkExportPrerequisites()
+      if (!prerequisites.canPlay) {
+        ElMessage.error(prerequisites.reason)
+        return
+      }
+      ElMessage.warning('前端导出功能开发中，请使用百度地图进行导出')
+    }
+  } catch (e: any) {
+    console.error('Export error:', e)
+    ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
+  }
+}
+
 const track = ref<Track | null>(null)
 const points = ref<TrackPoint[]>([])
 const trackId = ref<number>(parseInt(route.params.id as string))
@@ -1104,7 +1235,11 @@ const containerRef = ref<HTMLElement>()
 const mapRef = ref()
 const mapWrapperRef = ref<HTMLElement>()
 const mapElementRef = ref<HTMLElement | null>(null)
-const chartRef = ref<HTMLElement>()
+// 为桌面端和移动端使用不同的 chartRef，避免布局切换时引用冲突
+const desktopChartRef = ref<HTMLElement>()
+const mobileChartRef = ref<HTMLElement>()
+// 根据当前布局获取正确的图表容器 ref
+const chartRef = computed(() => isTallScreen.value ? desktopChartRef.value : mobileChartRef.value)
 let chartInstance: echarts.ECharts | null = null  // 保存图表实例
 let mapResizeObserver: ResizeObserver | null = null  // 地图容器大小监听器
 
@@ -1351,6 +1486,12 @@ const animationConfig = computed<AnimationConfig | null>(() => {
     duration: calculateDuration(points.value),
   }
   return config
+})
+
+// 动画持续时间（calculateDuration 已经返回毫秒）
+const duration = computed(() => {
+  if (!animationConfig.value) return 0
+  return animationConfig.value.duration
 })
 
 // 处理用户下拉菜单命令
@@ -1662,7 +1803,24 @@ function clearSegmentHighlight() {
 
 // 渲染海拔和速度合并图表
 function renderChart() {
-  if (!chartRef.value || !points.value.length) return
+  console.log('[TrackDetail] renderChart() called')
+  console.log('[TrackDetail] isTallScreen:', isTallScreen.value)
+  console.log('[TrackDetail] desktopChartRef:', !!desktopChartRef.value)
+  console.log('[TrackDetail] mobileChartRef:', !!mobileChartRef.value)
+  console.log('[TrackDetail] chartRef.value (computed):', !!chartRef.value)
+  console.log('[TrackDetail] points.length:', points.value.length)
+
+  // 清理旧的图表实例（如果存在）
+  if (chartInstance) {
+    console.log('[TrackDetail] Disposing old chart instance')
+    chartInstance.dispose()
+    chartInstance = null
+  }
+
+  if (!chartRef.value || !points.value.length) {
+    console.log('[TrackDetail] Cannot render chart, chartRef.value:', !!chartRef.value, 'points.length:', points.value.length)
+    return
+  }
 
   const chart = echarts.init(chartRef.value)
   chartInstance = chart  // 保存图表实例
@@ -1931,16 +2089,6 @@ function handleMapPointHover(point: any, pointIndex: number) {
   }
 
   highlightedPointIndex.value = pointIndex
-}
-
-// 处理动画位置变化
-function handleAnimationPositionChange(position: { lat: number; lng: number; bearing: number; speed: number | null; elevation: number | null; time: string | null }) {
-  // 可以在这里添加自定义逻辑，比如同步到图表等
-}
-
-// 处理动画区段更新
-function handleAnimationSegmentUpdate(passedEnd: number) {
-  highlightedPointIndex.value = passedEnd
 }
 
 // 填充地理信息
@@ -2665,8 +2813,7 @@ onMounted(async () => {
     await fetchRegions()
   } catch (error) {
     console.error('Failed to load track data:', error)
-  } finally {
-    loading.value = false
+    loadFailed.value = true
   }
 
   // 检查是否有正在进行的填充操作
@@ -2702,7 +2849,8 @@ onBeforeUnmount(() => {
 })
 
 // 监听布局切换，重新渲染图表
-watch(isTallScreen, () => {
+watch(isTallScreen, (newVal, oldVal) => {
+  console.log('[TrackDetail] isTallScreen changed from', oldVal, 'to', newVal)
   nextTick(() => {
     renderChart()
   })
@@ -3492,27 +3640,24 @@ onUnmounted(() => {
     overflow: visible;
   }
 
-  /* 移动端动画播放器容器（放在地图卡片外部） */
-  .mobile-animation-container {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 9999;
-    pointer-events: none;
+  /* 移动端动画播放器卡片 */
+  .animation-card {
+    margin-top: 16px;
   }
 
-  .mobile-animation-container :deep(.track-animation-player) {
+  .animation-card :deep(.animation-hud) {
     position: static;
-    height: auto;
-    bottom: auto;
-    left: auto;
-    right: auto;
-    top: auto;
+    width: 100%;
+    z-index: auto;
   }
 
-  .mobile-animation-container :deep(.track-animation-player > *) {
-    pointer-events: auto;
+  .animation-card :deep(.hud-content) {
+    background: #fff;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 4px;
+    padding: 12px 16px;
+    box-shadow: none;
+    min-width: 100%;
   }
 
   .scrollable-right {

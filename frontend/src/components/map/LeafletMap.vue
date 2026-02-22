@@ -229,12 +229,12 @@ function updateCurrentLayerConfig() {
 function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
   let html = ''
   let iconSize: [number, number] = [36, 36]
-  let iconAnchor: [number, number] = [18, 30]
+  let iconAnchor: [number, number] = [18, 18] // 中心锚点
 
   if (style === 'car') {
     // 汽车图标 - 使用 vehicle.svg
     iconSize = [60, 40]
-    iconAnchor = [30, 20]
+    iconAnchor = [30, 20] // 中心锚点
     html = `
       <div class="animation-marker-car" style="
         width: 60px;

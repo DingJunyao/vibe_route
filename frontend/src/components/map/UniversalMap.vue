@@ -698,20 +698,29 @@ const isPlaying = computed(() => animationStore.isPlaying)
 
 // 处理动画播放/暂停切换（控件开关）
 function handleAnimationToggle() {
+  console.log('[UniversalMap] handleAnimationToggle called')
+  console.log('[UniversalMap] Current showControls:', animationStore.showControls)
+  console.log('[UniversalMap] Current isPlaying:', animationStore.isPlaying)
+
   // 切换控件显示状态
   if (animationStore.showControls) {
     // 控件已显示，关闭控件并暂停
+    console.log('[UniversalMap] Closing controls and pausing')
     animationStore.setShowControls(false)
     if (animationStore.isPlaying) {
       animationStore.togglePlayPause()
     }
   } else {
     // 控件未显示，显示控件并开始播放
+    console.log('[UniversalMap] Opening controls and starting play')
     animationStore.setShowControls(true)
     if (!animationStore.isPlaying) {
       animationStore.togglePlayPause()
     }
   }
+
+  console.log('[UniversalMap] After toggle showControls:', animationStore.showControls)
+  console.log('[UniversalMap] After toggle isPlaying:', animationStore.isPlaying)
 }
 
 // 高亮指定点（由图表触发）

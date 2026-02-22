@@ -1,38 +1,6 @@
 <!-- frontend/src/components/animation/TrackAnimationPlayer.vue -->
 <template>
   <div v-if="canPlay && animationStore.showControls" class="track-animation-player">
-    <!-- HUD 控制面板 -->
-    <AnimationHUD
-      :is-playing="animationStore.isPlaying"
-      :current-time="animationStore.currentTime"
-      :total-duration="duration"
-      :playback-speed="animationStore.playbackSpeed"
-      :camera-mode="animationStore.cameraMode"
-      :orientation-mode="animationStore.orientationMode"
-      :show-info-panel="animationStore.showInfoPanel"
-      :marker-style="animationStore.markerStyle"
-      @toggle-play="handleTogglePlay"
-      @seek="handleSeek"
-      @set-speed="handleSetSpeed"
-      @toggle-camera-mode="handleToggleCameraMode"
-      @toggle-orientation-mode="handleToggleOrientationMode"
-      @toggle-info-panel="handleToggleInfoPanel"
-      @cycle-marker-style="handleCycleMarkerStyle"
-      @export="handleExport"
-      @height-changed="handleHeightChanged"
-    />
-
-    <!-- 信息浮层 -->
-    <div
-      v-if="animationStore.showInfoPanel && currentPosition"
-      class="info-panel"
-      :style="infoPanelStyle"
-    >
-      <div class="info-time">{{ formatTime(currentPosition.time) }}</div>
-      <div class="info-speed">{{ formatSpeed(currentPosition.speed) }}</div>
-      <div class="info-elevation">{{ formatElevation(currentPosition.elevation) }}</div>
-    </div>
-
     <!-- 导出对话框 -->
     <AnimationExportDialog
       v-model="showExportDialog"
@@ -47,7 +15,6 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAnimationStore } from '@/stores/animation'
 import { useAnimationMap } from '@/composables/animation/useAnimationMap'
-import AnimationHUD from './AnimationHUD.vue'
 import AnimationExportDialog from './AnimationExportDialog.vue'
 import {
   calculateDuration,
@@ -88,7 +55,17 @@ const UPDATE_THROTTLE_MS = 33  // 约30fps
 const duration = computed(() => props.config.duration)
 const points = computed(() => props.config.trackPoints)
 
-const canPlay = computed(() => checkCanPlay(points.value).canPlay)
+const canPlay = computed(() => {
+  const result = checkCanPlay(points.value).canPlay
+  console.log('[TrackAnimationPlayer] canPlay computed:', result, 'points.length:', points.value.length)
+  return result
+})
+
+// 监听 canPlay 和 showControls 变化（调试用）
+watch([canPlay, () => animationStore.showControls], ([playable, showControls]) => {
+  console.log('[TrackAnimationPlayer] canPlay & showControls changed:', { playable, showControls })
+  console.log('[TrackAnimationPlayer] Component will render:', playable && showControls)
+})
 
 // 计算绝对时间戳（用于 findPointIndexByTime）
 const absoluteCurrentTime = computed(() => {
@@ -113,7 +90,16 @@ watch(() => props.mapProvider, (newProvider) => {
   console.log('[TrackAnimationPlayer] mapProvider changed to:', newProvider)
 }, { immediate: true })
 
-const currentPosition = computed<MarkerPosition | null>(() => {
+// 事件处理
+const emit = defineEmits<{
+  (e: 'position-changed', position: { lat: number; lng: number; bearing: number; speed: number | null; elevation: number | null; time: string | null }): void
+}>()
+
+// 缓存上次计算的位置
+let lastCalculatedPosition: ReturnType<typeof interpolatePosition> | null = null
+
+// 计算当前位置并 emit 给父组件
+function updateAndEmitPosition() {
   const { index, progress } = findPointIndexByTime(
     absoluteCurrentTime.value,
     points.value,
@@ -136,7 +122,9 @@ const currentPosition = computed<MarkerPosition | null>(() => {
         elevation: lastPoint.elevation ?? null,
         time: lastPoint.time ?? null,
       }
-      return pos
+      lastCalculatedPosition = pos
+      console.log('[TrackAnimationPlayer] Emitting position-changed (end of track):', pos)
+      emit('position-changed', pos)
     }
   }
 
@@ -144,35 +132,18 @@ const currentPosition = computed<MarkerPosition | null>(() => {
   const nextPoint = points.value[index + 1]
 
   if (!point || !nextPoint) {
-    return null
+    console.log('[TrackAnimationPlayer] No point or nextPoint, index:', index)
+    return
   }
 
   const result = interpolatePosition(point, nextPoint, progress, isGCJ02Provider.value, isBD09Provider.value)
-  console.log('[TrackAnimationPlayer] interpolatePosition result:', result)
-  return result
-})
-
-// 信息浮层位置（简化为固定位置）
-const infoPanelStyle = computed(() => ({
-  top: '10px',
-  left: '10px',
-}))
-
-// 格式化函数
-function formatTime(time: string | null): string {
-  if (!time) return '--:--:--'
-  return new Date(time).toLocaleTimeString('zh-CN', { hour12: false })
+  lastCalculatedPosition = result
+  console.log('[TrackAnimationPlayer] Emitting position-changed (interpolated):', result)
+  emit('position-changed', result)
 }
 
-function formatSpeed(speed: number | null): string {
-  if (speed === null) return '-- km/h'
-  return `${(speed * 3.6).toFixed(1)} km/h`
-}
-
-function formatElevation(elevation: number | null): string {
-  if (elevation === null) return '-- m'
-  return `${Math.round(elevation)} m`
-}
+// 获取上次计算的位置
+updateAndEmitPosition.getLastPosition = () => lastCalculatedPosition
 
 // 事件处理
 function handleTogglePlay() {
@@ -287,20 +258,28 @@ function animationLoop(timestamp: number) {
 
 // 更新动画
 function updateAnimation() {
-  const pos = currentPosition.value
-  if (!pos) {
-    return
-  }
+  console.log('[TrackAnimationPlayer] updateAnimation() called, isPlaying:', animationStore.isPlaying, 'currentTime:', animationStore.currentTime)
+
+  updateAndEmitPosition()
 
   const now = Date.now()
   // 节流更新：避免过于频繁地调用地图适配器
   if (now - lastUpdateTime.value < UPDATE_THROTTLE_MS) {
+    console.log('[TrackAnimationPlayer] updateAnimation() throttled')
     return
   }
 
   lastUpdateTime.value = now
 
-  // 更新地图标记位置
+  // 更新地图标记位置和双色轨迹（通过 currentPosition 计算）
+  const pos = updateAndEmitPosition.getLastPosition?.() ?? null
+  console.log('[TrackAnimationPlayer] Position:', pos)
+
+  if (!pos) {
+    console.log('[TrackAnimationPlayer] No position, skipping update')
+    return
+  }
+
   setMarkerPosition(pos, animationStore.markerStyle)
 
   // 更新双色轨迹
@@ -319,11 +298,15 @@ function updateAnimation() {
 
 // 生命周期
 onMounted(() => {
+  console.log('[TrackAnimationPlayer] onMounted called')
+  console.log('[TrackAnimationPlayer] canPlay:', canPlay.value)
+  console.log('[TrackAnimationPlayer] showControls:', animationStore.showControls)
   isInitialized.value = true
   animationFrameId.value = requestAnimationFrame(animationLoop)
 })
 
 onUnmounted(() => {
+  console.log('[TrackAnimationPlayer] onUnmounted called')
   if (animationFrameId.value) {
     cancelAnimationFrame(animationFrameId.value)
   }
@@ -334,6 +317,16 @@ watch(() => animationStore.isPlaying, (isPlaying) => {
   lastTimestamp.value = 0
   // 通知地图组件更新动画播放状态，避免双色轨迹闪烁
   setAnimationPlaying(isPlaying)
+  // 确保标记在状态变化时立即更新
+  updateAnimation()
+})
+
+// 监听时间变化，确保 seek 操作时标记更新
+watch(() => animationStore.currentTime, () => {
+  // 在非播放状态下（如 seek 操作），需要手动触发更新
+  if (!animationStore.isPlaying) {
+    updateAnimation()
+  }
 })
 
 // 监听相机模式变化，刷新轨迹线
@@ -411,26 +404,5 @@ watch(() => animationStore.markerStyle, () => {
 
 .track-animation-player > * {
   pointer-events: auto;
-}
-
-.info-panel {
-  position: absolute;
-  background: rgba(0, 0, 0, 0.7);
-  color: white;
-  padding: 8px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  line-height: 1.5;
-  pointer-events: none;
-  z-index: 1001;
-}
-
-.info-time {
-  font-weight: 500;
-}
-
-.info-speed,
-.info-elevation {
-  opacity: 0.9;
 }
 </style>

@@ -1,71 +1,79 @@
 <!-- frontend/src/components/animation/AnimationHUD.vue -->
 <template>
-  <div class="animation-hud">
-    <div class="hud-content" ref="hudContentRef">
-      <!-- 第一行：进度条 -->
-      <div class="hud-row hud-progress">
-        <el-slider
-          :model-value="progressPercent"
-          :format-tooltip="formatProgressTooltip"
-          @update:model-value="handleSeek"
-        />
-        <div class="time-display">
-          {{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}
-        </div>
-      </div>
+  <div ref="hudContentRef">
+    <!-- 移动端信息显示（在进度条上方） -->
+    <div v-if="props.showInfoPanel && props.position" class="hud-info-mobile">
+      <span class="info-time">{{ formatPositionTime(props.position.time) }}</span>
+      <span class="info-separator">•</span>
+      <span class="info-speed">{{ formatSpeed(props.position.speed) }}</span>
+      <span class="info-separator">•</span>
+      <span class="info-elevation">{{ formatElevation(props.position.elevation) }}</span>
+    </div>
 
-      <!-- 第二行：播放控制 + 倍速 + 功能按钮 -->
-      <div class="hud-row hud-controls">
+    <!-- 第一行：进度条 -->
+    <div class="hud-row hud-progress">
+      <el-slider
+        :model-value="progressPercent"
+        :format-tooltip="formatProgressTooltip"
+        :popper-class="'slider-tooltip-high-zindex'"
+        @update:model-value="handleSeek"
+      />
+      <div class="time-display">
+        {{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}
+      </div>
+    </div>
+
+    <!-- 第二行：播放控制 + 倍速 + 功能按钮 -->
+    <div class="hud-row hud-controls">
+      <el-button
+        :icon="isPlaying ? VideoPause : VideoPlay"
+        size="small"
+        @click="$emit('toggle-play')"
+      />
+      <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
+        {{ playbackSpeed }}x
+      </div>
+      <div class="divider" />
+      <el-tooltip :content="cameraModeTooltip">
         <el-button
-          :icon="isPlaying ? VideoPause : VideoPlay"
+          :icon="getCameraModeIcon()"
           size="small"
-          @click="$emit('toggle-play')"
+          @click="$emit('toggle-camera-mode')"
         />
-        <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
-          {{ playbackSpeed }}x
-        </div>
-        <div class="divider" />
-        <el-tooltip :content="cameraModeTooltip">
-          <el-button
-            :icon="getCameraModeIcon()"
-            size="small"
-            @click="$emit('toggle-camera-mode')"
-          />
-        </el-tooltip>
-        <el-tooltip content="信息浮层">
-          <el-button
-            :type="showInfoPanel ? 'primary' : ''"
-            size="small"
-            @click="$emit('toggle-info-panel')"
-          >
-            <el-icon><Location /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-tooltip content="标记样式">
-          <el-button size="small" @click="$emit('cycle-marker-style')">
-            <el-icon v-if="props.markerStyle === 'arrow'"><ArrowDown /></el-icon>
-            <el-icon v-else-if="props.markerStyle === 'car'"><Van /></el-icon>
-            <el-icon v-else><User /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-tooltip content="导出视频">
-          <el-button size="small" @click="$emit('export')">
-            <el-icon><Film /></el-icon>
-          </el-button>
-        </el-tooltip>
-      </div>
-
-      <!-- 倍速菜单 -->
-      <div v-if="showSpeedMenu" class="speed-menu">
-        <div
-          v-for="speed in SPEED_OPTIONS"
-          :key="speed"
-          class="speed-option"
-          :class="{ active: speed === playbackSpeed }"
-          @click="handleSetSpeed(speed)"
+      </el-tooltip>
+      <el-tooltip v-if="!isMobile" content="信息浮层">
+        <el-button
+          :type="showInfoPanel ? 'primary' : ''"
+          size="small"
+          @click="$emit('toggle-info-panel')"
         >
-          {{ speed }}x
-        </div>
+          <el-icon><Location /></el-icon>
+        </el-button>
+      </el-tooltip>
+      <el-tooltip content="标记样式">
+        <el-button size="small" @click="$emit('cycle-marker-style')">
+          <el-icon v-if="props.markerStyle === 'arrow'"><ArrowDown /></el-icon>
+          <el-icon v-else-if="props.markerStyle === 'car'"><Van /></el-icon>
+          <el-icon v-else><User /></el-icon>
+        </el-button>
+      </el-tooltip>
+      <el-tooltip content="导出视频">
+        <el-button size="small" @click="$emit('export')">
+          <el-icon><Film /></el-icon>
+        </el-button>
+      </el-tooltip>
+    </div>
+
+    <!-- 倍速菜单 -->
+    <div v-if="showSpeedMenu" class="speed-menu">
+      <div
+        v-for="speed in SPEED_OPTIONS"
+        :key="speed"
+        class="speed-option"
+        :class="{ active: speed === playbackSpeed }"
+        @click="handleSetSpeed(speed)"
+      >
+        {{ speed }}x
       </div>
     </div>
   </div>
@@ -95,6 +103,11 @@ interface Props {
   orientationMode: 'north-up' | 'track-up'
   showInfoPanel: boolean
   markerStyle: 'arrow' | 'car' | 'person'
+  position?: {
+    time: string | null
+    speed: number | null
+    elevation: number | null
+  } | null
 }
 
 const props = defineProps<Props>()
@@ -151,6 +164,15 @@ const cameraModeTooltip = computed(() => {
   return '固定中心 - 轨迹朝上'
 })
 
+// 监听 position prop 变化（调试用）
+watch(() => props.position, (newPos) => {
+  console.log('[AnimationHUD] position prop changed:', newPos)
+  console.log('[AnimationHUD] showInfoPanel:', props.showInfoPanel)
+  console.log('[AnimationHUD] showInfoPanel && position:', props.showInfoPanel && !!newPos)
+  console.log('[AnimationHUD] currentTime:', props.currentTime, 'totalDuration:', props.totalDuration)
+  console.log('[AnimationHUD] progressPercent:', progressPercent.value)
+}, { immediate: true })
+
 function formatTime(ms: number): string {
   return formatAnimationTime(ms)
 }
@@ -179,23 +201,36 @@ function getCameraModeIcon() {
   if (props.cameraMode === 'full') return Monitor
   return Aim
 }
+
+// 检测是否为移动端
+const isMobile = computed(() => window.innerWidth <= 1366)
+
+// 格式化位置信息的时间
+function formatPositionTime(time: string | null): string {
+  if (!time) return '--:--:--'
+  return new Date(time).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+// 格式化速度
+function formatSpeed(speed: number | null): string {
+  if (speed === null) return '-- km/h'
+  return `${(speed * 3.6).toFixed(1)} km/h`
+}
+
+// 格式化海拔
+function formatElevation(elevation: number | null): string {
+  if (elevation === null) return '--m'
+  return `${elevation.toFixed(0)}m`
+}
 </script>
 
 <style scoped>
-.animation-hud {
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10000;
-}
-
 .hud-content {
-  background: rgba(255, 255, 255, 0.95);
-  border-radius: 8px;
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 4px;
   padding: 12px 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-  min-width: 280px;
+  min-width: 100%;
 }
 
 .hud-row {
@@ -210,6 +245,35 @@ function getCameraModeIcon() {
 
 .hud-controls {
   justify-content: center;
+}
+
+/* 移动端信息显示 */
+.hud-info-mobile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.95);
+  color: var(--el-text-color-primary);
+  border-radius: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  margin-bottom: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.info-time {
+  font-weight: 500;
+  color: var(--el-color-primary);
+}
+
+.info-speed,
+.info-elevation {
+  opacity: 0.9;
+}
+
+.info-separator {
+  opacity: 0.6;
 }
 
 .divider {
@@ -241,6 +305,11 @@ function getCameraModeIcon() {
 .hud-progress :deep(.el-slider) {
   margin: 0;
   flex: 1;
+}
+
+/* 进度条 tooltip 高层级 */
+.slider-tooltip-high-zindex {
+  z-index: 20000 !important;
 }
 
 .time-display {
@@ -276,5 +345,12 @@ function getCameraModeIcon() {
 .speed-option.active {
   color: var(--el-color-primary);
   font-weight: 500;
+}
+</style>
+
+<style>
+/* 非 scoped 样式：全局设置进度条 tooltip 的 z-index */
+.slider-tooltip-high-zindex {
+  z-index: 20000 !important;
 }
 </style>

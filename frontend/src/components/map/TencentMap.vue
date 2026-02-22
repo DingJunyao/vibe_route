@@ -17,6 +17,9 @@ class AnimationDOMOverlay {
   private innerElement: HTMLElement
   private onMoveEndHandler: (() => void) | null = null
   private onZoomEndHandler: (() => void) | null = null
+  private lastPixelPos: { x: number; y: number } | null = null // 缓存上次像素位置，减少闪烁
+  private updatePending = false // 防抖标记，避免频繁更新
+  private rafId: number | null = null // requestAnimationFrame ID
 
   constructor(map: any) {
     this.map = map
@@ -111,9 +114,21 @@ class AnimationDOMOverlay {
     const width = this.style === 'car' ? 60 : 36
     const height = this.style === 'car' ? 40 : 36
 
-    // 设置位置（居中锚点）
-    this.element.style.left = `${pointPixel.x - width / 2}px`
-    this.element.style.top = `${pointPixel.y - height / 2}px`
+    // 计算新的像素位置
+    const newLeft = pointPixel.x - width / 2
+    const newTop = pointPixel.y - height / 2
+
+    // 只有位置变化超过阈值时才更新 DOM，减少闪烁
+    const threshold = 2 // 增加像素阈值
+    const shouldUpdate = !this.lastPixelPos ||
+      Math.abs(newLeft - this.lastPixelPos.x) > threshold ||
+      Math.abs(newTop - this.lastPixelPos.y) > threshold
+
+    if (shouldUpdate) {
+      // 使用 transform 进行 GPU 加速，减少重绘
+      this.element.style.transform = `translate3d(${newLeft}px, ${newTop}px, 0)`
+      this.lastPixelPos = { x: newLeft, y: newTop }
+    }
   }
 
   private updateContent() {
@@ -450,19 +465,28 @@ const animationAdapter: AnimationMapAdapter = {
   },
 
   setMarkerPosition(position: MarkerPosition, style: MarkerStyle = 'arrow') {
-  if (!TMapInstance) return
+  console.log('[TencentMap] setMarkerPosition called, position:', position, 'style:', style)
+  console.log('[TencentMap] TMapInstance exists:', !!TMapInstance, 'animationMarker exists:', !!animationMarker)
+  if (!TMapInstance) {
+    console.log('[TencentMap] TMapInstance not available')
+    return
+  }
   if (!animationMarker) {
     // 地图可能还未初始化，延迟创建标记
     setTimeout(() => {
       if (!animationMarker && TMapInstance) {
+        console.log('[TencentMap] Creating new animationMarker')
         animationMarker = new AnimationDOMOverlay(TMapInstance)
         animationMarker.setPosition(position.lat, position.lng)
         animationMarker.setStyle(style)
         animationMarker.setBearing(position.bearing)
+      } else {
+        console.log('[TencentMap] Still cannot create animationMarker, TMapInstance:', !!TMapInstance, 'animationMarker:', !!animationMarker)
       }
     }, 0)
   } else {
     // 更新位置
+    console.log('[TencentMap] Updating existing animationMarker')
     animationMarker.setPosition(position.lat, position.lng)
 
     // 更新样式和旋转
