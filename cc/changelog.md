@@ -99,6 +99,38 @@
 - 保留了错误相关的 `console.warn`（如不支持旋转、无法获取坐标等）
 - 结果：回放时日志输出大幅减少，便于调试查看重要信息
 
+## 2026-02-23
+
+### Chrome DevTools MCP 环境配置
+
+- **Linux 系统浏览器适配**：
+  - 检测到系统使用 `/usr/bin/chromium` 而非 Google Chrome
+  - 修改 MCP 配置文件 `~/.claude.json` 中的 `chrome-devtools` 服务器配置
+  - 使用 `--browserUrl` 参数连接到现有浏览器实例（`http://127.0.0.1:9222`）
+  - 配置内容：
+    ```json
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "chrome-devtools-mcp@latest",
+        "--browserUrl",
+        "http://127.0.0.1:9222"
+      ]
+    }
+    ```
+- **使用方式**：
+  - 以远程调试模式启动 Chromium：`chromium --remote-debugging-port=9222`
+  - 重启 VS Code 让 MCP 服务器读取新配置
+  - 通过 Chrome DevTools MCP 工具直接操作浏览器中的页面
+- **可用的调试功能**：
+  - 查看页面列表和内容
+  - 操作页面元素（点击、填写表单、悬停等）
+  - 查看控制台消息和网络请求
+  - 执行 JavaScript 代码
+  - 性能分析
+  - 模拟不同设备视口和网络条件
+
 ## 2026-02-22
 
 ### 移动端轨迹回放功能修复

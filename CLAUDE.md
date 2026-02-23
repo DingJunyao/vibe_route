@@ -14,7 +14,7 @@ Vibe Route - 全栈 Web 轨迹管理系统
 
 开发 URL：`http://localhost:5173`
 
-通常会打开浏览器调试。如有需要，可以使用 Chrome 开发者工具 MCP 查看页面情况，操作页面。由于一般情况下已经打开了页面，所以不要使用 Playwright。
+通常会打开浏览器调试。如有需要，可以使用 Chrome 开发者工具 MCP 查看页面情况，操作页面。由于一般情况下已经打开了页面，所以不要使用 Playwright。开发者在 Windows 下使用 Edge 浏览器，在 Linux 下使用 Chromium 浏览器。
 
 响应式设计，移动端和桌面端的断点为 1366 px。
 
