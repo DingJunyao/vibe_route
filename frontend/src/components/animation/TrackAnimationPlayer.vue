@@ -1,6 +1,40 @@
 <!-- frontend/src/components/animation/TrackAnimationPlayer.vue -->
 <template>
   <div v-if="canPlay && animationStore.showControls" class="track-animation-player">
+    <!-- 桌面端：HUD 控制面板和信息浮层 -->
+    <template v-if="!isMobile">
+      <AnimationHUD
+        :is-playing="animationStore.isPlaying"
+        :current-time="animationStore.currentTime"
+        :total-duration="duration"
+        :playback-speed="animationStore.playbackSpeed"
+        :camera-mode="animationStore.cameraMode"
+        :orientation-mode="animationStore.orientationMode"
+        :show-info-panel="animationStore.showInfoPanel"
+        :marker-style="animationStore.markerStyle"
+        @toggle-play="handleTogglePlay"
+        @seek="handleSeek"
+        @set-speed="handleSetSpeed"
+        @toggle-camera-mode="handleToggleCameraMode"
+        @toggle-orientation-mode="handleToggleOrientationMode"
+        @toggle-info-panel="handleToggleInfoPanel"
+        @cycle-marker-style="handleCycleMarkerStyle"
+        @export="handleExport"
+        @height-changed="handleHeightChanged"
+      />
+
+      <!-- 桌面端：信息浮层 -->
+      <div
+        v-if="animationStore.showInfoPanel && currentPosition"
+        class="info-panel"
+        :style="infoPanelStyle"
+      >
+        <div class="info-time">{{ formatTime(currentPosition.time) }}</div>
+        <div class="info-speed">{{ formatSpeed(currentPosition.speed) }}</div>
+        <div class="info-elevation">{{ formatElevation(currentPosition.elevation) }}</div>
+      </div>
+    </template>
+
     <!-- 导出对话框 -->
     <AnimationExportDialog
       v-model="showExportDialog"
@@ -15,6 +49,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAnimationStore } from '@/stores/animation'
 import { useAnimationMap } from '@/composables/animation/useAnimationMap'
+import AnimationHUD from './AnimationHUD.vue'
 import AnimationExportDialog from './AnimationExportDialog.vue'
 import {
   calculateDuration,
@@ -55,17 +90,10 @@ const UPDATE_THROTTLE_MS = 33  // 约30fps
 const duration = computed(() => props.config.duration)
 const points = computed(() => props.config.trackPoints)
 
-const canPlay = computed(() => {
-  const result = checkCanPlay(points.value).canPlay
-  console.log('[TrackAnimationPlayer] canPlay computed:', result, 'points.length:', points.value.length)
-  return result
-})
+const canPlay = computed(() => checkCanPlay(points.value).canPlay)
 
-// 监听 canPlay 和 showControls 变化（调试用）
-watch([canPlay, () => animationStore.showControls], ([playable, showControls]) => {
-  console.log('[TrackAnimationPlayer] canPlay & showControls changed:', { playable, showControls })
-  console.log('[TrackAnimationPlayer] Component will render:', playable && showControls)
-})
+// 检测是否为移动端
+const isMobile = computed(() => window.innerWidth <= 1366)
 
 // 计算绝对时间戳（用于 findPointIndexByTime）
 const absoluteCurrentTime = computed(() => {
@@ -76,29 +104,84 @@ const absoluteCurrentTime = computed(() => {
 // 获取当前地图提供商的坐标类型
 const isGCJ02Provider = computed(() => {
   // AMap 引擎、Tencent 引擎、高德 Leaflet、腾讯 Leaflet 使用 GCJ02 坐标
-  const result = props.mapProvider === 'amap' || props.mapProvider === 'tencent'
-  console.log('[TrackAnimationPlayer] isGCJ02Provider:', result, 'mapProvider:', props.mapProvider)
-  return result
+  return props.mapProvider === 'amap' || props.mapProvider === 'tencent'
 })
 const isBD09Provider = computed(() => {
-  const result = props.mapProvider === 'baidu'
-  console.log('[TrackAnimationPlayer] isBD09Provider:', result, 'mapProvider:', props.mapProvider)
-  return result
+  return props.mapProvider === 'baidu'
 })
 
-watch(() => props.mapProvider, (newProvider) => {
-  console.log('[TrackAnimationPlayer] mapProvider changed to:', newProvider)
-}, { immediate: true })
+watch(() => props.mapProvider, () => {}, { immediate: true })
 
 // 事件处理
 const emit = defineEmits<{
   (e: 'position-changed', position: { lat: number; lng: number; bearing: number; speed: number | null; elevation: number | null; time: string | null }): void
 }>()
 
+// 桌面端：当前位置计算属性
+const currentPosition = computed<MarkerPosition | null>(() => {
+  const { index, progress } = findPointIndexByTime(
+    absoluteCurrentTime.value,
+    points.value,
+    props.config.startTime
+  )
+
+  if (index >= points.value.length - 1) {
+    // 到达终点
+    const lastPoint = points.value[points.value.length - 1]
+    if (lastPoint) {
+      const pos = {
+        lat: isGCJ02Provider.value ? (lastPoint.latitude_gcj02 ?? lastPoint.latitude_wgs84 ?? lastPoint.latitude)
+          : isBD09Provider.value ? (lastPoint.latitude_bd09 ?? lastPoint.latitude_wgs84 ?? lastPoint.latitude)
+          : (lastPoint.latitude_wgs84 ?? lastPoint.latitude),
+        lng: isGCJ02Provider.value ? (lastPoint.longitude_gcj02 ?? lastPoint.longitude_wgs84 ?? lastPoint.longitude)
+          : isBD09Provider.value ? (lastPoint.longitude_bd09 ?? lastPoint.longitude_wgs84 ?? lastPoint.longitude)
+          : (lastPoint.longitude_wgs84 ?? lastPoint.longitude),
+        bearing: lastPoint.bearing ?? 0,
+        speed: lastPoint.speed ?? null,
+        elevation: lastPoint.elevation ?? null,
+        time: lastPoint.time ?? null,
+      }
+      return pos
+    }
+  }
+
+  const point = points.value[index]
+  const nextPoint = points.value[index + 1]
+
+  if (!point || !nextPoint) {
+    return null
+  }
+
+  const result = interpolatePosition(point, nextPoint, progress, isGCJ02Provider.value, isBD09Provider.value)
+  return result
+})
+
+// 信息浮层位置（简化为固定位置）
+const infoPanelStyle = computed(() => ({
+  top: '10px',
+  left: '10px',
+}))
+
+// 格式化函数（桌面端信息浮层使用）
+function formatTime(time: string | null): string {
+  if (!time) return '--:--:--'
+  return new Date(time).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function formatSpeed(speed: number | null): string {
+  if (speed === null) return '-- km/h'
+  return `${(speed * 3.6).toFixed(1)} km/h`
+}
+
+function formatElevation(elevation: number | null): string {
+  if (elevation === null) return '-- m'
+  return `${Math.round(elevation)} m`
+}
+
+// 移动端：计算当前位置并 emit 给父组件
 // 缓存上次计算的位置
 let lastCalculatedPosition: ReturnType<typeof interpolatePosition> | null = null
 
-// 计算当前位置并 emit 给父组件
 function updateAndEmitPosition() {
   const { index, progress } = findPointIndexByTime(
     absoluteCurrentTime.value,
@@ -123,7 +206,6 @@ function updateAndEmitPosition() {
         time: lastPoint.time ?? null,
       }
       lastCalculatedPosition = pos
-      console.log('[TrackAnimationPlayer] Emitting position-changed (end of track):', pos)
       emit('position-changed', pos)
     }
   }
@@ -132,13 +214,11 @@ function updateAndEmitPosition() {
   const nextPoint = points.value[index + 1]
 
   if (!point || !nextPoint) {
-    console.log('[TrackAnimationPlayer] No point or nextPoint, index:', index)
     return
   }
 
   const result = interpolatePosition(point, nextPoint, progress, isGCJ02Provider.value, isBD09Provider.value)
   lastCalculatedPosition = result
-  console.log('[TrackAnimationPlayer] Emitting position-changed (interpolated):', result)
   emit('position-changed', result)
 }
 
@@ -209,23 +289,12 @@ async function handleExportVideo(config: ExportConfig) {
 // HUD 高度变化处理
 function handleHeightChanged(height: number) {
   hudHeight.value = height
-  // 桌面端需要调整地图视野以避免 HUD 遮挡
-  // 移动端 HUD 固定在屏幕底部，但切换到全轨迹画面时需要调整视野
+  // 如果当前是全轨迹画面模式，立即调整地图视野
   if (animationStore.cameraMode === 'full') {
-    if (isMobile()) {
-      // 移动端：使用与 drawTracks 相同的 padding（100px）
-      fitTrackWithPadding(100)
-    } else {
-      // 桌面端：添加底部 padding 避免遮挡
-      const padding = height + 20
-      fitTrackWithPadding(padding)
-    }
+    // 额外增加 20px 作为间距
+    const padding = height + 20
+    fitTrackWithPadding(padding)
   }
-}
-
-// 检测是否为移动端
-function isMobile(): boolean {
-  return window.innerWidth <= 1366
 }
 
 // 动画循环
@@ -258,25 +327,24 @@ function animationLoop(timestamp: number) {
 
 // 更新动画
 function updateAnimation() {
-  console.log('[TrackAnimationPlayer] updateAnimation() called, isPlaying:', animationStore.isPlaying, 'currentTime:', animationStore.currentTime)
-
-  updateAndEmitPosition()
+  // 移动端：需要在每次更新时计算并 emit 位置
+  if (isMobile.value) {
+    updateAndEmitPosition()
+  }
 
   const now = Date.now()
   // 节流更新：避免过于频繁地调用地图适配器
   if (now - lastUpdateTime.value < UPDATE_THROTTLE_MS) {
-    console.log('[TrackAnimationPlayer] updateAnimation() throttled')
     return
   }
 
   lastUpdateTime.value = now
 
-  // 更新地图标记位置和双色轨迹（通过 currentPosition 计算）
-  const pos = updateAndEmitPosition.getLastPosition?.() ?? null
-  console.log('[TrackAnimationPlayer] Position:', pos)
+  // 桌面端：从 currentPosition 计算属性获取位置
+  // 移动端：从 updateAndEmitPosition 获取位置
+  const pos = isMobile.value ? updateAndEmitPosition.getLastPosition?.() ?? null : currentPosition.value
 
   if (!pos) {
-    console.log('[TrackAnimationPlayer] No position, skipping update')
     return
   }
 
@@ -298,15 +366,16 @@ function updateAnimation() {
 
 // 生命周期
 onMounted(() => {
-  console.log('[TrackAnimationPlayer] onMounted called')
-  console.log('[TrackAnimationPlayer] canPlay:', canPlay.value)
-  console.log('[TrackAnimationPlayer] showControls:', animationStore.showControls)
   isInitialized.value = true
   animationFrameId.value = requestAnimationFrame(animationLoop)
+
+  // 初始化时触发一次位置更新（移动端需要 emit position-changed）
+  if (isMobile.value) {
+    updateAndEmitPosition()
+  }
 })
 
 onUnmounted(() => {
-  console.log('[TrackAnimationPlayer] onUnmounted called')
   if (animationFrameId.value) {
     cancelAnimationFrame(animationFrameId.value)
   }
@@ -326,6 +395,10 @@ watch(() => animationStore.currentTime, () => {
   // 在非播放状态下（如 seek 操作），需要手动触发更新
   if (!animationStore.isPlaying) {
     updateAnimation()
+    // 移动端也需要 emit position-changed
+    if (isMobile.value) {
+      updateAndEmitPosition()
+    }
   }
 })
 
@@ -335,16 +408,10 @@ watch(() => animationStore.cameraMode, (newMode) => {
   if (animationStore.isPlaying) {
     setAnimationPlaying(true)
   }
-  // 切换到全轨迹画面时，调整地图视野
-  if (newMode === 'full') {
-    if (isMobile()) {
-      // 移动端：使用与 drawTracks 相同的 padding（100px）
-      fitTrackWithPadding(100)  // 改为 100px，与 drawTracks 保持一致
-    } else if (hudHeight.value > 0) {
-      // 桌面端：添加底部 padding 避免遮挡
-      const padding = hudHeight.value + 20
-      fitTrackWithPadding(padding)
-    }
+  // 切换到全轨迹画面时，调整地图视野以避免 HUD 遮挡
+  if (newMode === 'full' && hudHeight.value > 0) {
+    const padding = hudHeight.value + 20
+    fitTrackWithPadding(padding)
   }
 })
 
@@ -352,32 +419,20 @@ watch(() => animationStore.cameraMode, (newMode) => {
 watch(hudHeight, (newHeight) => {
   // 如果是全轨迹画面模式，调整地图视野
   if (animationStore.cameraMode === 'full' && newHeight > 0) {
-    if (isMobile()) {
-      // 移动端：使用与 drawTracks 相同的 padding（100px）
-      fitTrackWithPadding(100)
-    } else {
-      // 桌面端：添加底部 padding 避免遮挡
-      const padding = newHeight + 20
-      fitTrackWithPadding(padding)
-    }
+    const padding = newHeight + 20
+    fitTrackWithPadding(padding)
   }
 })
 
 // 监听地图切换，全轨迹模式下重新调整视野
 watch(() => props.mapProvider, () => {
   // 如果是全轨迹画面模式，重新调整地图视野
-  if (animationStore.cameraMode === 'full') {
+  if (animationStore.cameraMode === 'full' && hudHeight.value > 0) {
     // 延迟执行，等待地图初始化完成
     nextTick(() => {
       setTimeout(() => {
-        if (isMobile()) {
-          // 移动端：使用地图加载时的默认缩放逻辑（5% padding）
-          fitTrackWithPadding(5)
-        } else if (hudHeight.value > 0) {
-          // 桌面端：添加底部 padding 避免遮挡
-          const padding = hudHeight.value + 20
-          fitTrackWithPadding(padding)
-        }
+        const padding = hudHeight.value + 20
+        fitTrackWithPadding(padding)
       }, 500)
     })
   }
@@ -385,7 +440,7 @@ watch(() => props.mapProvider, () => {
 
 // 监听标记样式变化，更新地图上的标记
 watch(() => animationStore.markerStyle, () => {
-  const pos = currentPosition.value
+  const pos = isMobile.value ? updateAndEmitPosition.getLastPosition?.() ?? null : currentPosition.value
   if (pos) {
     setMarkerPosition(pos, animationStore.markerStyle)
   }
@@ -404,5 +459,26 @@ watch(() => animationStore.markerStyle, () => {
 
 .track-animation-player > * {
   pointer-events: auto;
+}
+
+.info-panel {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  z-index: 1001;
+}
+
+.info-time {
+  font-weight: 500;
+}
+
+.info-speed,
+.info-elevation {
+  opacity: 0.9;
 }
 </style>

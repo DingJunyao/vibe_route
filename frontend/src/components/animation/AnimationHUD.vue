@@ -1,86 +1,88 @@
 <!-- frontend/src/components/animation/AnimationHUD.vue -->
 <template>
-  <div ref="hudContentRef">
-    <!-- 移动端信息显示（在进度条上方） -->
-    <div v-if="props.showInfoPanel && props.position" class="hud-info-mobile">
-      <span class="info-time">{{ formatPositionTime(props.position.time) }}</span>
-      <span class="info-separator">•</span>
-      <span class="info-speed">{{ formatSpeed(props.position.speed) }}</span>
-      <span class="info-separator">•</span>
-      <span class="info-elevation">{{ formatElevation(props.position.elevation) }}</span>
-    </div>
-
-    <!-- 第一行：进度条 -->
-    <div class="hud-row hud-progress">
-      <el-slider
-        :model-value="progressPercent"
-        :format-tooltip="formatProgressTooltip"
-        :popper-class="'slider-tooltip-high-zindex'"
-        @update:model-value="handleSeek"
-      />
-      <div class="time-display">
-        {{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}
+  <div class="animation-hud" :class="{ 'animation-hud-mobile': isMobile }">
+    <div ref="hudContentRef" class="hud-content">
+      <!-- 移动端信息显示（在进度条上方） -->
+      <div v-if="props.showInfoPanel && props.position" class="hud-info-mobile">
+        <span class="info-time">{{ formatPositionTime(props.position.time) }}</span>
+        <span class="info-separator">•</span>
+        <span class="info-speed">{{ formatSpeed(props.position.speed) }}</span>
+        <span class="info-separator">•</span>
+        <span class="info-elevation">{{ formatElevation(props.position.elevation) }}</span>
       </div>
-    </div>
 
-    <!-- 第二行：播放控制 + 倍速 + 功能按钮 -->
-    <div class="hud-row hud-controls">
-      <el-button
-        :icon="isPlaying ? VideoPause : VideoPlay"
-        size="small"
-        @click="$emit('toggle-play')"
-      />
-      <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
-        {{ playbackSpeed }}x
-      </div>
-      <div class="divider" />
-      <el-tooltip :content="cameraModeTooltip">
-        <el-button
-          :icon="getCameraModeIcon()"
-          size="small"
-          @click="$emit('toggle-camera-mode')"
+      <!-- 第一行：进度条 -->
+      <div class="hud-row hud-progress">
+        <el-slider
+          :model-value="progressPercent"
+          :format-tooltip="formatProgressTooltip"
+          :popper-class="'slider-tooltip-high-zindex'"
+          @update:model-value="handleSeek"
         />
-      </el-tooltip>
-      <el-tooltip v-if="!isMobile" content="信息浮层">
-        <el-button
-          :type="showInfoPanel ? 'primary' : ''"
-          size="small"
-          @click="$emit('toggle-info-panel')"
-        >
-          <el-icon><Location /></el-icon>
-        </el-button>
-      </el-tooltip>
-      <el-tooltip content="标记样式">
-        <el-button size="small" @click="$emit('cycle-marker-style')">
-          <el-icon v-if="props.markerStyle === 'arrow'"><ArrowDown /></el-icon>
-          <el-icon v-else-if="props.markerStyle === 'car'"><Van /></el-icon>
-          <el-icon v-else><User /></el-icon>
-        </el-button>
-      </el-tooltip>
-      <el-tooltip content="导出视频">
-        <el-button size="small" @click="$emit('export')">
-          <el-icon><Film /></el-icon>
-        </el-button>
-      </el-tooltip>
-    </div>
+        <div class="time-display">
+          {{ formatTime(currentTime) }} / {{ formatTime(totalDuration) }}
+        </div>
+      </div>
 
-    <!-- 倍速菜单 -->
-    <div v-if="showSpeedMenu" class="speed-menu">
-      <div
-        v-for="speed in SPEED_OPTIONS"
-        :key="speed"
-        class="speed-option"
-        :class="{ active: speed === playbackSpeed }"
-        @click="handleSetSpeed(speed)"
-      >
-        {{ speed }}x
+      <!-- 第二行：播放控制 + 倍速 + 功能按钮 -->
+      <div class="hud-row hud-controls">
+        <el-button
+          :icon="isPlaying ? VideoPause : VideoPlay"
+          size="small"
+          @click="$emit('toggle-play')"
+        />
+        <div class="speed-display" @click="showSpeedMenu = !showSpeedMenu">
+          {{ playbackSpeed }}x
+        </div>
+        <div class="divider" />
+        <el-tooltip :content="cameraModeTooltip">
+          <el-button
+            :icon="getCameraModeIcon()"
+            size="small"
+            @click="$emit('toggle-camera-mode')"
+          />
+        </el-tooltip>
+        <el-tooltip v-if="!isMobile" content="信息浮层">
+          <el-button
+            :type="showInfoPanel ? 'primary' : ''"
+            size="small"
+            @click="$emit('toggle-info-panel')"
+          >
+            <el-icon><Location /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="标记样式">
+          <el-button size="small" @click="$emit('cycle-marker-style')">
+            <el-icon v-if="props.markerStyle === 'arrow'"><ArrowDown /></el-icon>
+            <el-icon v-else-if="props.markerStyle === 'car'"><Van /></el-icon>
+            <el-icon v-else><User /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="导出视频">
+          <el-button size="small" @click="$emit('export')">
+            <el-icon><Film /></el-icon>
+          </el-button>
+        </el-tooltip>
+      </div>
+
+      <!-- 倍速菜单 -->
+      <div v-if="showSpeedMenu" class="speed-menu">
+        <div
+          v-for="speed in SPEED_OPTIONS"
+          :key="speed"
+          class="speed-option"
+          :class="{ active: speed === playbackSpeed }"
+          @click="handleSetSpeed(speed)"
+        >
+          {{ speed }}x
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   VideoPlay,
   VideoPause,
@@ -164,15 +166,6 @@ const cameraModeTooltip = computed(() => {
   return '固定中心 - 轨迹朝上'
 })
 
-// 监听 position prop 变化（调试用）
-watch(() => props.position, (newPos) => {
-  console.log('[AnimationHUD] position prop changed:', newPos)
-  console.log('[AnimationHUD] showInfoPanel:', props.showInfoPanel)
-  console.log('[AnimationHUD] showInfoPanel && position:', props.showInfoPanel && !!newPos)
-  console.log('[AnimationHUD] currentTime:', props.currentTime, 'totalDuration:', props.totalDuration)
-  console.log('[AnimationHUD] progressPercent:', progressPercent.value)
-}, { immediate: true })
-
 function formatTime(ms: number): string {
   return formatAnimationTime(ms)
 }
@@ -225,11 +218,36 @@ function formatElevation(elevation: number | null): string {
 </script>
 
 <style scoped>
+/* 桌面端 HUD 容器 */
+.animation-hud {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10000;
+}
+
+/* 移动端 HUD 容器 */
+.animation-hud-mobile {
+  position: static;
+  transform: none;
+  z-index: auto;
+}
+
 .hud-content {
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  padding: 12px 16px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  min-width: 280px;
+}
+
+.animation-hud-mobile .hud-content {
   background: #fff;
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
   padding: 12px 16px;
+  box-shadow: none;
   min-width: 100%;
 }
 

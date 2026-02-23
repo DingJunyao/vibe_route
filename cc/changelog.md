@@ -190,3 +190,41 @@
   - 移动端标记点正确显示在轨迹位置
   - 日志显示 `elementOffset.offsetTop` 从 253 降至 0
   - `elementRect.y` 与 `parentRect.top + newTop` 对齐
+
+### 桌面端和移动端轨迹回放功能统一适配（2026-02-23）
+
+- **桌面端控制浮窗和信息浮层显示修复**：
+  - 在 `TrackAnimationPlayer.vue` 中使用 `v-if="!isMobile"` 条件渲染桌面端组件
+  - 恢复桌面端的 `AnimationHUD` 组件渲染
+  - 恢复桌面端的信息浮层（`info-panel`）
+  - 添加 `isMobile` 计算属性用于判断当前是桌面端还是移动端
+  - 恢复 `currentPosition` 计算属性和相关的格式化函数（`formatTime`、`formatSpeed`、`formatElevation`）
+  - 保留移动端的位置计算和 `emit` 逻辑（`updateAndEmitPosition`）
+
+- **桌面端全轨迹模式缩放逻辑修复**：
+  - 恢复 `handleHeightChanged` 函数，用于监听 HUD 高度变化并调整地图视野
+  - 恢复 `hudHeight` 状态
+  - 恢复相机模式变化时的缩放逻辑：`fitTrackWithPadding(hudHeight.value + 20)`
+  - 恢复地图切换时的缩放逻辑
+  - 这些逻辑只对桌面端生效（因为移动端不调用 `handleHeightChanged`）
+
+- **移动端标记点移动修复**：
+  - 问题：移动端在 `updateAnimation()` 函数中调用了 `updateAndEmitPosition.getLastPosition?.()`，但 `updateAndEmitPosition()` 本身从未被调用
+  - 修复：在 `updateAnimation()` 函数开始时，如果是移动端，先调用 `updateAndEmitPosition()` 更新位置
+
+- **AnimationHUD 样式修复**：
+  - 调整模板结构，将 `hudContentRef` 绑定到内部的 `div.hud-content` 元素上
+  - 桌面端：定位在底部居中，使用半透明背景和阴影效果
+  - 移动端：使用静态定位（不定位），样式由父容器控制
+  - 移除调试用的 `watch` 监听代码
+
+- **移动端兼容性**：
+  - 移动端的 `AnimationHUD` 在 `TrackAnimationPlayer` 中不渲染（通过 `v-if="!isMobile"` 控制）
+  - 移动端的控制卡片仍然由 `TrackDetail.vue` 中的独立 `AnimationHUD` 组件处理
+  - 移动端的 `position-changed` 事件正常发送，用于更新卡片中的信息显示
+
+- **结果**：
+  - 桌面端：点击开始回放按钮，控制浮窗和信息浮层正常显示
+  - 桌面端：全轨迹模式下，缩放逻辑正确考虑 HUD 高度，轨迹填充画幅（除 HUD 高度外）
+  - 移动端：标记点正常移动，位置信息正确更新
+  - 桌面端和移动端功能互不干扰，各自保持原有体验
