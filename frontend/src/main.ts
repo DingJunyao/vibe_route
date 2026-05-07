@@ -16,6 +16,27 @@ import './components/geo-editor/styles/common.css'
 // 初始化远程日志
 initRemoteLog()
 
+// 修复 Edge 浏览器最小化问题：
+// Vue Router 在 visibilitychange 事件中会调用 history.replaceState/pushState，
+// 这会触发 Edge 的 bug 导致窗口最小化被取消。通过拦截这些调用来修复。
+// 参考: https://blog.csdn.net/u012961419/article/details/157805074
+const originalReplaceState = window.history.replaceState
+const originalPushState = window.history.pushState
+
+window.history.replaceState = function (...args) {
+  if (document.visibilityState === 'hidden') {
+    return // 页面隐藏时拦截调用
+  }
+  return originalReplaceState.apply(this, args)
+}
+
+window.history.pushState = function (...args) {
+  if (document.visibilityState === 'hidden') {
+    return // 页面隐藏时拦截调用
+  }
+  return originalPushState.apply(this, args)
+}
+
 // 移动端调试工具（开发环境）
 if (import.meta.env.DEV) {
   import('eruda').then((eruda) => {
