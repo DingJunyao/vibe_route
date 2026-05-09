@@ -12,6 +12,32 @@ from app.gpxutil_wrapper.coord_transform import convert_point, CoordinateType
 GeocodingProvider = Literal['nominatim', 'gdf', 'amap', 'baidu']
 
 
+# 省份名称到简称的映射（用于自动为省级高速添加省份前缀）
+PROVINCE_NAME_TO_SHORT = {
+    '北京市': '京', '天津市': '津', '河北省': '冀', '山西省': '晋',
+    '内蒙古自治区': '蒙', '辽宁省': '辽', '吉林省': '吉', '黑龙江省': '黑',
+    '上海市': '沪', '江苏省': '苏', '浙江省': '浙', '安徽省': '皖',
+    '福建省': '闽', '江西省': '赣', '山东省': '鲁', '河南省': '豫',
+    '湖北省': '鄂', '湖南省': '湘', '广东省': '粤', '广西壮族自治区': '桂',
+    '海南省': '琼', '重庆市': '渝', '四川省': '川', '贵州省': '贵',
+    '云南省': '云', '西藏自治区': '藏', '陕西省': '陕', '甘肃省': '甘',
+    '青海省': '青', '宁夏回族自治区': '宁', '新疆维吾尔自治区': '新',
+    # 台湾、香港、澳门暂不处理
+}
+
+# 省份英文名到简称的映射
+PROVINCE_EN_TO_SHORT = {
+    'Beijing': '京', 'Tianjin': '津', 'Hebei': '冀', 'Shanxi': '晋',
+    'Inner Mongolia': '蒙', 'Liaoning': '辽', 'Jilin': '吉', 'Heilongjiang': '黑',
+    'Shanghai': '沪', 'Jiangsu': '苏', 'Zhejiang': '浙', 'Anhui': '皖',
+    'Fujian': '闽', 'Jiangxi': '赣', 'Shandong': '鲁', 'Henan': '豫',
+    'Hubei': '鄂', 'Hunan': '湘', 'Guangdong': '粤', 'Guangxi': '桂',
+    'Hainan': '琼', 'Chongqing': '渝', 'Sichuan': '川', 'Guizhou': '贵',
+    'Yunnan': '云', 'Tibet': '藏', 'Shaanxi': '陕', 'Gansu': '甘',
+    'Qinghai': '青', 'Ningxia': '宁', 'Xinjiang': '新',
+}
+
+
 class GeocodingService:
     """地理编码服务基类"""
 
@@ -93,10 +119,32 @@ class NominatimGeocoding(GeocodingService):
 
                     # 获取道路编号
                     place_id = rev['features'][0]['properties']['geocoding']['place_id']
-                    details_response = await client.get(f"{self.url}/details", params={'place_id': place_id}, headers=headers)
+                    details_response = await client.get(f"{self.url}/details", params={'place_id': place_id})
                     details = details_response.json()
                     if 'names' in details and 'ref' in details['names']:
-                        result['road_num'] = ','.join(details['names']['ref'].split(';'))
+                        road_nums = details['names']['ref'].split(';')
+                        # 为省级高速添加省份前缀（如果还没有前缀）
+                        processed_nums = []
+                        for num in road_nums:
+                            num = num.strip().upper()
+                            # 判断是否是省级高速（S开头 + 1-4位数字）
+                            if num.startswith('S') and len(num) >= 2 and num[1:].isdigit():
+                                # 检查是否已经有省份前缀
+                                has_province_prefix = any(
+                                    num.startswith(prefix)
+                                    for prefix in PROVINCE_NAME_TO_SHORT.values()
+                                )
+                                if not has_province_prefix:
+                                    # 尝试从省份信息中获取简称
+                                    province_short = None
+                                    if result['province']:
+                                        province_short = PROVINCE_NAME_TO_SHORT.get(result['province'])
+                                    elif result['province_en']:
+                                        province_short = PROVINCE_EN_TO_SHORT.get(result['province_en'])
+                                    if province_short:
+                                        num = f"{province_short}{num}"
+                            processed_nums.append(num)
+                        result['road_num'] = ','.join(processed_nums)
 
         except Exception as e:
             result['memo'] = str(e)
