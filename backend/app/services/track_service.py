@@ -2358,7 +2358,18 @@ class TrackService:
             return None
 
         def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
-            """更新点的可编辑字段"""
+            """更新点的可编辑字段
+
+            只要 CSV/Excel 中某列存在，就用其值（包括空值）覆盖数据库中的值。
+            只有当列不存在时，才保留数据库中的原值。
+            """
+            def has_key(key: str) -> bool:
+                """检查列是否存在"""
+                if isinstance(row, dict):
+                    return key in row
+                else:
+                    return headers and key in (headers if isinstance(headers, list) else list(headers))
+
             def get_val(key: str) -> str | None:
                 if isinstance(row, dict):
                     val = row.get(key)
@@ -2373,26 +2384,31 @@ class TrackService:
                             return str(val).strip() if val else None
                 return None
 
-            if get_val("province") is not None:
-                point.province = get_val("province") or None
-            if get_val("city") is not None:
-                point.city = get_val("city") or None
-            if get_val("area") is not None:
-                point.district = get_val("area") or None
-            if get_val("province_en") is not None:
-                point.province_en = get_val("province_en") or None
-            if get_val("city_en") is not None:
-                point.city_en = get_val("city_en") or None
-            if get_val("area_en") is not None:
-                point.district_en = get_val("area_en") or None
-            if get_val("road_num") is not None:
-                point.road_number = get_val("road_num") or None
-            if get_val("road_name") is not None:
-                point.road_name = get_val("road_name") or None
-            if get_val("road_name_en") is not None:
-                point.road_name_en = get_val("road_name_en") or None
-            if get_val("memo") is not None:
-                point.memo = get_val("memo") or None
+            # 行政区划信息：只要列存在就更新
+            if has_key("province"):
+                point.province = get_val("province")
+            if has_key("city"):
+                point.city = get_val("city")
+            if has_key("area"):
+                point.district = get_val("area")
+            if has_key("province_en"):
+                point.province_en = get_val("province_en")
+            if has_key("city_en"):
+                point.city_en = get_val("city_en")
+            if has_key("area_en"):
+                point.district_en = get_val("area_en")
+
+            # 道路信息：只要列存在就更新
+            if has_key("road_num"):
+                point.road_number = get_val("road_num")
+            if has_key("road_name"):
+                point.road_name = get_val("road_name")
+            if has_key("road_name_en"):
+                point.road_name_en = get_val("road_name_en")
+
+            # 备注：只要列存在就更新
+            if has_key("memo"):
+                point.memo = get_val("memo")
 
             point.updated_by = user_id
 
