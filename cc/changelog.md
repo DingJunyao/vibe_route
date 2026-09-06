@@ -228,3 +228,22 @@
   - 桌面端：全轨迹模式下，缩放逻辑正确考虑 HUD 高度，轨迹填充画幅（除 HUD 高度外）
   - 移动端：标记点正常移动，位置信息正确更新
   - 桌面端和移动端功能互不干扰，各自保持原有体验
+
+## 2026-09-06
+
+### Google 地图支持
+
+- **单一 `google` 图层**（与高德/腾讯一致的引擎选择模式）：
+  - 配置了 `api_key` → Google Maps JS API SDK 引擎；未配置 → Leaflet 瓦片（GCJ02，瓦片源 `www.google.cn`，大陆直连）
+  - 后端 `config_service.py` 新增 `google` 图层默认配置（含 `api_key` / `api_base_url`），合并时自动清理已废弃的 `google_js` 图层
+- **SDK 引擎**：
+  - 新建 [`GoogleMap.vue`](../frontend/src/components/map/GoogleMap.vue)：完整引擎（轨迹渲染、图表联动、自定义 tooltip、高亮、fitBounds、海报缩放、动画适配器）
+  - 坐标系 WGS84；坐标↔像素转换使用 OverlayView 投影助手（`toContainerPixel` / `toLatLng`）
+  - [`UniversalMap.vue`](../frontend/src/components/map/UniversalMap.vue) 新增 `useGoogleEngine` 路由，未配置 Key 时回退 Leaflet
+  - 海报生成与动画视频导出强制后端 Playwright（WebGL/瓦片 CORS 限制，同百度处理）
+- **反向地理编码**（`google` provider）：
+  - [`geocoding.py`](../backend/app/gpxutil_wrapper/geocoding.py) 新增 `GoogleGeocoding`（`/maps/api/geocode/json`，WGS84 输入，支持 `get_en_result`、`freq` 限流、`api_base_url` 反向代理）
+  - 行政区划映射：`administrative_area_level_1/2` → 省/市，`locality`/`sublocality` → 区，`sublocality_level_1/2` → 街道；道路名遍历 `route` 组件
+- **Schema**：`MapLayerConfig` 新增 `api_base_url` 字段；`GeocodingProvider` 新增 `GOOGLE`
+- **管理后台**：地图配置区 Google Key/地址输入框；地理编码提供商新增 Google 选项及配置表单
+- **数据库**：无需迁移（config 为 key-value JSON，默认配置自动合并补全）

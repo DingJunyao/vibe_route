@@ -17,8 +17,9 @@ export interface MapLayerConfig {
   subdomains?: string | string[]
   ak?: string  // 百度地图 AK
   tk?: string  // 天地图 tk
-  api_key?: string  // 高德地图 JS API Key
+  api_key?: string  // 高德/腾讯/Google 地图 JS API Key
   security_js_code?: string  // 高德地图安全密钥
+  api_base_url?: string  // Google API 地址（大陆部署可指向自建反向代理）
 }
 
 // 系统配置相关接口
@@ -41,6 +42,12 @@ export interface SystemConfig {
       api_key: string
       freq: number
       get_en_result: boolean
+    }
+    google?: {
+      api_key: string
+      freq: number
+      get_en_result: boolean
+      api_base_url: string
     }
   }
   map_layers: Record<string, MapLayerConfig>
@@ -89,6 +96,12 @@ export interface ConfigUpdateData {
       api_key: string
       freq: number
       get_en_result: boolean
+    }
+    google?: {
+      api_key: string
+      freq: number
+      get_en_result: boolean
+      api_base_url: string
     }
   }
   map_layers?: Record<string, Partial<MapLayerConfig>>

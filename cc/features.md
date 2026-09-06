@@ -24,6 +24,13 @@
 
 ## 地理编码
 
+### Google 反向地理编码
+
+- **端点**: `{api_base_url}/maps/api/geocode/json`（默认 `https://maps.googleapis.com`，大陆部署可配置反向代理）
+- **坐标系**: WGS84 输入（无需转换）
+- **配置项**: `api_key`、`freq`（默认 10 次/秒）、`get_en_result`（额外请求英文结果）、`api_base_url`
+- **字段映射**: `administrative_area_level_1/2` → 省/市（直辖市 level_2 与省级相同则置空），`locality`/`sublocality` → 区，`sublocality_level_1/2`/`neighborhood` → 街道；道路名遍历所有 results 的 `route` 组件
+
 ### 本地反向编码
 
 - **边界框过滤**: 快速获取候选区域

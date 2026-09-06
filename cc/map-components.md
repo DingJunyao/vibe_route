@@ -23,11 +23,20 @@
 
 ## 地图引擎差异
 
-| 功能 | 高德 | 百度 GL | 百度 Legacy | 腾讯 | Leaflet |
-|------|------|---------|-------------|--------|---------|
-| 坐标转像素 | `lngLatToContainer` | `pointToOverlayPixel` | `pointToPixel` | `projectToContainer` | `latLngToContainerPoint` |
-| Zoom 范围 | 3-20 | 3-20 | 3-18 | 3-20 | 1-20 |
-| 事件监听 | DOM 捕获 | addEventListener | addEventListener | DOM 容器 | 地图实例 |
+| 功能 | 高德 | 百度 GL | 百度 Legacy | 腾讯 | Google SDK | Leaflet |
+|------|------|---------|-------------|--------|---------|---------|
+| 坐标转像素 | `lngLatToContainer` | `pointToOverlayPixel` | `pointToPixel` | `projectToContainer` | OverlayView `fromLatLngToContainerPixel` | `latLngToContainerPoint` |
+| Zoom 范围 | 3-20 | 3-20 | 3-18 | 3-20 | 3-20 | 1-20 |
+| 事件监听 | DOM 捕获 | addEventListener | addEventListener | DOM 容器 | 地图实例 `addListener` | 地图实例 |
+
+## Google 地图
+
+- **单一 `google` 图层**，与高德/腾讯相同的引擎选择模式：
+  - 配置了 `api_key` → Google Maps JS API SDK 引擎（WGS84 坐标）
+  - 未配置 `api_key` → Leaflet 瓦片（GCJ02 坐标，瓦片源 `www.google.cn`，大陆直连）
+- `api_base_url` 可配置（大陆部署可指向自建反向代理），SDK 与 Leaflet 共用 `google` 图层配置
+- SDK 坐标↔像素转换依赖 OverlayView 投影助手（地图 `projection` 就绪后可用）
+- SDK 模式下海报生成、动画视频导出强制后端 Playwright（同百度 Legacy 原因：前端捕获 CORS/渲染限制）
 
 ## 百度地图特殊处理
 

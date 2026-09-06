@@ -1092,6 +1092,8 @@ function getProviderFromLayerId(layerId: string): string {
     return 'amap'
   } else if (layerId.startsWith('tencent')) {
     return 'tencent'
+  } else if (layerId.startsWith('google')) {
+    return 'google'
   } else if (layerId.startsWith('tianditu')) {
     return 'tianditu'
   } else if (layerId.startsWith('leaflet') || layerId === 'osm') {

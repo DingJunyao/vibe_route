@@ -204,10 +204,10 @@ const isPreviewing = ref(false)
 const isMobile = computed(() => window.innerWidth <= 1366)
 const isMobileDeviceComputed = computed(() => isMobileDevice())
 
-// 检测是否是百度地图
+// 检测是否是百度地图或 Google SDK 地图（均需后端生成海报）
 const isBaiduMap = computed(() => {
   const provider = getCurrentProvider()
-  return provider === 'baidu' || provider === 'baidu_legacy'
+  return provider === 'baidu' || provider === 'baidu_legacy' || provider === 'google'
 })
 
 // 当前地图提供商（用于监听变化）
@@ -291,13 +291,13 @@ watch(() => props.visible, (newVal) => {
   if (newVal) {
     // 对话框打开时，检测当前地图提供商
     const provider = getCurrentProvider()
-    const isBaidu = provider === 'baidu' || provider === 'baidu_legacy'
+    const isBaidu = provider === 'baidu' || provider === 'baidu_legacy' || provider === 'google'
     const allowServerPoster = configStore.publicConfig?.allow_server_poster ?? true
 
-    // 百度地图强制使用服务器端生成
+    // 百度/Google 地图强制使用服务器端生成
     if (isBaidu) {
       config.value.generationMode = 'backend'
-      console.log('[PosterExportDialog] 百度地图强制使用服务器端生成')
+      console.log('[PosterExportDialog] 百度/Google 地图强制使用服务器端生成')
     }
     // 配置禁用服务器生成时，强制使用浏览器生成
     else if (!allowServerPoster) {
@@ -363,11 +363,11 @@ async function generatePosterFrontend(): Promise<void> {
   }
 
   const provider = getCurrentProvider()
-  const isBaidu = provider === 'baidu' || provider === 'baidu_legacy'
+  const isBaidu = provider === 'baidu' || provider === 'baidu_legacy' || provider === 'google'
 
-  // 百度地图存在 CORS 跨域问题，自动切换到服务器端生成
+  // 百度/Google 地图存在 CORS 跨域问题，自动切换到服务器端生成
   if (isBaidu) {
-    console.log('[Export] 百度地图自动切换到服务器端生成')
+    console.log('[Export] 百度/Google 地图自动切换到服务器端生成')
     config.value.generationMode = 'backend'
     await generatePosterBackend()
     return
@@ -491,11 +491,11 @@ async function handlePreview(): Promise<void> {
 
   try {
     const provider = getCurrentProvider()
-    const isBaidu = provider === 'baidu' || provider === 'baidu_legacy'
+    const isBaidu = provider === 'baidu' || provider === 'baidu_legacy' || provider === 'google'
 
-    // 百度地图存在 CORS 跨域问题，自动切换到服务器端生成
+    // 百度/Google 地图存在 CORS 跨域问题，自动切换到服务器端生成
     if (isBaidu) {
-      console.log('[Preview] 百度地图自动切换到服务器端生成')
+      console.log('[Preview] 百度/Google 地图自动切换到服务器端生成')
       config.value.generationMode = 'backend'
       await generatePosterBackend()
       progress.value = { stage: 'done', message: '预览生成完成', percent: 100 }

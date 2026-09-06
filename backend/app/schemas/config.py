@@ -32,8 +32,9 @@ class MapLayerConfig(BaseModel):
     subdomains: Optional[str | List[str]] = Field(default=None, description="子域名列表，如 'abc' 或 ['0','1','2']")
     ak: Optional[str] = Field(default="", description="百度地图 AK")
     tk: Optional[str] = Field(default="", description="天地图 tk")
-    api_key: Optional[str] = Field(default="", description="高德地图 JS API Key")
+    api_key: Optional[str] = Field(default="", description="高德/腾讯/Google 地图 JS API Key")
     security_js_code: Optional[str] = Field(default="", description="高德地图安全密钥")
+    api_base_url: Optional[str] = Field(default="", description="Google API 地址（大陆部署可指向自建反向代理）")
 
 
 class GeocodingProvider(str):
@@ -42,6 +43,7 @@ class GeocodingProvider(str):
     GDF = "gdf"
     AMAP = "amap"
     BAIDU = "baidu"
+    GOOGLE = "google"
 
 
 # ========== 道路标志字体配置 ==========

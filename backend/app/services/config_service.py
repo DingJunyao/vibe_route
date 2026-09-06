@@ -43,6 +43,12 @@ class ConfigService:
                 "freq": 3,
                 "get_en_result": False,
             },
+            "google": {
+                "api_key": "",
+                "freq": 10,
+                "get_en_result": False,
+                "api_base_url": "https://maps.googleapis.com",
+            },
         },
         "map_layers": {
             "amap": {
@@ -103,6 +109,20 @@ class ConfigService:
                 "enabled": True,
                 "order": 4,
                 "subdomains": "abc"
+            },
+            "google": {
+                "id": "google",
+                "name": "Google 地图",
+                "crs": "gcj02",
+                "attribution": "&copy; Google",
+                "max_zoom": 19,
+                "min_zoom": 1,
+                "enabled": True,
+                "order": 5,
+                # JS API Key：填写后使用 SDK 引擎，留空则使用 Leaflet 瓦片
+                "api_key": "",
+                # API 地址可配置（大陆部署可指向自建反向代理）
+                "api_base_url": "https://maps.googleapis.com",
             },
         },
     }
@@ -235,6 +255,9 @@ class ConfigService:
                         for layer_id, layer_config in self.DEFAULT_CONFIGS['map_layers'].items():
                             if layer_id not in parsed_value:
                                 parsed_value[layer_id] = layer_config
+                        # 移除默认配置中已废弃的图层（如已合并为单一图层的 google_js）
+                        for deprecated_id in ('google_js',):
+                            parsed_value.pop(deprecated_id, None)
                         configs[config.key] = parsed_value
                     elif config.key == 'geocoding_config' and isinstance(parsed_value, dict):
                         # 对 geocoding_config 也进行深度合并

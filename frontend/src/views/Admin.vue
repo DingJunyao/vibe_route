@@ -145,6 +145,13 @@
                             <!-- 百度地图 API Key 输入框 -->
                             <el-input v-if="layer.id === 'baidu'" v-model="layer.api_key" placeholder="浏览器端应用 AK（矢量图必填）"
                               clearable show-password class="config-input" />
+                            <!-- Google 地图 API Key 与 API 地址输入框（填写 Key 后使用 SDK 引擎，留空使用 Leaflet 瓦片） -->
+                            <template v-if="layer.id === 'google'">
+                              <el-input v-model="layer.api_key" placeholder="JS API Key（填写后使用 SDK 引擎，留空使用瓦片）"
+                                clearable show-password class="config-input" />
+                              <el-input v-model="layer.api_base_url" placeholder="API 地址（默认 https://maps.googleapis.com，大陆部署可填反向代理地址）"
+                                clearable class="config-input" />
+                            </template>
                           </div>
                         </div>
                       </template>
@@ -160,6 +167,7 @@
                         <el-radio value="nominatim">Nominatim</el-radio>
                         <el-radio value="amap">高德地图</el-radio>
                         <el-radio value="baidu">百度地图</el-radio>
+                        <el-radio value="google">Google 地图</el-radio>
                       </el-radio-group>
                       <div class="radio-hint">
                         <template v-if="config.geocoding_provider === 'gdf'">
@@ -174,6 +182,10 @@
                         </template>
                         <template v-else-if="config.geocoding_provider === 'baidu'">
                           配额小（个人开发者每日 300 次 API 调用，每秒一次点位记录只能处理五分钟的）
+                        </template>
+                        <template v-else-if="config.geocoding_provider === 'google'">
+                          需在 Google Cloud Console 开启 Geocoding API（每月 40,000 次免费额度，超出按次计费），
+                          支持中英文结果；大陆部署需配置可达的 API 反向代理地址
                         </template>
                       </div>
                     </el-form-item>
@@ -330,6 +342,28 @@
                       </el-form-item>
                       <el-form-item label="获取英文信息">
                         <el-switch v-model="config.geocoding_config.baidu.get_en_result" />
+                        <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
+                      </el-form-item>
+                    </template>
+
+                    <!-- Google 地图配置 -->
+                    <template v-if="config.geocoding_provider === 'google'">
+                      <el-form-item label="API Key">
+                        <el-input v-model="config.geocoding_config.google.api_key" placeholder="开启了 Geocoding API 的 Key"
+                          show-password />
+                      </el-form-item>
+                      <el-form-item label="API 地址">
+                        <el-input v-model="config.geocoding_config.google.api_base_url"
+                          placeholder="https://maps.googleapis.com" />
+                        <span class="form-hint">大陆部署可填写自建反向代理地址</span>
+                      </el-form-item>
+                      <el-form-item label="并发频率">
+                        <el-input-number v-model="config.geocoding_config.google.freq" :min="1" :max="50"
+                          controls-position="right" />
+                        <span class="form-hint">每秒请求数，建议值为 10</span>
+                      </el-form-item>
+                      <el-form-item label="获取英文信息">
+                        <el-switch v-model="config.geocoding_config.google.get_en_result" />
                         <span class="form-hint">开启后会额外请求英文版本的地理信息</span>
                       </el-form-item>
                     </template>
@@ -1247,6 +1281,7 @@ const config = reactive<SystemConfig>({
     gdf: {},
     amap: { api_key: '', freq: 3 },
     baidu: { api_key: '', freq: 3, get_en_result: false },
+    google: { api_key: '', freq: 10, get_en_result: false, api_base_url: 'https://maps.googleapis.com' },
   },
   map_layers: {},
   spatial_backend: 'auto',
@@ -1330,6 +1365,9 @@ function initGeocodingConfig() {
   }
   if (!config.geocoding_config.baidu) {
     config.geocoding_config.baidu = { api_key: '', freq: 3, get_en_result: false }
+  }
+  if (!config.geocoding_config.google) {
+    config.geocoding_config.google = { api_key: '', freq: 10, get_en_result: false, api_base_url: 'https://maps.googleapis.com' }
   }
 }
 

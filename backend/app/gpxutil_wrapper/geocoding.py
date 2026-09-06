@@ -1,6 +1,6 @@
 """
 地理编码服务集成
-支持 Nominatim、高德地图、百度地图
+支持 Nominatim、高德地图、百度地图、Google 地图
 """
 import time
 import asyncio
@@ -9,7 +9,7 @@ import httpx
 
 from app.gpxutil_wrapper.coord_transform import convert_point, CoordinateType
 
-GeocodingProvider = Literal['nominatim', 'gdf', 'amap', 'baidu']
+GeocodingProvider = Literal['nominatim', 'gdf', 'amap', 'baidu', 'google']
 
 
 # 省份名称到简称的映射（用于自动为省级高速添加省份前缀）
@@ -354,6 +354,142 @@ class BaiduGeocoding(GeocodingService):
         return result
 
 
+class GoogleGeocoding(GeocodingService):
+    """Google 地图地理编码服务"""
+
+    # 结果字段默认值
+    _EMPTY_RESULT = {
+        'province': '',
+        'city': '',
+        'area': '',
+        'town': '',
+        'road_name': '',
+        'road_num': '',
+        'province_en': '',
+        'city_en': '',
+        'area_en': '',
+        'town_en': '',
+        'road_name_en': '',
+        'memo': ''
+    }
+
+    def __init__(self, config: dict):
+        super().__init__(config)
+        self.api_key = config.get('api_key', '')
+        self.freq = config.get('freq', 10)  # 默认每秒 10 次请求
+        self.get_en_result = config.get('get_en_result', False)
+        self.api_base_url = config.get(
+            'api_base_url', 'https://maps.googleapis.com'
+        ).rstrip('/')
+
+    async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
+        """获取点的地理信息（输入为 WGS84 坐标）"""
+        result = dict(self._EMPTY_RESULT)
+
+        if not self.api_key:
+            result['memo'] = 'API key not configured'
+            return result
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # 中文请求
+                resp = await self._request(client, lat, lon, 'zh-CN')
+                if resp is None:
+                    return result
+
+                self._fill_result(result, resp, '')
+
+                # 如果启用了英文结果，再请求一次英文版本
+                if self.get_en_result:
+                    if self.freq > 0:
+                        await asyncio.sleep(1 / self.freq)
+
+                    resp_en = await self._request(client, lat, lon, 'en')
+                    if resp_en is not None:
+                        self._fill_result(result, resp_en, '_en')
+
+                        # 英文结果与中文相同时置空
+                        for field in (
+                            'province', 'city', 'area', 'town', 'road_name'
+                        ):
+                            if result[f'{field}_en'] == result[field]:
+                                result[f'{field}_en'] = ''
+
+        except Exception as e:
+            result['memo'] = str(e)
+
+        return result
+
+    async def _request(
+        self, client: httpx.AsyncClient, lat: float, lon: float, language: str
+    ) -> Optional[list]:
+        """发起反向地理编码请求，返回 results 列表（失败返回 None）"""
+        # 限流
+        if self.freq > 0:
+            await asyncio.sleep(1 / self.freq)
+
+        params = {
+            'key': self.api_key,
+            'latlng': f'{lat},{lon}',
+            'language': language,
+        }
+        response = await client.get(
+            f'{self.api_base_url}/maps/api/geocode/json',
+            params=params
+        )
+        resp = response.json()
+
+        if resp.get('status') != 'OK':
+            return None
+        return resp.get('results') or []
+
+    def _fill_result(self, result: dict[str, Any], results: list, suffix: str) -> None:
+        """从 Google Geocoding 响应中提取行政区划与道路信息"""
+        if not results:
+            if not suffix:
+                result['memo'] = 'No results found'
+            return
+
+        # 行政区划从第一个（最精确的）结果提取
+        components = results[0].get('address_components', [])
+        admin = self._extract_admin(components)
+        result[f'province{suffix}'] = admin['province']
+        result[f'city{suffix}'] = admin['city']
+        result[f'area{suffix}'] = admin['area']
+        result[f'town{suffix}'] = admin['town']
+
+        # 道路名称：遍历所有结果查找 route 类型组件
+        for res in results:
+            for comp in res.get('address_components', []):
+                if 'route' in comp.get('types', []):
+                    result[f'road_name{suffix}'] = comp.get('long_name', '')
+                    return
+
+    @staticmethod
+    def _extract_admin(components: list) -> dict:
+        """从 address_components 提取行政区划（省/市/区/街道）"""
+        admin = {'province': '', 'city': '', 'area': '', 'town': ''}
+
+        def find_type(*types: str) -> str:
+            """查找包含任一指定类型的组件（排除 postal_code 等）"""
+            for comp in components:
+                comp_types = comp.get('types', [])
+                if any(t in comp_types for t in types) and 'postal_code' not in comp_types:
+                    return comp.get('long_name', '')
+            return ''
+
+        admin['province'] = find_type('administrative_area_level_1')
+        admin['city'] = find_type('administrative_area_level_2')
+        # 直辖市：level_2 与省级相同（或为空）时置空
+        if admin['city'] == admin['province']:
+            admin['city'] = ''
+        admin['area'] = find_type('locality', 'sublocality')
+        admin['town'] = find_type(
+            'sublocality_level_2', 'sublocality_level_1', 'neighborhood'
+        )
+        return admin
+
+
 def create_geocoding_service(provider: str, config: dict) -> GeocodingService:
     """创建地理编码服务实例"""
     from app.gpxutil_wrapper.local_geocoding import LocalGeocodingService
@@ -363,6 +499,7 @@ def create_geocoding_service(provider: str, config: dict) -> GeocodingService:
         'gdf': LocalGeocodingService,
         'amap': AmapGeocoding,
         'baidu': BaiduGeocoding,
+        'google': GoogleGeocoding,
     }
 
     provider = provider.lower()

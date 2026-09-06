@@ -64,6 +64,27 @@
       @track-click="handleTrackClick"
       @map-click="handleMapClick"
     />
+    <!-- Google 地图引擎 -->
+    <GoogleMap
+      v-else-if="useGoogleEngine"
+      ref="googleRef"
+      :tracks="tracks"
+      :highlight-track-id="highlightTrackId"
+      :highlight-segment="highlightSegment"
+      :colored-segments="coloredSegments"
+      :available-segments="availableSegments"
+      :highlight-point-index="highlightPointIndex"
+      :latest-point-index="latestPointIndex"
+      :mode="mode"
+      :map-scale="mapScale"
+      :track-orientation="trackOrientation"
+      :disable-point-hover="disablePointHover"
+      :custom-overlays="customOverlays"
+      @point-hover="handlePointHover"
+      @track-hover="handleTrackHover"
+      @track-click="handleTrackClick"
+      @map-click="handleMapClick"
+    />
     <!-- Leaflet 地图引擎 -->
     <LeafletMap
       v-else
@@ -184,6 +205,7 @@ import LeafletMap from './LeafletMap.vue'
 import AMap from './AMap.vue'
 import BMap from './BMap.vue'
 import TencentMap from './TencentMap.vue'
+import GoogleMap from './GoogleMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 import { formatTimeShort } from '@/utils/relativeTime'
 import { getEffectiveMapLayer, saveLocalMapPreference } from '@/utils/mapLocalPreference'
@@ -291,6 +313,7 @@ const configStore = useConfigStore()
 const userConfigStore = useUserConfigStore()
 const animationStore = useAnimationStore()
 const amapRef = ref()
+const googleRef = ref()
 const bmapRef = ref()
 const tencentRef = ref()
 const leafletRef = ref()
@@ -451,6 +474,14 @@ const useTencentEngine = computed(() => {
   return !!(tencentConfig?.api_key)
 })
 
+// 判断是否使用 Google 地图引擎（有 api_key 时用 SDK，否则回退 Leaflet 瓦片，同高德/腾讯模式）
+const useGoogleEngine = computed(() => {
+  const layerId = currentLayerId.value
+  if (layerId !== 'google' && !layerId.startsWith('google')) return false
+  const googleConfig = configStore.getMapLayerById('google')
+  return !!(googleConfig?.api_key)
+})
+
 // 已启用的地图层列表
 const enabledMapLayers = computed<MapLayerConfig[]>(() => {
   const allLayers = configStore.getMapLayers()
@@ -480,6 +511,13 @@ function getCurrentViewState(): { center: { lat: number; lng: number } | null; z
     }
   } else if (useTencentEngine.value && tencentRef.value) {
     const instance = (tencentRef.value as any).getMapInstance?.()
+    if (instance) {
+      const c = instance.getCenter()
+      center = { lat: c.lat, lng: c.lng }
+      zoom = instance.getZoom()
+    }
+  } else if (useGoogleEngine.value && googleRef.value) {
+    const instance = (googleRef.value as any).getMapInstance?.()
     if (instance) {
       const c = instance.getCenter()
       center = { lat: c.lat, lng: c.lng }
@@ -517,6 +555,12 @@ function setMapViewState(center: { lat: number; lng: number }, zoom: number) {
       instance.setCenter(new TMap.LatLng(center.lat, center.lng))
       instance.setZoom(zoom)
     }
+  } else if (useGoogleEngine.value && googleRef.value) {
+    const instance = (googleRef.value as any).getMapInstance?.()
+    if (instance) {
+      instance.setCenter({ lat: center.lat, lng: center.lng })
+      instance.setZoom(zoom)
+    }
   } else if (leafletRef.value) {
     const instance = (leafletRef.value as any).getMapInstance?.()
     if (instance) {
@@ -546,6 +590,8 @@ function switchLayer(layerId: string) {
     mapProvider = 'amap'
   } else if (layerId.startsWith('tencent')) {
     mapProvider = 'tencent'
+  } else if (layerId.startsWith('google')) {
+    mapProvider = 'google'
   }
 
   // 异步更新用户配置（不等待完成）
@@ -589,6 +635,8 @@ function fitBounds(customPadding?: number) {
     bmapRef.value.fitBounds(paddingPercent)
   } else if (useTencentEngine.value && tencentRef.value?.fitBounds) {
     tencentRef.value.fitBounds(paddingPercent)
+  } else if (useGoogleEngine.value && googleRef.value?.fitBounds) {
+    googleRef.value.fitBounds(paddingPercent)
   } else if (leafletRef.value?.fitBounds) {
     leafletRef.value.fitBounds(paddingPercent)
   }
@@ -602,6 +650,8 @@ function fitToBounds(bounds: { minLat: number; maxLat: number; minLon: number; m
     (bmapRef.value as any).fitToBounds(bounds, paddingPercent)
   } else if (useTencentEngine.value && (tencentRef.value as any)?.fitToBounds) {
     (tencentRef.value as any).fitToBounds(bounds, paddingPercent)
+  } else if (useGoogleEngine.value && (googleRef.value as any)?.fitToBounds) {
+    (googleRef.value as any).fitToBounds(bounds, paddingPercent)
   } else if (leafletRef.value && (leafletRef.value as any)?.fitToBounds) {
     (leafletRef.value as any).fitToBounds(bounds, paddingPercent)
   }
@@ -731,6 +781,8 @@ function highlightPoint(index: number) {
     bmapRef.value.highlightPoint(index)
   } else if (useTencentEngine.value && tencentRef.value?.highlightPoint) {
     tencentRef.value.highlightPoint(index)
+  } else if (useGoogleEngine.value && googleRef.value?.highlightPoint) {
+    googleRef.value.highlightPoint(index)
   } else if (leafletRef.value?.highlightPoint) {
     // Leaflet 引擎也支持
     leafletRef.value.highlightPoint(index)
@@ -745,6 +797,8 @@ function hideMarker() {
     bmapRef.value.hideMarker()
   } else if (useTencentEngine.value && tencentRef.value?.hideMarker) {
     tencentRef.value.hideMarker()
+  } else if (useGoogleEngine.value && googleRef.value?.hideMarker) {
+    googleRef.value.hideMarker()
   } else if (leafletRef.value?.hideMarker) {
     leafletRef.value.hideMarker()
   }
@@ -758,6 +812,8 @@ function resize() {
     bmapRef.value.resize()
   } else if (useTencentEngine.value && tencentRef.value?.resize) {
     tencentRef.value.resize()
+  } else if (useGoogleEngine.value && googleRef.value?.resize) {
+    googleRef.value.resize()
   } else if (leafletRef.value?.resize) {
     leafletRef.value.resize()
   }
@@ -789,6 +845,8 @@ onMounted(async () => {
       provider = 'amap'
     } else if (initialLayerId.startsWith('tencent')) {
       provider = 'tencent'
+    } else if (initialLayerId.startsWith('google')) {
+      provider = 'google'
     } else if (initialLayerId.startsWith('tianditu')) {
       provider = 'tianditu'
     } else if (initialLayerId.startsWith('leaflet') || initialLayerId === 'osm') {
@@ -826,6 +884,8 @@ watch(currentLayerId, (newLayerId) => {
     provider = 'amap'
   } else if (newLayerId.startsWith('tencent')) {
     provider = 'tencent'
+  } else if (newLayerId.startsWith('google')) {
+    provider = 'google'
   } else if (newLayerId.startsWith('tianditu')) {
     provider = 'tianditu'
   } else if (newLayerId.startsWith('leaflet') || newLayerId === 'osm') {

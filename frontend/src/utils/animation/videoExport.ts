@@ -206,8 +206,8 @@ export function checkExportPrerequisites(): { canExport: boolean; reason?: strin
 }
 
 /**
- * 检查是否需要后端导出（百度地图需要）
+ * 检查是否需要后端导出（百度地图、Google 地图需要）
  */
 export function requiresBackendExport(mapProvider: string): boolean {
-  return ['baidu', 'baidu_gl', 'baidu_legacy'].includes(mapProvider)
+  return ['baidu', 'baidu_gl', 'baidu_legacy', 'google'].includes(mapProvider)
 }
