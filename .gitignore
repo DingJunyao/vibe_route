@@ -35,7 +35,6 @@ env/
 .idea/
 
 # VS Code
-.vscode/
 *.code-workspace
 
 # mypy
