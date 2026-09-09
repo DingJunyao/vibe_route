@@ -1,4 +1,5 @@
 import { http } from './request'
+import { getBackendOrigin } from '@/utils/origin'
 
 // 任务类型定义
 export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed'
@@ -42,8 +43,8 @@ export const taskApi = {
     return http.get('/tasks', { params: { limit } })
   },
 
-  // 下载任务结果
+  // 下载任务结果（生产同源走 nginx 反代，开发指向后端端口）
   download(taskId: number): string {
-    return `${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/tasks/${taskId}/download`
+    return `${getBackendOrigin()}/api/tasks/${taskId}/download`
   },
 }

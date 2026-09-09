@@ -429,9 +429,10 @@ async def health():
     """健康检查"""
     # 检查数据库连接
     from app.core.database import async_session_maker
+    from sqlalchemy import text
     try:
         async with async_session_maker() as db:
-            await db.execute("SELECT 1")
+            await db.execute(text("SELECT 1"))
         db_status = "healthy"
     except Exception as e:
         logger.error(f"Database health check failed: {e}")

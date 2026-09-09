@@ -113,3 +113,5 @@ backend/data/area_data/
 .worktrees/
 # docs/
 .conda/
+# Docker compose（用户从 example 复制自定义）
+docker-compose.yml

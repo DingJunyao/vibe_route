@@ -44,3 +44,25 @@ cd frontend && npm run dev
 # 数据库迁移
 cd backend && alembic upgrade head
 ```
+
+## Docker 部署
+
+```bash
+# 统一部署（all-in-one，前后端 + nginx 同容器）
+cp docker-compose.example.yml docker-compose.yml   # 可自定义，已 gitignore
+cp backend/.env.example backend/.env               # 修改生产密钥 SECRET_KEY
+docker compose up -d
+
+# 分开部署（前后端独立镜像）
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+docker compose -f docker-compose.split.yml up -d
+
+# 自定义宿主端口（默认 80）
+APP_PORT=8080 docker compose up -d
+
+# 只构建镜像（构建全部 variant 见 .github/workflows/docker-publish.yml）
+docker build --target all-in-one -t vibe-route:aio .
+docker build --target backend -t vibe-route:backend .
+docker build --target frontend -t vibe-route:frontend .
+```

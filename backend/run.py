@@ -10,5 +10,8 @@ if sys.platform == 'win32':
 
 import uvicorn
 
+from app.core.config import settings
+
 if __name__ == '__main__':
-    uvicorn.run('app.main:app', host='0.0.0.0', port=8000, reload=True)
+    # 监听地址与端口由环境变量 / .env 配置（APP_HOST / APP_PORT）
+    uvicorn.run('app.main:app', host=settings.APP_HOST, port=settings.APP_PORT, reload=True)

@@ -1,0 +1,186 @@
+name: 构建并发布 Docker 镜像
+
+# 发布 Docker 镜像（GHCR + Docker Hub）：
+# - release 发布（或手动触发）时构建 frontend / backend / all-in-one 三种
+# - 双架构 linux/amd64 + linux/arm64，版本标签取 release 版本号
+# - GHCR 默认推送（无需配置）；Docker Hub 可选，配置后同时推送
+# - 所有 variant 推送到同一镜像名，靠标签区分
+#
+# 标签规则（以版本 v0.1.0、仓库 DingJunyao/vibe_route 为例）：
+#   aio:      DingJunyao/vibe_route:v0.1.0-aio, :v0.1.0, :latest-aio, :aio, :latest
+#   frontend: DingJunyao/vibe_route:v0.1.0-frontend, :latest-frontend, :frontend
+#   backend:  DingJunyao/vibe_route:v0.1.0-backend, :latest-backend, :backend
+#   （手动触发无版本号时，只推 latest-* / 短名 / latest 标签）
+#
+# Docker Hub 配置（仓库 Settings → Secrets and variables → Actions）：
+#   Secrets（两者都设置才会启用 Docker Hub 推送）：
+#     DOCKERHUB_USERNAME —— Docker Hub 用户名
+#     DOCKERHUB_TOKEN    —— Docker Hub 访问令牌（Access Token，推荐而非密码）
+#   Variables（可选，不设则取默认）：
+#     DOCKERHUB_NAMESPACE —— 镜像命名空间（用户名/组织），默认取 DOCKERHUB_USERNAME
+#     DOCKERHUB_REPO      —— 仓库名，默认取 GitHub 仓库名（小写）
+
+on:
+  # release 发布（含重新发布）时自动构建全部类别并按版本打标签
+  release:
+    types: [published]
+  # 手动触发（默认 aio，可选 all 全量重发 latest）
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 手动构建的镜像类别（release 会自动构建全部；默认 aio）
+        type: choice
+        required: true
+        default: aio
+        options:
+          - aio
+          - frontend
+          - backend
+          - all
+      version:
+        description: 版本号（如 v0.1.0），留空则只推滚动标签（latest-* / 短名 / latest）
+        type: string
+        required: false
+        default: ''
+
+env:
+  REGISTRY: ghcr.io
+  # secrets 上下文不能用于 if 条件，先折算成 env（env 中允许 secrets）
+  DOCKERHUB_ENABLED: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+
+jobs:
+  # 决定要构建的类别：release 构建全部；手动触发按输入（默认 aio）
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - id: resolve
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.variant }}" != "all" ]; then
+            echo "matrix=[\"${{ github.event.inputs.variant }}\"]" >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix=["aio","frontend","backend"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: ${{ fromJSON(needs.resolve.outputs.matrix) }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 解析 Dockerfile target · 镜像名 · 标签列表
+        id: config
+        shell: bash
+        run: |
+          # ── variant → Dockerfile target + 短名 ──
+          case "${{ matrix.variant }}" in
+            aio)       target="all-in-one"; short="aio" ;;
+            frontend)  target="frontend";   short="frontend" ;;
+            backend)   target="backend";    short="backend" ;;
+            *) echo "未知变体: ${{ matrix.variant }}"; exit 1 ;;
+          esac
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+          echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+          # ── GHCR 镜像名（必须小写；所有 variant 共用同一镜像，靠标签区分） ──
+          ghcr_image="ghcr.io/${GITHUB_REPOSITORY}"
+          ghcr_image="${ghcr_image,,}"
+          echo "ghcr_image=${ghcr_image}" >> "$GITHUB_OUTPUT"
+
+          # ── Docker Hub 镜像名（配置了 DOCKERHUB_USERNAME 才启用） ──
+          hub_user="${{ secrets.DOCKERHUB_USERNAME }}"
+          hub_image=""
+          if [ -n "$hub_user" ]; then
+            hub_ns="${{ vars.DOCKERHUB_NAMESPACE }}"
+            hub_repo="${{ vars.DOCKERHUB_REPO }}"
+            [ -z "$hub_ns" ] && hub_ns="$hub_user"
+            if [ -z "$hub_repo" ]; then
+              hub_repo="${GITHUB_REPOSITORY##*/}"
+              hub_repo="${hub_repo,,}"
+            fi
+            hub_image="docker.io/${hub_ns}/${hub_repo}"
+            echo "hub_image=${hub_image}" >> "$GITHUB_OUTPUT"
+          else
+            echo "hub_image=" >> "$GITHUB_OUTPUT"
+          fi
+
+          # ── 拼标签列表 ──
+          # 收集要打标签的目标镜像（跳过空）
+          IMAGES=()
+          [ -n "${ghcr_image}" ] && IMAGES+=("${ghcr_image}")
+          [ -n "${hub_image}" ] && IMAGES+=("${hub_image}")
+
+          # release 取 tag 名，手动触发取输入框，都没则只推滚动标签
+          if [ "${{ github.event_name }}" = "release" ]; then
+            VERSION="${{ github.ref_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION=""
+          fi
+
+          TAGS=""
+          for img in "${IMAGES[@]}"; do
+            # 版本标签（仅 release）
+            if [ -n "$VERSION" ]; then
+              TAGS="${TAGS}${TAGS:+,}${img}:${VERSION}-${short}"
+            fi
+            # 滚动标签（始终推送）
+            TAGS="${TAGS}${TAGS:+,}${img}:latest-${short}"
+            TAGS="${TAGS},${img}:${short}"
+            # aio 额外拿裸版本号 + latest
+            if [ "$short" = "aio" ]; then
+              if [ -n "$VERSION" ]; then
+                TAGS="${TAGS},${img}:${VERSION}"
+              fi
+              TAGS="${TAGS},${img}:latest"
+            fi
+          done
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "::notice:: 镜像标签: ${TAGS}"
+
+      - name: 设置 QEMU（arm64 构建）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub（可选）
+        if: env.DOCKERHUB_ENABLED == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ steps.config.outputs.target }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.config.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=vibe-route-${{ steps.config.outputs.short }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

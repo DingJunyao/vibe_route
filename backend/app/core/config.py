@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # API 配置
     API_V1_PREFIX: str = "/api"
 
+    # 服务监听配置（`python run.py` 开发启动时生效；前端 vite proxy 的 VITE_DEV_BACKEND_URL 需同步）
+    APP_HOST: str = "0.0.0.0"
+    APP_PORT: int = 8000
+
     # 安全配置
     SECRET_KEY: str = "your-secret-key-change-this-in-production"
     ALGORITHM: str = "HS256"

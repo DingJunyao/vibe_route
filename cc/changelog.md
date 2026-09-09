@@ -4,6 +4,10 @@
 
 ## 2026-09
 
+- 添加 Docker 支持（参考 live_calc 方案）：根级多 target Dockerfile（`frontend-builder`/`backend`/`all-in-one`/`frontend`，backend 含 playwright chromium + libcairo2）、`docker-compose.example.yml`（all-in-one 一体化）+ `docker-compose.split.yml`（前后端分开）、`deploy/`（nginx 模板含 WebSocket upgrade + `/exports` 反代、supervisord、entrypoint 脚本）、`.dockerignore`、`.github/workflows/docker-publish.yml`（GHCR 必推 + Docker Hub 可选，amd64/arm64，aio/frontend/backend 三 variant 标签）。旧失效开发模式 docker-compose.yml 删除（引用的 Dockerfile/app.worker 均不存在；后端实际未使用 Redis/Celery），docker-compose.yml 入 .gitignore（用户从 example 复制自定义）
+- 修复任务路由双前缀 bug：`tasks.py` router prefix `/api/tasks` 与 `main.py` include 的 `/api` 拼接成 `/api/api/tasks/*`（其它 router 均无此问题），任务下载 404；改为 `/tasks`。同步修复前端 `task.ts` 下载 URL 拼接（改用 `getBackendOrigin()` 统一后端 origin 逻辑，废弃 `VITE_API_URL` 依赖及 Dockerfile 构建参数）
+- 修复 `/health` 健康检查 SQLAlchemy 2.x 警告（`execute("SELECT 1")` 改 `text("SELECT 1")`），database 状态恢复 healthy（此前误报 degraded）
+- 前后端端口自定义：后端 `APP_HOST`/`APP_PORT` 环境变量（`run.py` 读取，原硬编码 8000）；前端 `VITE_DEV_PORT`/`VITE_DEV_BACKEND_URL`（vite.config.ts 读取，原硬编码 5173/8000）；compose 宿主端口 `${APP_PORT:-80}`
 - 实现动画导出服务端录制（Playwright `record_video`）：前端导出模式（`?export=true` 自动播放、`body.dataset` 进度/完成信号）、token 注入复用登录会话、`FRONTEND_URL` 配置、整体超时兜底 `(时长/速度)*2+60s`
 - 导出画面与用户视图一致：起点（currentTime）、相机/朝向/标记样式、地图图层（`exportLayerId`）、缩放中心（UniversalMap 暴露 `getCurrentViewState`/`setMapViewState` + 全局视图状态提供者）随请求传递
 - 导出模式强制桌面布局：`isMobile`/`isTallScreen` 导出感知 + `body.export-mode` CSS 恢复桌面布局（修复低分辨率录制视口命中移动端媒体查询导致地图容器高度塌陷）

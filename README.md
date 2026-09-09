@@ -434,6 +434,24 @@ POSTGRES_PASSWORD=your-password
 POSTGRES_DB=vibe_route
 ```
 
+## Docker 部署
+
+```bash
+# 统一部署（all-in-one，前后端 + nginx 同容器，一个端口访问完整应用）
+cp docker-compose.example.yml docker-compose.yml   # 可自定义，已 gitignore
+cp backend/.env.example backend/.env               # 修改生产密钥 SECRET_KEY
+docker compose up -d
+
+# 分开部署（前后端独立镜像，便于水平扩展）
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+docker compose -f docker-compose.split.yml up -d
+```
+
+- 默认宿主端口 80，自定义：`APP_PORT=8080 docker compose up -d`
+- 镜像构建：`docker build --target all-in-one -t vibe-route:aio .`（backend/frontend 同理）
+- GitHub Actions：release 发布时自动构建并推送 GHCR（`docker-publish.yml`，可选 Docker Hub，amd64/arm64）
+
 ## 项目结构
 
 ```
@@ -457,7 +475,10 @@ vibe_route/
 │   │   ├── router/        # 路由
 │   │   └── utils/         # 工具函数
 │   └── package.json
-└── docker-compose.yml
+├── deploy/                 # 容器部署配置（nginx 模板、supervisord、启动脚本）
+├── Dockerfile              # 多 target：all-in-one / backend / frontend
+├── docker-compose.example.yml   # 统一部署（用户复制为 docker-compose.yml 自定义）
+└── docker-compose.split.yml     # 分开部署
 ```
 
 ## 许可证
