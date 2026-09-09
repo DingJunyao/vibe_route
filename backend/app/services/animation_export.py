@@ -22,6 +22,7 @@ class AnimationExportService:
         self,
         track_id: int,
         user_id: int,
+        token: str,
         request: AnimationExportRequest,
         db: AsyncSession,
         background_tasks: BackgroundTasks,
@@ -33,12 +34,17 @@ class AnimationExportService:
         result = await db.execute(
             select(TrackPoint)
             .where(TrackPoint.track_id == track_id)
-            .order_by(TrackPoint.index)
+            .order_by(TrackPoint.point_index)
         )
         points = result.scalars().all()
 
         if len(points) < 2:
             raise ValueError("轨迹点数量不足，至少需要2个点")
+
+        # 计算轨迹时长（毫秒），时间缺失时兜底 60s
+        duration_ms = 60000.0
+        if points[0].time and points[-1].time:
+            duration_ms = (points[-1].time - points[0].time).total_seconds() * 1000
 
         # 创建导出任务
         task_id = str(uuid.uuid4())
@@ -56,7 +62,8 @@ class AnimationExportService:
         background_tasks.add_task(
             self._export_video,
             track_id=track_id,
-            points=points,
+            duration_ms=duration_ms,
+            token=token,
             task_id=task_id,
             request=request,
         )
@@ -70,7 +77,8 @@ class AnimationExportService:
     async def _export_video(
         self,
         track_id: int,
-        points: list[TrackPoint],
+        duration_ms: float,
+        token: str,
         task_id: str,
         request: AnimationExportRequest,
     ):
@@ -106,11 +114,9 @@ class AnimationExportService:
 
             download_url = await capture_animation_video(
                 track_id=track_id,
-                points=points,
-                resolution=request.resolution,
-                fps=request.fps,
-                show_hud=request.show_hud,
-                speed=request.speed,
+                duration_ms=duration_ms,
+                token=token,
+                request=request,
                 progress_callback=progress_callback,
             )
 

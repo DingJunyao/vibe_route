@@ -24,6 +24,9 @@ from app.schemas.track import (
     RegionTreeResponse,
     UnifiedTrackListResponse,
     ShareStatusResponse,
+    MergePreviewRequest,
+    MergePreviewResponse,
+    MergeTrackRequest,
 )
 from app.services.track_service import track_service
 from app.services.share_service import share_service
@@ -303,6 +306,61 @@ async def get_track_stats(
     )
 
 
+@router.post("/merge/preview", response_model=MergePreviewResponse)
+async def merge_tracks_preview(
+    request: MergePreviewRequest,
+    crs: str = Query("wgs84", pattern="^(wgs84|gcj02|bd09)$"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    预览轨迹合并方案（不落库）
+
+    - track_ids: 待合并轨迹 ID 列表（至少 2 条）
+    - crs: 主坐标系 (wgs84, gcj02, bd09)，用于设置 points 中 latitude/longitude 字段
+    - 按时间顺序组合各段，时间重叠区间自动去重（保留时间靠后的段）
+    """
+    try:
+        preview = await track_service.merge_preview(
+            db, current_user.id, request.track_ids, crs
+        )
+        return MergePreviewResponse(**preview)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/merge", response_model=TrackResponse)
+async def merge_tracks(
+    request: MergeTrackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    执行轨迹合并
+
+    - 创建一条新轨迹，按时间顺序组合所选轨迹的轨迹点
+    - 时间重叠区间自动去重（保留时间靠后的段）
+    - 原轨迹全部保留，不做任何修改
+    """
+    try:
+        track = await track_service.merge_tracks(
+            db,
+            current_user,
+            request.track_ids,
+            request.name,
+            request.description,
+        )
+        return track
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
 @router.get("/{track_id}", response_model=TrackResponse)
 async def get_track(
     track_id: int,
@@ -434,6 +492,7 @@ async def delete_track(
 @router.post("/{track_id}/fill-geocoding")
 async def fill_track_geocoding(
     track_id: int,
+    incremental: bool = Query(False, description="增量模式：仅填充行政区划为空的点，不覆盖已有数据"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -462,13 +521,14 @@ async def fill_track_geocoding(
         from app.core.database import async_session_maker
         async with async_session_maker() as new_db:
             try:
-                await track_service.fill_geocoding_info(new_db, track_id, current_user.id)
+                await track_service.fill_geocoding_info(new_db, track_id, current_user.id, incremental=incremental)
             except Exception as e:
                 logger.exception(f"Fill geocoding task error for track {track_id}, user {current_user.id}")
 
     asyncio.create_task(fill_task())
 
-    return {"message": "开始填充行政区划和道路信息", "track_id": track_id}
+    message = "开始补充缺失的行政区划和道路信息" if incremental else "开始填充行政区划和道路信息"
+    return {"message": message, "track_id": track_id}
 
 
 @router.post("/{track_id}/change-crs", response_model=TrackResponse)

@@ -37,8 +37,8 @@ window.history.pushState = function (...args) {
   return originalPushState.apply(this, args)
 }
 
-// 移动端调试工具（开发环境）
-if (import.meta.env.DEV) {
+// 移动端调试工具（默认关闭，开发环境通过 URL 参数 ?eruda 启用）
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('eruda')) {
   import('eruda').then((eruda) => {
     eruda.default?.init()
     console.log('Eruda 调试工具已启用')

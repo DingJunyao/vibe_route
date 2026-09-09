@@ -225,3 +225,79 @@ class SharedConfigResponse(BaseModel):
     """分享者地图配置响应 schema"""
     map_provider: Optional[str] = None
     map_layers: Optional[dict] = None
+
+
+class MergePreviewRequest(BaseModel):
+    """合并预览请求 schema"""
+    track_ids: List[int] = Field(..., min_length=2)
+
+
+class MergeSegmentInfo(BaseModel):
+    """合并段信息 schema"""
+    track_id: int
+    name: str
+    order: int  # 按时间排序的序号（从 0 开始）
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    total_points: int  # 该段总点数
+    kept_points: int  # 保留点数
+    removed_points: int  # 因时间重叠剔除的点数
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        if dt is None:
+            return None
+        return dt.isoformat() + '+00:00'
+
+
+class MergePreviewPoint(BaseModel):
+    """合并预览轻量点 schema（用于前端绘制地图）"""
+    latitude: float
+    longitude: float
+    latitude_wgs84: float
+    longitude_wgs84: float
+    latitude_gcj02: Optional[float] = None
+    longitude_gcj02: Optional[float] = None
+    latitude_bd09: Optional[float] = None
+    longitude_bd09: Optional[float] = None
+    segment_index: int  # 所属段序号（对应 segments 数组下标）
+
+
+class MergeGapInfo(BaseModel):
+    """合并衔接信息 schema"""
+    from_segment: int  # 前段序号（segments 数组下标）
+    to_segment: int  # 后段序号（segments 数组下标）
+    time_gap: Optional[float] = None  # 衔接时间间隔（秒），时间缺失时为 None
+    distance: float  # 衔接直线距离（米）
+    is_gap: bool  # 是否为时间空缺（间隔超过阈值）
+
+
+class MergePreviewResponse(BaseModel):
+    """合并预览响应 schema"""
+    segments: List[MergeSegmentInfo]
+    has_overlap: bool  # 是否发生时间重叠去重
+    gaps: List[MergeGapInfo] = []  # 相邻段衔接信息（含空缺判定）
+    total_points: int  # 合并后总点数
+    removed_points: int  # 剔除总点数
+    distance: float  # 合并后总距离（米）
+    duration: int  # 合并后总时长（秒）
+    elevation_gain: float  # 合并后总爬升（米）
+    elevation_loss: float  # 合并后总下降（米）
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    points: List[MergePreviewPoint]
+
+    @field_serializer('start_time', 'end_time')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        """序列化 datetime 为带时区的 ISO 格式字符串"""
+        if dt is None:
+            return None
+        return dt.isoformat() + '+00:00'
+
+
+class MergeTrackRequest(BaseModel):
+    """执行合并请求 schema"""
+    track_ids: List[int] = Field(..., min_length=2)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None

@@ -5,7 +5,7 @@ import gpxpy
 import asyncio
 from datetime import datetime, timezone
 from typing import Optional, List
-from sqlalchemy import select, func, delete, insert, and_, update
+from sqlalchemy import select, func, delete, insert, and_, or_, update
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -505,6 +505,7 @@ class TrackService:
         db: AsyncSession,
         track_id: int,
         user_id: int,
+        incremental: bool = False,
     ):
         """
         填充行政区划和道路信息（合并功能）
@@ -513,24 +514,40 @@ class TrackService:
             db: 数据库会话
             track_id: 轨迹 ID
             user_id: 用户 ID
+            incremental: 增量模式，仅填充行政区划为空的点（不覆盖已有数据）
         """
         # 使用新的会话，因为原会话可能已关闭
         from app.core.database import async_session_maker
 
-        logger.info(f"Starting geocoding fill for track {track_id}")
+        mode = "incremental" if incremental else "full"
+        logger.info(f"Starting geocoding fill ({mode}) for track {track_id}")
 
         async with async_session_maker() as db:
             try:
                 # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
+                conditions = [TrackPoint.track_id == track_id, TrackPoint.is_valid == True]
+                if incremental:
+                    # 增量模式：仅处理行政区划为空的点
+                    conditions.append(or_(TrackPoint.province.is_(None), TrackPoint.province == ''))
                 result = await db.execute(
                     select(TrackPoint)
-                    .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+                    .where(and_(*conditions))
                     .order_by(TrackPoint.time, TrackPoint.created_at)
                 )
                 points = result.scalars().all()
 
                 if not points:
-                    logger.warning(f"No points found for track {track_id}")
+                    if incremental:
+                        # 增量模式下无缺失点属于正常情况，标记完成
+                        logger.info(f"No missing points for track {track_id} (incremental mode)")
+                        self._filling_progress[track_id] = {
+                            "current": 0,
+                            "total": 0,
+                            "failed": 0,
+                            "status": "completed"
+                        }
+                    else:
+                        logger.warning(f"No points found for track {track_id}")
                     return
 
                 total_points = len(points)
@@ -645,7 +662,7 @@ class TrackService:
 
                 # 标记完成
                 self._filling_progress[track_id]["status"] = "completed"
-                logger.info(f"Geocoding info filled for track {track_id}: updated={updated_count}, failed={self._filling_progress[track_id]['failed']}")
+                logger.info(f"Geocoding info filled ({mode}) for track {track_id}: updated={updated_count}, failed={self._filling_progress[track_id]['failed']}")
 
             except Exception as e:
                 logger.error(f"Error filling geocoding info for track {track_id}: {e}")
@@ -3563,6 +3580,371 @@ class TrackService:
         logger.info(f"Track {track_id}: changed original_crs to {new_original_crs}, updated {len(points)} points")
 
         return track
+
+    # ========== 轨迹合并 ==========
+
+    # 段间衔接时间空缺判定阈值（秒）：超过视为空缺（如停车休整、接驳换乘）
+    MERGE_GAP_THRESHOLD_SECONDS = 300
+
+    @staticmethod
+    def _merge_sort_key(point: TrackPoint) -> tuple:
+        """
+        合并排序键：优先 GPS 时间，为空回退服务器接收时间，均为空排最后
+
+        Returns:
+            可比较的元组 (等级, 时间)
+        """
+        if point.time is not None:
+            return (0, point.time)
+        if point.created_at is not None:
+            return (1, point.created_at)
+        return (2, datetime.min)
+
+    @staticmethod
+    def _merge_effective_time(point: TrackPoint) -> Optional[datetime]:
+        """合并衔接时间判定用的有效时间：GPS 时间优先，回退服务器接收时间"""
+        return point.time if point.time is not None else point.created_at
+
+    @staticmethod
+    def _haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """两点间水平直线距离（米，WGS84）"""
+        from math import sqrt, radians, sin, cos, atan2
+
+        rlat1, rlon1, rlat2, rlon2 = radians(lat1), radians(lon1), radians(lat2), radians(lon2)
+        dlat = rlat2 - rlat1
+        dlon = rlon2 - rlon1
+        a = sin(dlat / 2) ** 2 + cos(rlat1) * cos(rlat2) * sin(dlon / 2) ** 2
+        c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return 6371000 * c  # 地球半径 6371km
+
+    @staticmethod
+    def _calculate_merge_stats(points: List[TrackPoint]) -> tuple[float, float, float]:
+        """
+        在合并点序列上重算统计信息（口径同 create_from_gpx）
+
+        Args:
+            points: 按合并顺序排列的轨迹点
+
+        Returns:
+            (距离, 爬升, 下降) 元组
+        """
+        from math import sqrt
+
+        total_distance = 0.0
+        elevation_gain = 0.0
+        elevation_loss = 0.0
+        prev_point = None
+        prev_elevation = None
+
+        for point in points:
+            if prev_point is not None:
+                # 使用 WGS84 坐标计算 3D 距离（Haversine + 高差）
+                horizontal_distance = TrackService._haversine_distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84,
+                )
+
+                elev1 = prev_point.elevation or 0
+                elev2 = point.elevation or 0
+                total_distance += sqrt(horizontal_distance ** 2 + (elev2 - elev1) ** 2)
+
+            # 海拔变化
+            if point.elevation is not None:
+                if prev_elevation is not None:
+                    diff = point.elevation - prev_elevation
+                    if diff > 0:
+                        elevation_gain += diff
+                    else:
+                        elevation_loss += abs(diff)
+                prev_elevation = point.elevation
+
+            prev_point = point
+
+        return round(total_distance, 2), round(elevation_gain, 2), round(elevation_loss, 2)
+
+    async def _build_merge_plan(self, db: AsyncSession, user_id: int, track_ids: List[int]) -> dict:
+        """
+        构建合并方案（预览与执行共用，保证所见即所得）
+
+        Args:
+            db: 数据库会话
+            user_id: 用户 ID
+            track_ids: 待合并轨迹 ID 列表
+
+        Returns:
+            合并方案字典
+
+        Raises:
+            ValueError: 校验失败时
+        """
+        unique_ids = list(dict.fromkeys(track_ids))
+        if len(unique_ids) < 2:
+            raise ValueError("请至少选择两段不同的轨迹")
+
+        result = await db.execute(
+            select(Track).where(
+                and_(
+                    Track.id.in_(unique_ids),
+                    Track.user_id == user_id,
+                    Track.is_valid == True,
+                )
+            )
+        )
+        tracks = list(result.scalars().all())
+        if len(tracks) != len(unique_ids):
+            raise ValueError("部分轨迹不存在或无权访问")
+
+        # 按开始时间升序排列（为空的排最后）
+        tracks.sort(key=lambda t: (t.start_time is None, t.start_time or datetime.min))
+
+        # 逐段加载点（Python 内统一排序，避免不同数据库对 NULL 排序行为不一致）
+        loaded: List[List[TrackPoint]] = []
+        for track in tracks:
+            pts_result = await db.execute(
+                select(TrackPoint)
+                .where(and_(TrackPoint.track_id == track.id, TrackPoint.is_valid == True))
+                .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
+            )
+            loaded.append(sorted(pts_result.scalars().all(), key=self._merge_sort_key))
+
+        # 时间重叠去重（后段优先）：前段截断于后段首点排序键，重叠区间保留时间靠后的段
+        segment_points: List[List[TrackPoint]] = []
+        removed_counts: List[int] = []
+        for i, points in enumerate(loaded):
+            cut_key: Optional[tuple] = None
+            if i + 1 < len(loaded) and loaded[i + 1]:
+                cut_key = self._merge_sort_key(loaded[i + 1][0])
+            kept: List[TrackPoint] = []
+            removed = 0
+            for point in points:
+                if cut_key is not None and self._merge_sort_key(point) >= cut_key:
+                    removed += 1
+                    continue
+                kept.append(point)
+            segment_points.append(kept)
+            removed_counts.append(removed)
+
+        # 合并统计
+        all_points = [p for kept in segment_points for p in kept]
+        distance, elevation_gain, elevation_loss = self._calculate_merge_stats(all_points)
+        start_time = next((p.time for p in all_points if p.time is not None), None)
+        end_time = next((p.time for p in reversed(all_points) if p.time is not None), None)
+        duration = int((end_time - start_time).total_seconds()) if start_time and end_time else 0
+
+        # 行政区划/道路信息标记（口径同 import_points_from_file）
+        has_area_info = any(
+            p.province or p.city or p.district or p.province_en or p.city_en or p.district_en
+            for p in all_points
+        )
+        has_road_info = any(
+            p.road_number or p.road_name or p.road_name_en
+            for p in all_points
+        )
+
+        return {
+            'tracks': tracks,
+            'segment_points': segment_points,
+            'removed_counts': removed_counts,
+            'total_points': len(all_points),
+            'distance': distance,
+            'duration': duration,
+            'elevation_gain': elevation_gain,
+            'elevation_loss': elevation_loss,
+            'start_time': start_time,
+            'end_time': end_time,
+            'has_area_info': has_area_info,
+            'has_road_info': has_road_info,
+        }
+
+    async def merge_preview(
+        self,
+        db: AsyncSession,
+        user_id: int,
+        track_ids: List[int],
+        crs: CoordinateType = 'wgs84',
+    ) -> dict:
+        """
+        预览合并方案（不落库）
+
+        Args:
+            db: 数据库会话
+            user_id: 用户 ID
+            track_ids: 待合并轨迹 ID 列表
+            crs: 主坐标系（设置 latitude/longitude 字段）
+
+        Returns:
+            合并预览数据字典
+        """
+        plan = await self._build_merge_plan(db, user_id, track_ids)
+
+        segments = []
+        removed_total = 0
+        for order, (track, kept, removed) in enumerate(
+            zip(plan['tracks'], plan['segment_points'], plan['removed_counts'])
+        ):
+            removed_total += removed
+            seg_start = next((p.time for p in kept if p.time is not None), None) or track.start_time
+            seg_end = next((p.time for p in reversed(kept) if p.time is not None), None) or track.end_time
+            segments.append({
+                'track_id': track.id,
+                'name': track.name,
+                'order': order,
+                'start_time': seg_start,
+                'end_time': seg_end,
+                'total_points': len(kept) + removed,
+                'kept_points': len(kept),
+                'removed_points': removed,
+            })
+
+        # 相邻段衔接信息（空缺判定：衔接时间间隔超过阈值）
+        # 某段保留点为空（完全重叠被整段剔除）时跳过，衔接基于非空段序列
+        gaps = []
+        non_empty = [(i, kept) for i, kept in enumerate(plan['segment_points']) if kept]
+        for (prev_idx, prev_kept), (next_idx, next_kept) in zip(non_empty, non_empty[1:]):
+            from_point = prev_kept[-1]
+            to_point = next_kept[0]
+            from_time = self._merge_effective_time(from_point)
+            to_time = self._merge_effective_time(to_point)
+            time_gap = (to_time - from_time).total_seconds() if from_time and to_time else None
+            gaps.append({
+                'from_segment': prev_idx,
+                'to_segment': next_idx,
+                'time_gap': time_gap,
+                'distance': round(self._haversine_distance(
+                    from_point.latitude_wgs84, from_point.longitude_wgs84,
+                    to_point.latitude_wgs84, to_point.longitude_wgs84,
+                ), 2),
+                'is_gap': time_gap is not None and time_gap > self.MERGE_GAP_THRESHOLD_SECONDS,
+            })
+
+        points = []
+        for seg_idx, kept in enumerate(plan['segment_points']):
+            for p in kept:
+                lat, lng = p.get_coords(crs)
+                points.append({
+                    'latitude': lat,
+                    'longitude': lng,
+                    'latitude_wgs84': p.latitude_wgs84,
+                    'longitude_wgs84': p.longitude_wgs84,
+                    'latitude_gcj02': p.latitude_gcj02,
+                    'longitude_gcj02': p.longitude_gcj02,
+                    'latitude_bd09': p.latitude_bd09,
+                    'longitude_bd09': p.longitude_bd09,
+                    'segment_index': seg_idx,
+                })
+
+        return {
+            'segments': segments,
+            'has_overlap': removed_total > 0,
+            'gaps': gaps,
+            'total_points': plan['total_points'],
+            'removed_points': removed_total,
+            'distance': plan['distance'],
+            'duration': plan['duration'],
+            'elevation_gain': plan['elevation_gain'],
+            'elevation_loss': plan['elevation_loss'],
+            'start_time': plan['start_time'],
+            'end_time': plan['end_time'],
+            'points': points,
+        }
+
+    async def merge_tracks(
+        self,
+        db: AsyncSession,
+        user: User,
+        track_ids: List[int],
+        name: str,
+        description: Optional[str] = None,
+    ) -> Track:
+        """
+        执行合并：创建新轨迹并复制所有保留点，原轨迹不做任何修改
+
+        Args:
+            db: 数据库会话
+            user: 用户对象
+            track_ids: 待合并轨迹 ID 列表
+            name: 新轨迹名称
+            description: 新轨迹描述
+
+        Returns:
+            创建的新轨迹对象
+
+        Raises:
+            ValueError: 校验失败时
+        """
+        plan = await self._build_merge_plan(db, user.id, track_ids)
+        if plan['total_points'] == 0:
+            raise ValueError("所选轨迹没有可合并的轨迹点")
+
+        merged_ids = '+'.join(str(t.id) for t in plan['tracks'])
+        track_obj = Track(
+            user_id=user.id,
+            name=name,
+            description=description,
+            original_filename=f"merge:{merged_ids}",
+            original_crs=plan['tracks'][0].original_crs,
+            distance=plan['distance'],
+            duration=plan['duration'],
+            elevation_gain=plan['elevation_gain'],
+            elevation_loss=plan['elevation_loss'],
+            start_time=plan['start_time'],
+            end_time=plan['end_time'],
+            has_area_info=plan['has_area_info'],
+            has_road_info=plan['has_road_info'],
+            is_live_recording=False,
+            created_by=user.id,
+            updated_by=user.id,
+            is_valid=True,
+        )
+        db.add(track_obj)
+        await db.flush()  # 获取 track_id
+
+        # 复制所有保留点，point_index 重新编号
+        insert_values = []
+        for idx, point in enumerate(p for kept in plan['segment_points'] for p in kept):
+            insert_values.append({
+                "track_id": track_obj.id,
+                "point_index": idx,
+                "time": point.time,
+                "latitude_wgs84": point.latitude_wgs84,
+                "longitude_wgs84": point.longitude_wgs84,
+                "latitude_gcj02": point.latitude_gcj02,
+                "longitude_gcj02": point.longitude_gcj02,
+                "latitude_bd09": point.latitude_bd09,
+                "longitude_bd09": point.longitude_bd09,
+                "elevation": point.elevation,
+                "speed": point.speed,
+                "bearing": point.bearing,
+                "province": point.province,
+                "city": point.city,
+                "district": point.district,
+                "province_en": point.province_en,
+                "city_en": point.city_en,
+                "district_en": point.district_en,
+                "road_name": point.road_name,
+                "road_number": point.road_number,
+                "road_name_en": point.road_name_en,
+                "memo": point.memo,
+                "is_interpolated": bool(point.is_interpolated),
+                "interpolation_id": None,  # 不沿用源插值关联，避免悬空外键
+                "created_by": user.id,
+                "updated_by": user.id,
+                "is_valid": True,
+            })
+
+        # 分批插入，每批 500 条
+        batch_size = 500
+        for i in range(0, len(insert_values), batch_size):
+            batch = insert_values[i:i + batch_size]
+            try:
+                await db.execute(TrackPoint.__table__.insert().values(batch))
+            except Exception as e:
+                logger.error(f"Error inserting merge batch {i//batch_size}: {e}")
+                raise
+
+        await db.commit()
+        await db.refresh(track_obj)
+        return track_obj
 
 
 track_service = TrackService()

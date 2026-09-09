@@ -2278,6 +2278,7 @@ function drawCustomOverlays() {
       const color = overlay.color || '#409eff'
       const weight = overlay.weight || 3
       const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+      const dashArray = overlay.dashArray
 
       const layer = new TMap.MultiPolyline({
         map: TMapInstance,
@@ -2286,6 +2287,8 @@ function drawCustomOverlays() {
             color: color,
             width: weight,
             borderWidth: 0,
+            // 虚线样式（兼容空格/逗号分隔，如 "12 8" → [12, 8]）
+            ...(dashArray ? { dashArray: dashArray.split(/[\s,]+/).map(s => parseFloat(s.trim())) } : {}),
           }),
         },
         geometries: [{

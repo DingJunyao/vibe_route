@@ -1,19 +1,20 @@
 # backend/app/models/animation_task.py
 
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Text, Integer
+from sqlalchemy import Column, String, Float, Text, Integer, ForeignKey
 from sqlalchemy.orm import relationship
 
+from app.core.database import Base
 from .base import AuditMixin
 
 
-class AnimationExportTask(AuditMixin):
+class AnimationExportTask(Base, AuditMixin):
     """动画导出任务模型"""
     __tablename__ = 'animation_export_tasks'
 
     id = Column(String(36), primary_key=True)
-    track_id = Column(Integer, nullable=False, index=True)
-    user_id = Column(Integer, nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey('tracks.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
 
     status = Column(String(20), default='pending')  # pending, processing, completed, failed, cancelled
     progress = Column(Float, default=0.0)

@@ -62,6 +62,31 @@ export interface AnimationMapAdapter {
 let globalAdapter: AnimationMapAdapter | null = null
 let currentRotation = 0
 
+// 全局视图状态提供者（UniversalMap 注册，导出动画时收集地图状态）
+export interface MapViewState {
+  center: { lat: number; lng: number } | null
+  zoom: number | null
+  layerId: string
+  width: number  // 地图画幅宽度（像素），用于导出画幅变化时的 zoom 修正
+  height: number  // 地图画幅高度（像素）
+}
+
+let globalViewStateProvider: (() => MapViewState) | null = null
+
+/**
+ * 注册视图状态提供者（由 UniversalMap 调用）
+ */
+export function registerViewStateProvider(provider: () => MapViewState) {
+  globalViewStateProvider = provider
+}
+
+/**
+ * 获取当前地图视图状态（未注册时返回空状态）
+ */
+export function getGlobalViewState(): MapViewState {
+  return globalViewStateProvider?.() ?? { center: null, zoom: null, layerId: '', width: 0, height: 0 }
+}
+
 // 等待队列（在适配器注册之前存储调用）
 let markerPositionQueue: Array<{ position: MarkerPosition; style: MarkerStyle }> = []
 let cameraPositionQueue: Array<{ position: MarkerPosition }> = []

@@ -1,5 +1,33 @@
 # 功能模块
 
+## 合并轨迹
+
+### 流程（两步式，独立页面 `/merge`）
+
+1. **选择轨迹**: 多选列表（含已结束实时记录的轨迹；进行中的与无轨迹虚拟项不可选），按时间排序展示已选顺序，前端粗略重叠预警
+2. **预览合并**: 地图各段彩色线区分（`customOverlays`，多坐标系）+ 起终点标记 + 图例；统计信息、段列表、重叠去重明细；输入名称/描述后确认
+
+### 后端（tracks.py + track_service.py）
+
+- `POST /api/tracks/merge/preview`: 返回合并方案（不落库）
+- `POST /api/tracks/merge`: 创建新轨迹，原轨迹零修改
+- 预览与执行共用 `_build_merge_plan`（所见即所得）
+- 无表结构变更；新轨迹 `original_filename` 记录源 ID（如 `merge:1+5+9`）
+
+### 去重规则（后段优先）
+
+- 排序键 = `time`（空回退 `created_at`）；段按 `start_time` 升序
+- 每段截断于下一段首点排序键（`>=` 边界归后段），重叠区间保留时间靠后的段
+- 复制点保留全部字段，`interpolation_id` 置空（避免悬空外键），`point_index` 重编号
+- 统计口径同 `create_from_gpx`（3D Haversine 距离、相邻高差爬升/下降、首末点时长）
+
+### 空缺补全（不插值，仅预览提示）
+
+- 判定: 相邻段「前段末点时间 → 后段首点时间」间隔 > 300 秒（`MERGE_GAP_THRESHOLD_SECONDS`）；任一端时间缺失则不判空缺
+- 预览响应 `gaps[]`: `from_segment/to_segment/time_gap`（秒，缺失 null）/`distance`（水平 Haversine）/`is_gap`
+- 渲染: 相邻段末点→首点画衔接线（不生成插值点），空缺=橙色 `#e6a23c` 虚线（`dashArray '12 8'`），正常=灰色 `#909399` 实线；图例 + el-alert 警告 + 空缺明细
+- 各引擎 dashArray: 高德 `strokeStyle:'dashed'`+`strokeDasharray` 字符串；百度 GL/Legacy 仅 `strokeStyle`；腾讯/Leaflet 数组（解析 `'12 8'`→`[12,8]`）；Google 用 Symbol repeat 方案（无 `strokeDasharray` 支持）
+
 ## 实时记录
 
 ### 时间字段规范

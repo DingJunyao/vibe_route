@@ -5,8 +5,8 @@
 
 import { getWebSocketOrigin } from './origin'
 
-// 是否启用远程日志（开发环境或通过 URL 参数启用）
-const ENABLED = import.meta.env.DEV || new URLSearchParams(window.location.search).has('remote-log')
+// 是否启用远程日志（默认关闭，通过 URL 参数 ?remote-log 启用）
+const ENABLED = new URLSearchParams(window.location.search).has('remote-log')
 
 // 调试开关：通过 VITE_DEBUG_WS 环境变量控制，默认开启
 const DEBUG = import.meta.env.VITE_DEBUG_WS !== 'false'

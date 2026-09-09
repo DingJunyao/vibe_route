@@ -180,6 +180,54 @@ export interface ShareStatus {
   share_url: string | null
 }
 
+// 合并轨迹相关类型
+export interface MergeSegmentInfo {
+  track_id: number
+  name: string
+  order: number  // 按时间排序的序号（从 0 开始）
+  start_time: string | null
+  end_time: string | null
+  total_points: number
+  kept_points: number
+  removed_points: number  // 因时间重叠剔除的点数
+}
+
+export interface MergePreviewPoint {
+  latitude: number
+  longitude: number
+  latitude_wgs84: number
+  longitude_wgs84: number
+  latitude_gcj02: number | null
+  longitude_gcj02: number | null
+  latitude_bd09: number | null
+  longitude_bd09: number | null
+  segment_index: number  // 所属段序号
+}
+
+// 合并衔接信息（相邻段末点→首点，含空缺判定）
+export interface MergeGapInfo {
+  from_segment: number
+  to_segment: number
+  time_gap: number | null // 衔接时间间隔（秒），时间缺失时为 null
+  distance: number // 衔接直线距离（米）
+  is_gap: boolean // 是否为时间空缺
+}
+
+export interface MergePreviewResponse {
+  segments: MergeSegmentInfo[]
+  has_overlap: boolean
+  gaps: MergeGapInfo[]
+  total_points: number
+  removed_points: number
+  distance: number
+  duration: number
+  elevation_gain: number
+  elevation_loss: number
+  start_time: string | null
+  end_time: string | null
+  points: MergePreviewPoint[]
+}
+
 // API 方法
 export const trackApi = {
   // 上传轨迹
@@ -259,9 +307,9 @@ export const trackApi = {
     return `/api/tracks/${trackId}/download?crs=${crs}`
   },
 
-  // 填充地理信息
-  fillGeocoding(trackId: number): Promise<{ message: string; track_id: number; progress?: any }> {
-    return http.post(`/tracks/${trackId}/fill-geocoding`)
+  // 填充地理信息（incremental: 增量模式，仅填充行政区划为空的点）
+  fillGeocoding(trackId: number, incremental: boolean = false): Promise<{ message: string; track_id: number; progress?: any }> {
+    return http.post(`/tracks/${trackId}/fill-geocoding`, null, { params: { incremental } })
   },
 
   // 获取填充进度
@@ -316,6 +364,22 @@ export const trackApi = {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+    })
+  },
+
+  // ========== 合并轨迹相关 API ==========
+
+  // 预览合并方案（不落库）
+  mergePreview(trackIds: number[], crs: string = 'wgs84'): Promise<MergePreviewResponse> {
+    return http.post('/tracks/merge/preview', { track_ids: trackIds }, { params: { crs } })
+  },
+
+  // 执行合并（创建新轨迹，原轨迹保留）
+  mergeTracks(trackIds: number[], name: string, description?: string): Promise<Track> {
+    return http.post('/tracks/merge', {
+      track_ids: trackIds,
+      name,
+      description: description || null,
     })
   },
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.gzip import GZipMiddleware
@@ -383,6 +384,11 @@ app.include_router(shared.router, prefix=settings.API_V1_PREFIX)  # 公开分享
 app.include_router(interpolation.router, prefix=settings.API_V1_PREFIX)
 app.include_router(overlay_templates.router, prefix=settings.API_V1_PREFIX)  # 覆盖层模板
 app.include_router(animation.router, prefix=settings.API_V1_PREFIX)  # 动画导出
+
+# 导出文件静态目录（动画导出等），与 playwright_export 写入目录一致
+exports_dir = Path(settings.EXPORT_DIR)
+exports_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/exports", StaticFiles(directory=str(exports_dir)), name="exports")
 
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息

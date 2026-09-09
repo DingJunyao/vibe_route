@@ -42,14 +42,32 @@ export type OrientationMode = 'north-up' | 'track-up'
 export type MarkerStyle = 'arrow' | 'car' | 'person'
 
 /**
+ * 导出对话框选项（视图状态由调用方补充为完整 ExportConfig）
+ */
+export interface ExportOptions {
+  resolution: Resolution
+  showHUD: boolean
+  speed: number
+}
+
+/**
  * 导出配置
  */
 export interface ExportConfig {
   resolution: Resolution
-  fps: 30 | 60
   showHUD: boolean
-  format: 'webm' | 'mp4'
   speed: number  // 导出倍速，1.0 = 原速
+  // 视图状态（导出画面与用户点击导出时一致）
+  startTime: number  // 起点（播放位置，毫秒）
+  cameraMode: CameraMode
+  orientationMode: OrientationMode
+  markerStyle: MarkerStyle
+  showInfoPanel: boolean
+  layerId?: string  // 地图图层（含卫星图等变体）
+  zoom?: number | null  // fixed-center 模式下用户手动缩放
+  center?: { lat: number; lng: number } | null
+  viewportWidth?: number  // 详情页地图画幅宽度（像素），用于导出画幅变化时的 zoom 修正
+  viewportHeight?: number  // 详情页地图画幅高度（像素）
 }
 
 /**
@@ -88,7 +106,6 @@ export interface AnimationPreferences {
   defaultCameraMode: CameraMode
   defaultOrientationMode: OrientationMode
   exportResolution: Resolution
-  exportFPS: 30 | 60
   exportShowHUD: boolean
 }
 
@@ -102,7 +119,6 @@ export const DEFAULT_PREFERENCES: AnimationPreferences = {
   defaultCameraMode: 'full',
   defaultOrientationMode: 'north-up',
   exportResolution: '1080p',
-  exportFPS: 30,
   exportShowHUD: true,
 } as const
 

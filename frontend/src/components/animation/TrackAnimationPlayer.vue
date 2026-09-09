@@ -3,7 +3,9 @@
   <div v-if="canPlay && animationStore.showControls" class="track-animation-player">
     <!-- 桌面端：HUD 控制面板和信息浮层 -->
     <template v-if="!isMobile">
+      <!-- 控制面板（导出模式隐藏，导出视频不包含控制 UI） -->
       <AnimationHUD
+        v-if="!exportMode"
         :is-playing="animationStore.isPlaying"
         :current-time="animationStore.currentTime"
         :total-duration="duration"
@@ -29,6 +31,12 @@
         class="info-panel"
         :style="infoPanelStyle"
       >
+        <!-- 导出模式：播放进度、当前时间、剩余时间 -->
+        <div v-if="exportMode" class="info-export-progress">
+          {{ formatTime(animationStore.currentTime) }} / {{ formatTime(duration) }}
+          · {{ Math.round((animationStore.currentTime / duration) * 100) }}%
+          · 剩余 {{ formatTime(Math.max(0, duration - animationStore.currentTime)) }}
+        </div>
         <div class="info-time">{{ formatTime(currentPosition.time) }}</div>
         <div class="info-speed">{{ formatSpeed(currentPosition.speed) }}</div>
         <div class="info-elevation">{{ formatElevation(currentPosition.elevation) }}</div>
@@ -37,6 +45,7 @@
 
     <!-- 导出对话框 -->
     <AnimationExportDialog
+      ref="exportDialogRef"
       v-model="showExportDialog"
       :track-id="trackId"
       :map-provider="mapProvider"
@@ -60,14 +69,15 @@ import {
   type TrackPoint,
   type MarkerPosition,
 } from '@/utils/animationUtils'
-import { exportWithPlaywright, downloadFile, generateExportFilename, requiresBackendExport, checkExportPrerequisites } from '@/utils/animation/videoExport'
+import { exportWithPlaywright, downloadFile, generateExportFilename, requiresBackendExport, checkExportPrerequisites, buildExportConfig } from '@/utils/animation/videoExport'
 import { ElMessage } from 'element-plus'
-import type { AnimationConfig, ExportConfig } from '@/types/animation'
+import type { AnimationConfig, ExportOptions } from '@/types/animation'
 
 interface Props {
   config: AnimationConfig
   trackId: number
   mapProvider: string
+  exportMode?: boolean  // 导出模式：强制桌面布局、隐藏控制面板（导出视频仅地图+动画）
 }
 
 const props = defineProps<Props>()
@@ -81,6 +91,7 @@ const animationFrameId = ref<number | null>(null)
 const lastTimestamp = ref(0)
 const lastUpdateTime = ref(0)  // 上次更新地图的时间
 const showExportDialog = ref(false)
+const exportDialogRef = ref<InstanceType<typeof AnimationExportDialog> | null>(null)
 const hudHeight = ref(0)
 
 // 地图更新节流：每帧最多更新一次
@@ -92,8 +103,8 @@ const points = computed(() => props.config.trackPoints)
 
 const canPlay = computed(() => checkCanPlay(points.value).canPlay)
 
-// 检测是否为移动端
-const isMobile = computed(() => window.innerWidth <= 1366)
+// 检测是否为移动端（导出模式强制桌面布局）
+const isMobile = computed(() => !props.exportMode && window.innerWidth <= 1366)
 
 // 计算绝对时间戳（用于 findPointIndexByTime）
 const absoluteCurrentTime = computed(() => {
@@ -259,17 +270,20 @@ function handleExport() {
   showExportDialog.value = true
 }
 
-async function handleExportVideo(config: ExportConfig) {
+async function handleExportVideo(options: ExportOptions) {
   try {
     // 检查是否需要后端导出
     if (requiresBackendExport(props.mapProvider)) {
-      // 使用后端 Playwright 导出
+      // 组装完整导出配置（含当前视图状态），使用后端 Playwright 导出
+      const config = buildExportConfig(options)
+      exportDialogRef.value?.startExport()
       const downloadUrl = await exportWithPlaywright(
         props.trackId,
         config,
-        () => {}
+        (progress) => exportDialogRef.value?.updateProgress(progress)
       )
-      downloadFile(downloadUrl, generateExportFilename(props.trackId, config.format))
+      await downloadFile(downloadUrl, generateExportFilename(props.trackId))
+      exportDialogRef.value?.finishSuccess()
       ElMessage.success('导出完成')
     } else {
       // 前端导出（暂时不支持）
@@ -282,6 +296,7 @@ async function handleExportVideo(config: ExportConfig) {
     }
   } catch (e: any) {
     console.error('Export error:', e)
+    exportDialogRef.value?.finishError()
     ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
   }
 }
@@ -480,5 +495,14 @@ watch(() => animationStore.markerStyle, () => {
 .info-speed,
 .info-elevation {
   opacity: 0.9;
+}
+
+/* 导出模式：播放进度信息行 */
+.info-export-progress {
+  font-weight: 500;
+  color: #ffd666;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
 }
 </style>

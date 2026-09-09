@@ -1,10 +1,14 @@
 // frontend/src/utils/animation/videoExport.ts
 
-import type { Resolution, ExportConfig } from '@/types/animation'
+import { http } from '@/api/request'
+import { useAnimationStore } from '@/stores/animation'
+import { getGlobalViewState } from '@/composables/animation/useAnimationMap'
+import { getBackendOrigin } from '@/utils/origin'
+import type { Resolution, ExportConfig, ExportOptions } from '@/types/animation'
 
 interface AnimationTask {
   task_id: string
-  status: 'pending' | 'processing' | 'completed' | 'failed'
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
   progress: number
   download_url?: string
   error?: string
@@ -95,6 +99,28 @@ export async function canvasToVideo(
 }
 
 /**
+ * 组装完整导出配置：对话框选项 + 当前动画/地图视图状态
+ */
+export function buildExportConfig(options: ExportOptions): ExportConfig {
+  const animationStore = useAnimationStore()
+  const view = getGlobalViewState()
+
+  return {
+    ...options,
+    startTime: animationStore.currentTime,
+    cameraMode: animationStore.cameraMode,
+    orientationMode: animationStore.orientationMode,
+    markerStyle: animationStore.markerStyle,
+    showInfoPanel: animationStore.showInfoPanel,
+    layerId: view.layerId || undefined,
+    zoom: view.zoom,
+    center: view.center,
+    viewportWidth: view.width || undefined,
+    viewportHeight: view.height || undefined,
+  }
+}
+
+/**
  * 使用后端 Playwright 导出（推荐用于百度地图）
  */
 export async function exportWithPlaywright(
@@ -102,39 +128,55 @@ export async function exportWithPlaywright(
   config: ExportConfig,
   onProgress: (progress: number) => void
 ): Promise<string> {
-  const { resolution, fps, showHUD, speed } = config
+  const {
+    resolution,
+    showHUD,
+    speed,
+    startTime,
+    cameraMode,
+    orientationMode,
+    markerStyle,
+    showInfoPanel,
+    layerId,
+    zoom,
+    center,
+    viewportWidth,
+    viewportHeight,
+  } = config
 
-  // 调用后端 API 启动导出
-  const response = await fetch(`/api/v1/animation/export?track_id=${trackId}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  // 调用后端 API 启动导出（走统一客户端，自动携带认证头）
+  const task = await http.post<AnimationTask>(
+    '/animation/export',
+    {
       resolution,
-      fps,
       show_hud: showHUD,
       speed,
-    }),
-  })
-
-  if (!response.ok) {
-    const error = await response.text()
-    throw new Error(error || 'Failed to export animation')
-  }
-
-  const task: AnimationTask = await response.json()
+      start_time: startTime,
+      camera_mode: cameraMode,
+      orientation_mode: orientationMode,
+      marker_style: markerStyle,
+      show_info_panel: showInfoPanel,
+      layer_id: layerId ?? null,
+      zoom: zoom ?? null,
+      center_lat: center?.lat ?? null,
+      center_lng: center?.lng ?? null,
+      viewport_width: viewportWidth ?? null,
+      viewport_height: viewportHeight ?? null,
+    },
+    {
+      params: { track_id: trackId },
+      skipProgress: true,
+    },
+  )
 
   // 轮询导出进度
   while (task.status === 'pending' || task.status === 'processing') {
     await new Promise(resolve => setTimeout(resolve, 1000))
 
-    const progressResponse = await fetch(`/api/v1/animation/export/${task.task_id}`)
-    if (!progressResponse.ok) {
-      throw new Error('Failed to get export progress')
-    }
-
-    const progressData: AnimationTask = await progressResponse.json()
+    const progressData = await http.get<AnimationTask>(
+      `/animation/export/${task.task_id}`,
+      { skipProgress: true },
+    )
     task.status = progressData.status
     task.progress = progressData.progress
     task.download_url = progressData.download_url
@@ -145,6 +187,10 @@ export async function exportWithPlaywright(
 
   if (task.status === 'failed') {
     throw new Error(task.error || 'Export failed')
+  }
+
+  if (task.status === 'cancelled') {
+    throw new Error('导出已取消')
   }
 
   if (!task.download_url) {
@@ -158,35 +204,42 @@ export async function exportWithPlaywright(
  * 取消后端导出任务
  */
 export async function cancelBackendExport(taskId: string): Promise<void> {
-  const response = await fetch(`/api/v1/animation/export/${taskId}`, {
-    method: 'DELETE',
-  })
-
-  if (!response.ok) {
-    throw new Error('Failed to cancel export')
-  }
+  await http.delete(`/animation/export/${taskId}`, { skipProgress: true })
 }
 
 /**
  * 下载文件
+ *
+ * 通过 fetch → Blob → 同源 URL 触发下载：
+ * - 后端返回的相对路径（如 /exports/...）需拼上后端 origin，
+ *   否则经前端 dev server 会被 SPA fallback 返回 HTML
+ * - 跨域 URL 的 download 属性无效，且异步回调中的新标签打开会被弹窗拦截，
+ *   blob 方案同源且无需新窗口
  */
-export function downloadFile(url: string, filename: string) {
+export async function downloadFile(url: string, filename: string) {
+  const fullUrl = url.startsWith('/') ? getBackendOrigin() + url : url
+  const response = await fetch(fullUrl)
+  if (!response.ok) {
+    throw new Error(`下载失败: HTTP ${response.status}`)
+  }
+  const blob = await response.blob()
+  const blobUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
-  link.href = url
+  link.href = blobUrl
   link.download = filename
-  link.target = '_blank'
   document.body.appendChild(link)
   link.click()
   document.body.removeChild(link)
+  URL.revokeObjectURL(blobUrl)
 }
 
 /**
  * 生成导出文件名
  */
-export function generateExportFilename(trackId: number, format: string): string {
+export function generateExportFilename(trackId: number): string {
   const date = new Date()
   const dateStr = date.toISOString().slice(0, 10).replace(/T/, '-')
-  return `track_${trackId}_animation_${dateStr}.${format}`
+  return `track_${trackId}_animation_${dateStr}.webm`
 }
 
 /**

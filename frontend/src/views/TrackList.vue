@@ -13,6 +13,9 @@
         <el-button type="primary" :icon="Plus" @click="$router.push('/upload')" class="desktop-only">
           上传轨迹
         </el-button>
+        <el-button :icon="Connection" @click="$router.push('/merge')" class="desktop-only">
+          合并轨迹
+        </el-button>
         <el-dropdown @command="handleCommand">
           <span class="user-info">
             <el-icon><User /></el-icon>
@@ -28,6 +31,10 @@
               <el-dropdown-item command="liveRecording" v-if="isMobile">
                 <el-icon><VideoPlay /></el-icon>
                 记录实时轨迹
+              </el-dropdown-item>
+              <el-dropdown-item command="merge" v-if="isMobile">
+                <el-icon><Connection /></el-icon>
+                合并轨迹
               </el-dropdown-item>
               <el-dropdown-item v-if="isMobile" class="dropdown-divider" :disabled="true" />
               <el-dropdown-item command="settings">
@@ -385,6 +392,7 @@ import {
   Position,
   VideoPlay,
   DocumentCopy,
+  Connection,
 } from '@element-plus/icons-vue'
 import { trackApi, type UnifiedTrack, type AllFillProgressResponse, type FillProgressItem } from '@/api/track'
 import { liveRecordingApi } from '@/api/liveRecording'
@@ -722,6 +730,8 @@ function handleCommand(command: string) {
     router.push('/settings')
   } else if (command === 'liveRecording') {
     openCreateRecordingDialog()
+  } else if (command === 'merge') {
+    router.push('/merge')
   } else if (command === 'upload') {
     router.push('/upload')
   }

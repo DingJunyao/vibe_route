@@ -1,6 +1,6 @@
 # backend/app/api/animation.py
 
-from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
+from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -16,6 +16,7 @@ router = APIRouter(tags=['animation'])
 
 @router.post("/animation/export", response_model=AnimationExportTaskSchema)
 async def export_animation(
+    req: Request,
     background_tasks: BackgroundTasks,
     track_id: int,
     request: AnimationExportRequest,
@@ -38,12 +39,17 @@ async def export_animation(
     if not track:
         raise HTTPException(status_code=404, detail="轨迹不存在或无权访问")
 
+    # 提取 token（供 Playwright 注入页面复用登录会话）
+    authorization = req.headers.get("authorization") or ""
+    token = authorization.removeprefix("Bearer ").strip()
+
     service = AnimationExportService()
 
     try:
         task = await service.start_export(
             track_id=track_id,
             user_id=current_user.id,
+            token=token,
             request=request,
             db=db,
             background_tasks=background_tasks,

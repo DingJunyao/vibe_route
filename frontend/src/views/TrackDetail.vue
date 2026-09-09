@@ -236,11 +236,13 @@
                       :config="animationConfig"
                       :track-id="track.id"
                       :map-provider="mapProvider"
+                      :export-mode="isExportMode"
                       @position-changed="handleAnimationPositionChanged"
                     />
                     <UniversalMap
                       ref="mapRef"
                       :tracks="[trackWithPoints]"
+                      :default-layer-id="exportLayerId || undefined"
                       :highlight-track-id="track.id"
                       :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                       :latest-point-index="latestPointIndex"
@@ -254,7 +256,8 @@
                 </div>
               </template>
               <template v-else>
-                <div class="map-placeholder">
+                <!-- 导出模式：加载提示由遮罩覆盖，不显示加载文字 -->
+                <div v-if="!isExportMode" class="map-placeholder">
                   <p v-if="isWaitingForPoints">等待记录中...</p>
                   <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
                   <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
@@ -464,12 +467,14 @@
                     :config="animationConfig"
                     :track-id="track.id"
                     :map-provider="mapProvider"
+                    :export-mode="isExportMode"
                     @position-changed="handleAnimationPositionChanged"
                   />
                   <div ref="mapElementRef" class="normal-map-container">
                   <UniversalMap
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
+                    :default-layer-id="exportLayerId || undefined"
                     :highlight-track-id="track.id"
                     :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                     :latest-point-index="latestPointIndex"
@@ -483,7 +488,8 @@
               </div>
               </template>
               <template v-else>
-                <div class="map-placeholder">
+                <!-- 导出模式：加载提示由遮罩覆盖，不显示加载文字 -->
+                <div v-if="!isExportMode" class="map-placeholder">
                   <p v-if="isWaitingForPoints">等待记录中...</p>
                   <p v-else>{{ points.length === 0 ? '正在加载轨迹点数据...' : '轨迹点坐标数据无效' }}</p>
                   <p v-if="points.length > 0 && !isWaitingForPoints" class="debug-info">
@@ -514,7 +520,7 @@
                 @toggle-orientation-mode="animationStore.toggleOrientationMode"
                 @toggle-info-panel="animationStore.toggleInfoPanel"
                 @cycle-marker-style="animationStore.cycleMarkerStyle"
-                @export="handleExport"
+                @export="showExportDialog = true"
                 @height-changed="() => {}"
               />
             </el-card>
@@ -1012,6 +1018,18 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 动画导出对话框（移动端动画 HUD 触发） -->
+    <AnimationExportDialog
+      ref="exportDialogRef"
+      v-model="showExportDialog"
+      :track-id="trackId"
+      :map-provider="mapProvider"
+      @export="handleExport"
+    />
+
+    <!-- 导出模式：加载遮罩（数据与地图就绪前覆盖全屏） -->
+    <div v-if="isExportMode && !exportReady" class="export-mask" />
   </div>
 </template>
 
@@ -1052,10 +1070,12 @@ import { overlayTemplateApi } from '@/api/overlayTemplate'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import TrackAnimationPlayer from '@/components/animation/TrackAnimationPlayer.vue'
 import AnimationHUD from '@/components/animation/AnimationHUD.vue'
+import AnimationExportDialog from '@/components/animation/AnimationExportDialog.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useAnimationStore } from '@/stores/animation'
-import type { AnimationConfig } from '@/types/animation'
+import type { AnimationConfig, ExportOptions } from '@/types/animation'
+import { exportWithPlaywright, downloadFile, generateExportFilename, checkExportPrerequisites, buildExportConfig } from '@/utils/animation/videoExport'
 import { calculateDuration, findPointIndexByTime, interpolatePosition } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
@@ -1079,7 +1099,9 @@ const currentPosition = ref<any>(null)
 
 // 地图提供商（使用 ref 以便响应实际地图变化）
 // 初始化时将层 ID 转换为基础提供商名称（tencent_vec -> tencent）
-const initEffectiveProvider = configStore.getEffectiveProvider()
+// 导出模式下由 URL 参数指定图层（与导出时用户视图一致）
+const exportLayerId = (route.query.layer as string) || ''
+const initEffectiveProvider = exportLayerId || configStore.getEffectiveProvider()
 console.log('[TrackDetail] Initial effectiveProvider:', initEffectiveProvider)
 const mapProvider = ref(getProviderFromLayerId(initEffectiveProvider))
 console.log('[TrackDetail] Initial mapProvider after conversion:', mapProvider.value)
@@ -1106,15 +1128,39 @@ function getProviderFromLayerId(layerId: string): string {
 function handleMapProviderChanged(provider: string) {
   console.log('[TrackDetail] Map provider changed:', provider)
   mapProvider.value = provider
+
+  // 导出模式：地图就绪后应用视图状态，标记 ready 并等待服务端触发播放
+  // （map-provider-changed 可能连续触发，setTimeout 回调内再次检查防止重复触发）
+  if (isExportMode.value && !exportReady.value) {
+    setTimeout(() => {
+      if (exportReady.value) return
+      exportReady.value = true
+      if (exportViewState && mapRef.value?.setMapViewState) {
+        mapRef.value.setMapViewState(
+          exportViewState.center,
+          exportViewState.zoom
+        )
+      }
+      // 静止在起点画面，等待服务端调用 __startExportPlayback 开始播放
+      animationStore.setPlaybackState('currentTime', exportStartTime)
+      document.body.dataset.exportState = 'ready'
+      console.log('[TrackDetail] Export mode ready')
+    }, 1000)
+  }
 }
 
-// 响应式：判断是否为移动端
+// 导出模式（后端 Playwright 录制）：URL 参数 export=true
+const isExportMode = computed(() => route.query.export === 'true')
+// 数据与地图就绪（加载遮罩移除、exportState=ready，等待服务端触发播放）
+const exportReady = ref(false)
+
+// 响应式：判断是否为移动端（导出模式强制桌面布局，与用户导出时视图一致）
 const screenWidth = ref(window.innerWidth)
-const isMobile = computed(() => screenWidth.value <= 1366)
+const isMobile = computed(() => !isExportMode.value && screenWidth.value <= 1366)
 
 // 响应式：判断是否为高屏（用于固定布局，仅电脑端）
 const screenHeight = ref(window.innerHeight)
-const isTallScreen = computed(() => !isMobile.value && screenHeight.value >= 800)
+const isTallScreen = computed(() => !isMobile.value && (isExportMode.value || screenHeight.value >= 800))
 
 // 监听动画播放状态，更新当前位置（用于移动端 AnimationHUD）
 watch(() => [animationStore.isPlaying, animationStore.currentTime], () => {
@@ -1198,17 +1244,24 @@ function handleAnimationPositionChanged(position: {
   console.log('[TrackDetail] currentPosition.value updated:', currentPosition.value)
 }
 
+// 动画导出对话框（移动端动画 HUD 触发）
+const showExportDialog = ref(false)
+const exportDialogRef = ref<InstanceType<typeof AnimationExportDialog> | null>(null)
+
 // 导出处理
-async function handleExport(config: ExportConfig) {
+async function handleExport(options: ExportOptions) {
   try {
+    // 组装完整导出配置（含当前视图状态），使用后端 Playwright 导出
+    const config = buildExportConfig(options)
+    exportDialogRef.value?.startExport()
     const downloadUrl = await exportWithPlaywright(
       trackId.value,
       config,
-      exportApi,
-      trackApi
+      (progress) => exportDialogRef.value?.updateProgress(progress)
     )
     if (downloadUrl) {
-      downloadFile(downloadUrl, generateExportFilename(trackId.value, config.format))
+      await downloadFile(downloadUrl, generateExportFilename(trackId.value))
+      exportDialogRef.value?.finishSuccess()
       ElMessage.success('导出完成')
     } else {
       const prerequisites = checkExportPrerequisites()
@@ -1220,6 +1273,7 @@ async function handleExport(config: ExportConfig) {
     }
   } catch (e: any) {
     console.error('Export error:', e)
+    exportDialogRef.value?.finishError()
     ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
   }
 }
@@ -1495,6 +1549,91 @@ const duration = computed(() => {
   if (!animationConfig.value) return 0
   return animationConfig.value.duration
 })
+
+// ==================== 导出模式（后端 Playwright 录制） ====================
+// 导出模式下：应用 URL 视图参数、自动播放、上报进度与完成信号（body dataset）
+
+// 导出视图（zoom/center），地图就绪后应用
+const exportViewState = (() => {
+  const q = route.query
+  if (q.zoom && q.centerLat && q.centerLng) {
+    return {
+      zoom: parseFloat(q.zoom as string),
+      center: {
+        lat: parseFloat(q.centerLat as string),
+        lng: parseFloat(q.centerLng as string),
+      },
+    }
+  }
+  return null
+})()
+
+const exportStartTime = parseFloat(route.query.startTime as string) || 0
+const exportSpeed = parseFloat(route.query.speed as string) || 1
+const exportStarted = ref(false)
+
+if (isExportMode.value) {
+  // 标记导出模式（CSS 保持桌面布局，见 <style> 中 body.export-mode 规则）
+  document.body.classList.add('export-mode')
+
+  // 服务端 Playwright 在页面 ready 后调用以开始播放
+  ;(window as any).__startExportPlayback = () => {
+    if (exportStarted.value) return
+    exportStarted.value = true
+    // 播放前最后应用用户缩放视图（地图数据加载后的 fitBounds 可能已覆盖）
+    if (exportViewState && mapRef.value?.setMapViewState) {
+      mapRef.value.setMapViewState(
+        exportViewState.center,
+        exportViewState.zoom
+      )
+    }
+    animationStore.setPlaybackState('currentTime', exportStartTime)
+    animationStore.setPlaybackState('isPlaying', true)
+    console.log('[TrackDetail] Export mode playback started')
+  }
+
+  // 强制渲染动画播放器（showControls 同时控制播放器挂载）
+  animationStore.setShowControls(true)
+
+  // 应用动画设置（相机/朝向/标记/信息面板/倍速/起点）
+  const q = route.query
+  if (q.camera === 'fixed-center' || q.camera === 'full') {
+    animationStore.setCameraMode(q.camera)
+  }
+  if (q.orientation === 'track-up' || q.orientation === 'north-up') {
+    animationStore.setOrientationMode(q.orientation)
+  }
+  if (q.marker === 'car' || q.marker === 'person') {
+    animationStore.setMarkerStyle(q.marker)
+  }
+  // 信息浮层：infoPanel 与 hud 参数任一为 0 则关闭（hud 开关同时作用于信息浮层）
+  if (q.infoPanel === '0' || q.hud === '0') {
+    animationStore.setPlaybackState('showInfoPanel', false)
+  }
+  // 导出倍速不限于档位，直接设置
+  animationStore.setPlaybackState('playbackSpeed', exportSpeed)
+  animationStore.setPlaybackState('currentTime', exportStartTime)
+
+  // 播放进度上报 + 完成信号（服务端 Playwright 轮询读取）
+  watch(
+    () => [animationStore.isPlaying, animationStore.currentTime] as const,
+    ([playing, currentTime]) => {
+      if (!exportStarted.value) return
+
+      const progress = duration.value > 0
+        ? Math.min(100, (currentTime / duration.value) * 100)
+        : 0
+      document.body.dataset.exportProgress = String(progress)
+
+      // 播放完成：时间到达末尾（播放器会自行停止）
+      if (currentTime >= duration.value) {
+        exportStarted.value = false
+        document.body.dataset.exportState = 'completed'
+        console.log('[TrackDetail] Export mode playback completed')
+      }
+    },
+  )
+}
 
 // 处理用户下拉菜单命令
 function handleCommand(command: string) {
@@ -2095,27 +2234,32 @@ function handleMapPointHover(point: any, pointIndex: number) {
 
 // 填充地理信息
 async function handleFillGeocoding() {
-  // 如果已经填充过，显示确认对话框
+  let incremental = false
+
+  // 如果已经填充过，让用户选择增量补漏或全量重填
   if (track.value?.has_area_info || track.value?.has_road_info) {
     try {
       await ElMessageBox.confirm(
-        '已填充地理信息，再次填充会覆盖已有的信息，是否继续？',
-        '确认重新填充',
+        '已填充地理信息。"仅补充缺失"只填充行政区划为空的点（速度快、不覆盖已有数据）；"全部重新填充"会覆盖所有点的地理信息。',
+        '选择填充方式',
         {
-          confirmButtonText: '继续',
-          cancelButtonText: '取消',
-          type: 'warning',
+          confirmButtonText: '仅补充缺失',
+          cancelButtonText: '全部重新填充',
+          distinguishCancelAndClose: true,
+          type: 'info',
         }
       )
-    } catch {
-      // 用户点击取消
-      return
+      incremental = true
+    } catch (action) {
+      // 用户点击关闭按钮（非"全部重新填充"），取消操作
+      if (action === 'close') return
+      incremental = false
     }
   }
 
   try {
-    await trackApi.fillGeocoding(trackId.value)
-    ElMessage.success('开始填充地理信息')
+    await trackApi.fillGeocoding(trackId.value, incremental)
+    ElMessage.success(incremental ? '开始补充缺失的地理信息' : '开始填充地理信息')
     fillingGeocoding.value = true
     startPollingProgress()
   } catch (error) {
@@ -4007,4 +4151,90 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
 }
+
+/* 导出模式（低分辨率录制视口 ≤1366px 会命中移动端媒体查询）：
+   恢复桌面布局并隐藏网页 UI，导出画面 = 全屏地图 + 动画 */
+body.export-mode .track-detail-container {
+  overflow: hidden;
+}
+
+/* el-main 默认 padding 是四周留白与底部溢出的来源（main-fixed 有 !important，需覆盖） */
+body.export-mode .track-detail-container > .el-main {
+  padding: 0 !important;
+}
+
+body.export-mode .fixed-layout {
+  display: flex;
+  flex-direction: row;
+  height: 100vh;
+  gap: 0;
+}
+
+body.export-mode .fixed-left {
+  flex: 1 1 auto;
+  height: 100%;
+  overflow: hidden;
+  gap: 0;
+}
+
+body.export-mode .fixed-left .map-card {
+  flex: 1;
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* flex:1 + height:0 为百分比高度子链提供确定参照（修复地图容器高度塌陷） */
+body.export-mode .fixed-left .map-card .el-card__body {
+  flex: 1;
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+}
+
+/* 隐藏页面头部、右侧面板、图表卡片 */
+body.export-mode .track-detail-container .el-header {
+  display: none;
+}
+
+body.export-mode .scrollable-right {
+  display: none;
+}
+
+body.export-mode .fixed-left .chart-card {
+  display: none;
+}
+
+/* 隐藏 UniversalMap 控件（图层切换、居中、全屏、动画入口按钮） */
+body.export-mode .desktop-layer-selector,
+body.export-mode .mobile-layer-selector,
+body.export-mode .fit-bounds-btn,
+body.export-mode .fullscreen-btn,
+body.export-mode .animation-play-btn {
+  display: none;
+}
+
+/* 隐藏地图引擎 SDK 自带控件（缩放等） */
+body.export-mode .gm-bundled-control,        /* Google 缩放控件 */
+body.export-mode .gm-fullscreen-control,     /* Google 全屏控件 */
+body.export-mode [title="Keyboard shortcuts"], /* Google 键盘快捷键按钮 */
+body.export-mode [title="键盘快捷键"],
+body.export-mode .leaflet-control-zoom,      /* Leaflet 缩放控件 */
+body.export-mode .amap-zoom,                 /* 高德缩放控件 */
+body.export-mode .amap-toolbar {             /* 高德工具条 */
+  display: none;
+}
+
+/* 加载遮罩：数据与地图就绪前覆盖全屏（录制开头不出现加载动作） */
+.export-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #1a1a1a;
+}
+
 </style>

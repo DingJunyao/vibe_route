@@ -972,6 +972,16 @@ async function initMap() {
       gestureHandling: 'greedy',
     })
 
+    // 监听认证失败（Key 无效/受限、Maps JavaScript API 未启用、未配置结算等）
+    // 此时地图渲染"糟糕！出了点问题"错误页，且 getCenter 等方法返回 undefined
+    google.maps.event.addDomListener(window, 'gm_authFailure', () => {
+      console.error(
+        '[GoogleMap] Google Maps 认证失败（gm_authFailure），请检查：' +
+        '① API Key 是否有效；② Maps JavaScript API 是否已启用；' +
+        '③ Key 的 HTTP referrer 限制是否包含当前站点；④ 是否已配置结算账号'
+      )
+    })
+
     // 创建投影助手（OverlayView，用于坐标↔像素转换）
     // 必须在地图 projection 就绪后使用（idle 事件后）
     projectionHelper = new (class extends google.maps.OverlayView {
@@ -1685,12 +1695,25 @@ function drawCustomOverlays() {
       const color = overlay.color || '#409eff'
       const weight = overlay.weight || 3
       const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
+      const dashArray = overlay.dashArray
 
+      // Google Polyline 不支持 strokeDasharray，虚线用 Symbol repeat 方案实现
       const layer = new google.maps.Polyline({
         path: positions.map(([lat, lng]) => ({ lat, lng })),
         strokeColor: color,
-        strokeOpacity: opacity,
+        strokeOpacity: dashArray ? 0 : opacity,
         strokeWeight: weight,
+        ...(dashArray ? {
+          icons: [{
+            icon: {
+              path: 'M 0,-1 0,1',
+              strokeOpacity: opacity,
+              scale: weight,
+            },
+            offset: '0',
+            repeat: '20px',
+          }],
+        } : {}),
         map: googleMapInstance,
       })
       customOverlayPolylines.push(layer)

@@ -1,5 +1,5 @@
 <template>
-  <div class="universal-map-container">
+  <div ref="rootRef" class="universal-map-container">
     <!-- 腾讯地图引擎 -->
     <TencentMap
       v-if="useTencentEngine"
@@ -209,6 +209,7 @@ import GoogleMap from './GoogleMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 import { formatTimeShort } from '@/utils/relativeTime'
 import { getEffectiveMapLayer, saveLocalMapPreference } from '@/utils/mapLocalPreference'
+import { registerViewStateProvider } from '@/composables/animation/useAnimationMap'
 
 interface Point {
   latitude?: number
@@ -241,6 +242,8 @@ interface CustomOverlay {
   type: 'marker' | 'polyline'
   position?: [number, number]  // [lat, lng] for marker (默认 WGS84，优先使用下面的多坐标系字段)
   positions?: [number, number][]  // [[lat, lng], ...] for polyline
+  positions_gcj02?: [number, number][]  // GCJ02 坐标（高德、腾讯）
+  positions_bd09?: [number, number][]  // BD09 坐标（百度）
   // 多坐标系支持（优先使用这些字段）
   latitude_wgs84?: number
   longitude_wgs84?: number
@@ -442,6 +445,9 @@ const customOverlaysDebug = computed(() => {
 // 当前选择的地图层 ID
 const currentLayerId = ref<string>('')
 
+// 容器根元素（导出动画时上报画幅尺寸，用于 zoom 修正）
+const rootRef = ref<HTMLElement | null>(null)
+
 // 保存的地图视角（用于切换地图时保持视角）
 const savedViewState = ref<{
   center: { lat: number; lng: number } | null
@@ -488,49 +494,46 @@ const enabledMapLayers = computed<MapLayerConfig[]>(() => {
   return allLayers.filter((l: MapLayerConfig) => l.enabled).sort((a, b) => a.order - b.order)
 })
 
-// 获取当前地图的视角状态
-function getCurrentViewState(): { center: { lat: number; lng: number } | null; zoom: number | null } {
-  let center = null
-  let zoom = null
+// 规范化各引擎的 center 对象
+// 高德/百度/Leaflet 的 lat/lng 为属性；Google/腾讯的 LatLng 为方法；
+// 地图初始化/认证失败等异常状态下 getCenter 可能返回 undefined
+function normalizeCenter(c: any): { lat: number; lng: number } | null {
+  if (!c) return null
+  const lat = typeof c.lat === 'function' ? c.lat() : c.lat
+  const lng = typeof c.lng === 'function' ? c.lng() : c.lng
+  return (typeof lat === 'number' && !isNaN(lat) && typeof lng === 'number' && !isNaN(lng))
+    ? { lat, lng }
+    : null
+}
 
+// 获取当前引擎的地图实例
+function getActiveMapInstance(): any {
   if (useAMapEngine.value && amapRef.value) {
-    const instance = (amapRef.value as any).getMapInstance?.()
-    if (instance) {
-      const c = instance.getCenter()
-      center = { lat: c.lat, lng: c.lng }
-      zoom = instance.getZoom()
-    }
-  } else if (useBMapEngine.value && bmapRef.value) {
-    const instance = (bmapRef.value as any).getMapInstance?.()
-    if (instance) {
-      const c = instance.getCenter?.() || instance.getCenter()
-      if (c && c.lat && c.lng) {
-        center = { lat: c.lat, lng: c.lng }
-      }
-      zoom = instance.getZoom?.()
-    }
-  } else if (useTencentEngine.value && tencentRef.value) {
-    const instance = (tencentRef.value as any).getMapInstance?.()
-    if (instance) {
-      const c = instance.getCenter()
-      center = { lat: c.lat, lng: c.lng }
-      zoom = instance.getZoom()
-    }
-  } else if (useGoogleEngine.value && googleRef.value) {
-    const instance = (googleRef.value as any).getMapInstance?.()
-    if (instance) {
-      const c = instance.getCenter()
-      center = { lat: c.lat, lng: c.lng }
-      zoom = instance.getZoom()
-    }
-  } else if (leafletRef.value) {
-    const instance = (leafletRef.value as any).getMapInstance?.()
-    if (instance) {
-      const c = instance.getCenter()
-      center = { lat: c.lat, lng: c.lng }
-      zoom = instance.getZoom()
-    }
+    return (amapRef.value as any).getMapInstance?.()
   }
+  if (useBMapEngine.value && bmapRef.value) {
+    return (bmapRef.value as any).getMapInstance?.()
+  }
+  if (useTencentEngine.value && tencentRef.value) {
+    return (tencentRef.value as any).getMapInstance?.()
+  }
+  if (useGoogleEngine.value && googleRef.value) {
+    return (googleRef.value as any).getMapInstance?.()
+  }
+  if (leafletRef.value) {
+    return (leafletRef.value as any).getMapInstance?.()
+  }
+  return null
+}
+
+// 获取当前地图的视角状态（地图处于错误状态时返回 null，不抛异常）
+function getCurrentViewState(): { center: { lat: number; lng: number } | null; zoom: number | null } {
+  const instance = getActiveMapInstance()
+  if (!instance) return { center: null, zoom: null }
+
+  const center = normalizeCenter(instance.getCenter?.())
+  const z = instance.getZoom?.()
+  const zoom = typeof z === 'number' && !isNaN(z) ? z : null
 
   return { center, zoom }
 }
@@ -571,10 +574,14 @@ function setMapViewState(center: { lat: number; lng: number }, zoom: number) {
 
 // 切换地图层
 function switchLayer(layerId: string) {
-  // 在切换前保存当前视角
-  const currentState = getCurrentViewState()
-  if (currentState.center && currentState.zoom !== null) {
-    savedViewState.value = currentState
+  // 在切换前保存当前视角（地图处于错误状态时可能失败，不应阻断切换）
+  try {
+    const currentState = getCurrentViewState()
+    if (currentState.center && currentState.zoom !== null) {
+      savedViewState.value = currentState
+    }
+  } catch (err) {
+    console.warn('[UniversalMap] 保存地图视角失败:', err)
   }
 
   currentLayerId.value = layerId
@@ -820,6 +827,14 @@ function resize() {
 }
 
 onMounted(async () => {
+  // 注册视图状态提供者（导出动画时收集地图状态，含画幅尺寸用于 zoom 修正）
+  registerViewStateProvider(() => ({
+    ...getCurrentViewState(),
+    layerId: currentLayerId.value,
+    width: rootRef.value?.offsetWidth ?? 0,
+    height: rootRef.value?.offsetHeight ?? 0,
+  }))
+
   // 等待配置加载
   if (!configStore.config) {
     await configStore.fetchConfig()
@@ -933,6 +948,8 @@ defineExpose({
   fitBounds,
   fitToBounds,
   getCurrentLayerId: () => currentLayerId.value,
+  getCurrentViewState,
+  setMapViewState,
   getMapElement: () => {
     if (useAMapEngine.value && amapRef.value) {
       return (amapRef.value as any).getMapElement?.() || null

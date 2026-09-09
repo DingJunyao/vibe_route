@@ -2,6 +2,28 @@
 
 详细历史版本已归档到 `ref/CLAUDE_ARCHIVE.md`，以下是简要记录：
 
+## 2026-09
+
+- 实现动画导出服务端录制（Playwright `record_video`）：前端导出模式（`?export=true` 自动播放、`body.dataset` 进度/完成信号）、token 注入复用登录会话、`FRONTEND_URL` 配置、整体超时兜底 `(时长/速度)*2+60s`
+- 导出画面与用户视图一致：起点（currentTime）、相机/朝向/标记样式、地图图层（`exportLayerId`）、缩放中心（UniversalMap 暴露 `getCurrentViewState`/`setMapViewState` + 全局视图状态提供者）随请求传递
+- 导出模式强制桌面布局：`isMobile`/`isTallScreen` 导出感知 + `body.export-mode` CSS 恢复桌面布局（修复低分辨率录制视口命中移动端媒体查询导致地图容器高度塌陷）
+- 导出画面全屏地图：`body.export-mode` 隐藏页面头部/右侧面板/图表卡片/图层切换/缩放/全屏/动画入口/键盘快捷键等控件；控制面板（AnimationHUD）导出模式不渲染，信息浮层由 showHUD 开关控制；`show_hud=0` 时同时关闭信息浮层
+- 导出画幅 zoom 修正：用户 zoom 基于详情页画幅调整，导出画幅（分辨率视口）不同——按最小维度比例 `log2(export_min/viewport_min)` 修正 zoom，保证用户构图内容完整包含在导出画面中（前端上报地图画幅尺寸，后端计算）
+- 导出信息浮层增加进度/当前时间/剩余时间行；下载修复：`downloadFile` 拼接后端 origin（相对路径被 Vite SPA fallback 返回 HTML）；ffmpeg 裁剪录制开头遮罩期（可用时），视频从地图起点画面开始
+- 修复 `AnimationExportTask` 模型未继承 `Base`、缺少外键（任务创建 500、mapper 配置失败）
+- 修复 `TrackDetail.vue` 导出路径（移动端 HUD `@export` 打开对话框、`exportApi` 误传、缺失 `videoExport` 导入）
+- 导出对话框移除格式/帧率选项（Playwright 固定 webm、帧率不可控）；任务状态补充 `cancelled`
+- 修复动画导出 404：`videoExport.ts` 三处原生 `fetch` 硬编码 `/api/v1` 前缀且未带认证头，改用统一 `http` 客户端（`baseURL='/api'` + 自动 token，轮询请求 `skipProgress`）
+- 修复动画导出 500：`animation_export.py` 误用 `TrackPoint.index`（模型字段实为 `point_index`），是被 404 掩盖的历史遗留 bug
+- 后端 `main.py` 挂载 `/exports` 静态目录（`StaticFiles`，指向 `settings.EXPORT_DIR`），修复动画导出 `download_url` 无法下载
+- 修复 `TrackDetail.vue` 向 `exportWithPlaywright` 误传 `exportApi`（API 对象）作为 `onProgress` 导致轮询崩溃，改为空回调
+- 合并轨迹功能（多段轨迹按时间合并、重叠自动去重、地图预览、原轨迹保留）
+- 合并预览空缺补全：段间隔 >5 分钟判空缺，衔接线渲染（空缺橙虚线/正常灰实线）+ 警告与明细，不生成插值点
+- 地图引擎虚线渲染补齐：Google Symbol repeat 方案、腾讯 dashArray、Leaflet 空格分隔解析；修复 LeafletMap 挂载后不绘制 customOverlays 的缺陷
+- 上传/合并成功后自动跳转到新轨迹详情页（原先分别跳轨迹列表/询问是否查看）
+- 修复 Google 地图认证失败时无法切换图层：认证失败（gm_authFailure）地图实例存在但 `getCenter()` 返回 undefined，`getCurrentViewState` 抛 TypeError 中断 `switchLayer`（`currentLayerId` 赋值不执行，用户被困坏地图）。重构 `getCurrentViewState` 为 `getActiveMapInstance` + `normalizeCenter`（统一处理高德/百度/Leaflet 属性式与 Google/腾讯方法式 LatLng，及异常状态），`switchLayer` 视角保存加 try-catch；GoogleMap 增加 `gm_authFailure` 监听输出诊断指引
+- 地理编码填充支持增量模式：`fill_geocoding_info` 增加 `incremental` 参数（仅处理 province 为空的点，不覆盖已有数据），API `POST /tracks/{id}/fill-geocoding?incremental=true`，前端已填充轨迹的确认对话框改为三选（仅补充缺失/全部重新填充/关闭）；增量无缺失点时直接标记 completed。背景：印尼轨迹 GPX 导入后填充时 Nominatim 数据源缺当地数据，43 个点（0.37%）province 为 NULL，区域树按"每次 province 变化新建节点"渲染成约 43 个"未知区域"，换数据源后增量补漏秒级完成（全量重刷需 40-60 分钟）
+
 ## 2026-01
 
 - DateTime 时区统一为 timezone-naive UTC

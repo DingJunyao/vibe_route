@@ -16,13 +16,6 @@
         </el-select>
       </el-form-item>
 
-      <el-form-item label="帧率" prop="fps">
-        <el-select v-model="form.fps" placeholder="选择帧率">
-          <el-option label="30 fps" :value="30" />
-          <el-option label="60 fps" :value="60" />
-        </el-select>
-      </el-form-item>
-
       <el-form-item label="显示 HUD">
         <el-switch v-model="form.showHUD" />
       </el-form-item>
@@ -37,13 +30,6 @@
           controls-position="right"
         />
         </el-form-item>
-
-      <el-form-item label="视频格式" prop="format">
-        <el-select v-model="form.format" placeholder="选择格式">
-          <el-option label="WebM" value="webm" />
-          <el-option label="MP4" value="mp4" />
-        </el-select>
-      </el-form-item>
     </el-form>
 
     <template #footer>
@@ -65,8 +51,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import type { Resolution, ExportConfig } from '@/types/animation'
-import { RESOLUTION_DIMENSIONS } from '@/types/animation'
+import type { Resolution, ExportOptions } from '@/types/animation'
 
 interface Props {
   modelValue: boolean
@@ -77,7 +62,7 @@ interface Props {
 const props = defineProps<Props>()
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void
-  (e: 'export', config: ExportConfig): void
+  (e: 'export', options: ExportOptions): void
 }>()
 
 const visible = computed({
@@ -88,10 +73,8 @@ const visible = computed({
 // 表单数据
 const form = ref({
   resolution: '1080p' as Resolution,
-  fps: 30 as 30 | 60,
   showHUD: true,
   speed: 1.0,
-  format: 'webm' as 'webm' | 'mp4',
 })
 
 const exporting = ref(false)
@@ -102,8 +85,6 @@ const formRef = ref()
 // 表单验证规则
 const rules = {
   resolution: [{ required: true, message: '请选择分辨率', trigger: 'change' }],
-  fps: [{ required: true, message: '请选择帧率', trigger: 'change' }],
-  format: [{ required: true, message: '请选择视频格式', trigger: 'change' }],
 }
 
 // 计算导出状态文本
@@ -130,25 +111,41 @@ async function handleExport() {
   const valid = await formRef.value?.validate()
   if (!valid) return
 
+  // 导出流程由父组件执行，通过 expose 的方法驱动进度显示
+  emit('export', {
+    resolution: form.value.resolution,
+    showHUD: form.value.showHUD,
+    speed: form.value.speed,
+  })
+}
+
+// 导出流程驱动接口（父组件调用）
+function startExport() {
   exporting.value = true
   exportProgress.value = 0
   exportStatus.value = ''
-
-  try {
-    emit('export', {
-      resolution: form.value.resolution,
-      fps: form.value.fps,
-      showHUD: form.value.showHUD,
-      format: form.value.format,
-      speed: form.value.speed,
-    })
-  } catch (e) {
-    console.error('Export error:', e)
-    exportStatus.value = 'exception'
-  } finally {
-    exporting.value = false
-  }
 }
+
+function updateProgress(progress: number) {
+  exportProgress.value = Math.round(progress)
+}
+
+function finishSuccess() {
+  exporting.value = false
+  exportStatus.value = 'success'
+}
+
+function finishError() {
+  exporting.value = false
+  exportStatus.value = 'exception'
+}
+
+defineExpose({
+  startExport,
+  updateProgress,
+  finishSuccess,
+  finishError,
+})
 </script>
 
 <style scoped>

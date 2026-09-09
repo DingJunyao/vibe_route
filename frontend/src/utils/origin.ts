@@ -58,3 +58,10 @@ export function getWebSocketOrigin(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${protocol}//${currentHost}`
 }
+
+/**
+ * 获取后端 HTTP origin（用于拼接后端返回的相对下载路径，如 /exports/...）
+ */
+export function getBackendOrigin(): string {
+  return getWebSocketOrigin().replace(/^ws/, 'http')
+}

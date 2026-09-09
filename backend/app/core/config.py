@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "data/uploads"
     TEMP_DIR: str = "data/temp"
     EXPORT_DIR: str = "data/exports"
+
+    # 前端地址（动画导出等场景由后端打开页面）
+    FRONTEND_URL: str = "http://localhost:5173"
     ROAD_SIGN_DIR: str = "data/road_signs"
 
     # 日志目录

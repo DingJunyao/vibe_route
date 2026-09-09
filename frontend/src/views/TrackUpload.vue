@@ -213,7 +213,7 @@ async function handleSubmit() {
     progressStatus.value = ''
 
     try {
-      await trackApi.upload({
+      const newTrack = await trackApi.upload({
         file: form.file,
         name: form.name,
         description: form.description || undefined,
@@ -226,9 +226,9 @@ async function handleSubmit() {
 
       ElMessage.success('轨迹上传成功！')
 
-      // 延迟跳转到轨迹列表
+      // 延迟跳转到新轨迹详情页
       setTimeout(() => {
-        router.push('/tracks')
+        router.push(`/tracks/${newTrack.id}`)
       }, 1000)
     } catch (error) {
       progress.value = 100

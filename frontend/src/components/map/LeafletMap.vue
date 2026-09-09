@@ -2591,9 +2591,9 @@ function drawCustomOverlays() {
       const opacity = overlay.opacity !== undefined ? overlay.opacity : 0.8
       const dashArray = overlay.dashArray
 
-      // 解析 dashArray 字符串（如 "5, 5"）为数组 [5, 5]
+      // 解析 dashArray 字符串（兼容空格/逗号分隔，如 "12 8"、"5, 5"）为数组 [12, 8]
       const dashArrayParsed = dashArray
-        ? dashArray.split(',').map(s => parseFloat(s.trim()))
+        ? dashArray.split(/[\s,]+/).map(s => parseFloat(s.trim()))
         : undefined
 
       const polyline = L.polyline(latLngs, {
@@ -2853,7 +2853,8 @@ onMounted(async () => {
   updateCurrentLayerConfig()
 
   initMap()
-  drawTracks()
+  // 更新轨迹（包括自定义覆盖层），与其他引擎 init 尾部行为一致
+  updateTracks()
 
   // 添加控制台调试函数
   ;(window as any).setMapZoom = (zoom: number) => {

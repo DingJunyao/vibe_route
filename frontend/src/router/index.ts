@@ -72,6 +72,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/merge',
+    name: 'TrackMerge',
+    component: () => import('@/views/TrackMerge.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/road-sign',
     name: 'RoadSignGenerator',
     component: () => import('@/views/RoadSignGenerator.vue'),
