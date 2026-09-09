@@ -1,0 +1,23 @@
+-- ============================================
+-- 为印尼多语言支持添加 region 与 *_id 列（MySQL）
+-- ============================================
+-- 执行方式: mysql -u vibe_route -p vibe_route < 016_add_multilanguage_region.sql.mysql
+
+ALTER TABLE tracks
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼';
+
+ALTER TABLE track_points
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼',
+    ADD COLUMN province_id VARCHAR(100) NULL,
+    ADD COLUMN city_id VARCHAR(100) NULL,
+    ADD COLUMN district_id VARCHAR(100) NULL,
+    ADD COLUMN road_name_id VARCHAR(200) NULL;
+
+ALTER TABLE road_sign_cache
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼';
+
+-- 验证
+SHOW COLUMNS FROM tracks LIKE 'region';
+SHOW COLUMNS FROM track_points LIKE '%_id';
+SHOW COLUMNS FROM track_points LIKE 'region';
+SHOW COLUMNS FROM road_sign_cache LIKE 'region';

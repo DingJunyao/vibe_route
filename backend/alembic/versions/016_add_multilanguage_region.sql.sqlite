@@ -1,0 +1,19 @@
+-- ============================================
+-- 为印尼多语言支持添加 region 与 *_id 列（SQLite）
+-- ============================================
+-- 执行方式: sqlite3 vibe_route.db < 016_add_multilanguage_region.sql.sqlite
+
+ALTER TABLE tracks ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+ALTER TABLE track_points ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+ALTER TABLE track_points ADD COLUMN province_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN city_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN district_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN road_name_id VARCHAR(200);
+
+ALTER TABLE road_sign_cache ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+-- 验证
+SELECT name FROM pragma_table_info('tracks') WHERE name = 'region';
+SELECT name FROM pragma_table_info('track_points') WHERE name IN ('region','province_id','city_id','district_id','road_name_id');
+SELECT name FROM pragma_table_info('road_sign_cache') WHERE name = 'region';

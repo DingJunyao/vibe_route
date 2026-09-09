@@ -23,6 +23,7 @@ class Track(Base, AuditMixin):
     description = Column(Text, nullable=True)
     original_filename = Column(String(255), nullable=False)
     original_crs = Column(String(10), nullable=False)  # wgs84, gcj02, bd09
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
 
     # 统计信息
     distance = Column(Float, default=0)  # 长度（米）
@@ -92,6 +93,15 @@ class TrackPoint(Base, AuditMixin):
     road_name = Column(String(200), nullable=True)
     road_number = Column(String(50), nullable=True)
     road_name_en = Column(String(200), nullable=True)
+
+    # 多语言（印尼语，*_en 为英语历史惯例；中文无后缀）
+    province_id = Column(String(100), nullable=True)
+    city_id = Column(String(100), nullable=True)
+    district_id = Column(String(100), nullable=True)
+    road_name_id = Column(String(200), nullable=True)
+
+    # 地区（图标/显示体系的点级权威）
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
 
     # 备注
     memo = Column(Text, nullable=True)

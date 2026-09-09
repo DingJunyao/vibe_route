@@ -17,6 +17,7 @@ class RoadSignCache(Base, AuditMixin):
     province = Column(String(10), nullable=True)  # 省份（高速用）
     name = Column(String(100), nullable=True)  # 道路名称
     svg_path = Column(String(500), nullable=False)  # SVG 文件路径
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
 
     def __repr__(self):
         return f"<RoadSignCache(code='{self.code}', province='{self.province}')"
