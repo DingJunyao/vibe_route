@@ -127,6 +127,10 @@ mkdir -p data/uploads data/temp data/exports data/road_signs
 # 数据库迁移
 alembic upgrade head
 
+# Playwright 安装
+
+playwright install
+
 # 启动开发服务器
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
