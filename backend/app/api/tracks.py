@@ -2,7 +2,7 @@
 轨迹相关 API 路由
 """
 import logging
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -493,6 +493,7 @@ async def delete_track(
 async def fill_track_geocoding(
     track_id: int,
     incremental: bool = Query(False, description="增量模式：仅填充行政区划为空的点，不覆盖已有数据"),
+    region: Optional[Literal['cn', 'id']] = Query(None, description="填充的地区 (cn/id)；缺省用轨迹自身 region"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -521,7 +522,9 @@ async def fill_track_geocoding(
         from app.core.database import async_session_maker
         async with async_session_maker() as new_db:
             try:
-                await track_service.fill_geocoding_info(new_db, track_id, current_user.id, incremental=incremental)
+                await track_service.fill_geocoding_info(
+                    new_db, track_id, current_user.id,
+                    incremental=incremental, region=region)
             except Exception as e:
                 logger.exception(f"Fill geocoding task error for track {track_id}, user {current_user.id}")
 

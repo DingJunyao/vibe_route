@@ -17,6 +17,17 @@ from app.core.query_helper import QueryHelper, SoftDeleteMixin, AuditMixin as Qu
 from loguru import logger
 
 
+def _should_backfill_province_zh(zh_province: str, id_province: str) -> bool:
+    """印尼省级中文名是否需要回填
+
+    Nominatim 对无中译的省份返回本地名或英文名（zh 请求可能拿到 'Jawa Barat'
+    或 'West Java'），此时用 38 省译名表按印尼语名回填中文。
+    """
+    if not id_province:
+        return False
+    return not zh_province or zh_province == id_province or zh_province.isascii()
+
+
 class TrackService:
     """轨迹服务类"""
 
@@ -506,6 +517,7 @@ class TrackService:
         track_id: int,
         user_id: int,
         incremental: bool = False,
+        region: Optional[str] = None,
     ):
         """
         填充行政区划和道路信息（合并功能）
@@ -515,6 +527,7 @@ class TrackService:
             track_id: 轨迹 ID
             user_id: 用户 ID
             incremental: 增量模式，仅填充行政区划为空的点（不覆盖已有数据）
+            region: 填充的地区（'cn'/'id'）；None 时使用轨迹自身 region（默认 'cn'）
         """
         # 使用新的会话，因为原会话可能已关闭
         from app.core.database import async_session_maker
@@ -524,6 +537,13 @@ class TrackService:
 
         async with async_session_maker() as db:
             try:
+                # 读取轨迹确定有效 region（region 缺省时回读轨迹自身 region；live recording 调用点零改动）
+                track_row = (await db.execute(select(Track).where(Track.id == track_id))).scalar_one_or_none()
+                region = region or (getattr(track_row, 'region', None) or 'cn')
+                if region not in ('cn', 'id'):
+                    logger.warning(f"Invalid fill region '{region}' for track {track_id}, fallback to 'cn'")
+                    region = 'cn'
+
                 # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
                 conditions = [TrackPoint.track_id == track_id, TrackPoint.is_valid == True]
                 if incremental:
@@ -571,6 +591,15 @@ class TrackService:
 
                 logger.info(f"Geocoding service acquired: {type(geocoding_service).__name__}")
 
+                # 印尼多语言仅 Nominatim 支持（amap/baidu/gdf 只服务中国）；判定放循环外，避免逐点重复告警
+                from app.gpxutil_wrapper.geocoding import NominatimGeocoding
+                supports_id = isinstance(geocoding_service, NominatimGeocoding)
+                if region == 'id' and not supports_id:
+                    logger.warning(
+                        f"Track {track_id} region=id but geocoding provider "
+                        f"{type(geocoding_service).__name__} has no Indonesian support"
+                    )
+
                 updated_count = 0
                 for idx, point in enumerate(points):
                     # 检查是否已停止
@@ -590,7 +619,10 @@ class TrackService:
                     try:
                         lat = point.latitude_wgs84
                         lon = point.longitude_wgs84
-                        info = await geocoding_service.get_point_info(lat, lon)
+                        if supports_id:
+                            info = await geocoding_service.get_point_info(lat, lon, region=region)
+                        else:
+                            info = await geocoding_service.get_point_info(lat, lon)
 
                         # 检查是否获取到有效数据（至少有一个非空字段）
                         has_valid_data = any([
@@ -603,6 +635,10 @@ class TrackService:
                             info.get('city_en'),
                             info.get('area_en'),
                             info.get('road_name_en'),
+                            info.get('province_id'),
+                            info.get('city_id'),
+                            info.get('area_id'),
+                            info.get('road_name_id'),
                         ])
 
                         if has_valid_data:
@@ -617,6 +653,24 @@ class TrackService:
                             point.city_en = info.get('city_en', '')
                             point.district_en = info.get('area_en', '')
                             point.road_name_en = info.get('road_name_en', '')
+                            # 印尼语字段（非 nominatim provider 结果为缺省空串，不额外处理）
+                            point.province_id = info.get('province_id', '')
+                            point.city_id = info.get('city_id', '')
+                            point.district_id = info.get('area_id', '')
+                            point.road_name_id = info.get('road_name_id', '')
+                            # 点级 region（fill 后点归该地区，轨迹级同步见尾部）
+                            point.region = region
+
+                            # 印尼省级中文尽力回填：zh-CN 结果为空或与印尼语相同
+                            # （Nominatim 对无中译省份返回本地名）→ 用 38 省译名表
+                            if region == 'id':
+                                zh_province = info.get('province', '')
+                                id_province = info.get('province_id', '')
+                                if _should_backfill_province_zh(zh_province, id_province):
+                                    from app.gpxutil_wrapper.indonesia import get_indonesia_province_zh
+                                    zh = get_indonesia_province_zh(id_province)
+                                    if zh:
+                                        point.province = zh
 
                             # 更新审计字段
                             point.updated_by = user_id
@@ -647,15 +701,13 @@ class TrackService:
                         logger.error(f"Error getting geocoding for point {idx}: {e}")
 
                 # 更新轨迹标记（只有成功填充了数据才标记为 True）
-                track_result = await db.execute(
-                    select(Track).where(Track.id == track_id)
-                )
-                track = track_result.scalar_one_or_none()
+                track = track_row
                 if track:
                     # 只有成功填充了至少一个点，才设置标记
                     if updated_count > 0:
                         track.has_area_info = True
                         track.has_road_info = True
+                        track.region = region  # 填充地区成为该轨迹的默认地区
                     track.updated_by = user_id
 
                 await db.commit()

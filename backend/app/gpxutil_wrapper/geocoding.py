@@ -56,8 +56,12 @@ class NominatimGeocoding(GeocodingService):
         super().__init__(config)
         self.url = config.get('url', 'http://localhost:8080')
 
-    async def get_point_info(self, lat: float, lon: float) -> dict[str, Any]:
-        """获取点的地理信息"""
+    async def get_point_info(self, lat: float, lon: float, region: str = 'cn') -> dict[str, Any]:
+        """获取点的地理信息
+
+        Args:
+            region: 地区（'cn' 现状逻辑；'id' 增加印尼语请求，写入 *_id 字段）
+        """
         result = {
             'province': '',
             'city': '',
@@ -70,12 +74,20 @@ class NominatimGeocoding(GeocodingService):
             'area_en': '',
             'town_en': '',
             'road_name_en': '',
+            # 印尼语（region='id' 时填充）
+            'province_id': '',
+            'city_id': '',
+            'area_id': '',
+            'road_name_id': '',
             'memo': ''
         }
 
+        # 语言请求集：cn 维持现状（中文+英文），id 增加印尼语；
+        # 未识别的 region 走 cn 集（spec §9：不选/未知地区 = 现状不变）
+        languages = ['zh-CN', 'id', 'en'] if region == 'id' else ['zh-CN', 'en']
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # 中文请求
                 params = {
                     'lat': lat,
                     'lon': lon,
@@ -86,34 +98,38 @@ class NominatimGeocoding(GeocodingService):
                     'accept-language': 'zh-CN'
                 }
 
-                response = await client.get(f"{self.url}/reverse", params=params)
-                rev = response.json()
+                # 各语言依次请求（结果存 revs[语言]）
+                revs: dict[str, dict] = {}
+                for lang in languages:
+                    params['accept-language'] = lang
+                    response = await client.get(f"{self.url}/reverse", params=params)
+                    revs[lang] = response.json()
 
-                # 英文请求
-                params['accept-language'] = 'en'
-                response_en = await client.get(f"{self.url}/reverse", params=params)
-                rev_en = response_en.json()
-
+                rev = revs['zh-CN']
                 if 'features' not in rev or not rev['features']:
                     result['memo'] = 'No results found'
                     return result
 
-                admin_dict = rev['features'][0]['properties']['geocoding']['admin']
-                admin_dict_en = rev_en['features'][0]['properties']['geocoding']['admin']
+                # 按语言取 admin 层级（zh-CN 无中译时多为本地名，后续尽力回填）
+                for lang in languages:
+                    feats = revs[lang].get('features') or []
+                    admin = feats[0]['properties']['geocoding']['admin'] if feats else {}
+                    suffix = '' if lang == 'zh-CN' else f'_{lang}'
+                    result[f'province{suffix}'] = admin.get('level4', '')
+                    result[f'city{suffix}'] = admin.get('level5', '')
+                    result[f'area{suffix}'] = admin.get('level6', '')
+                    result[f'town{suffix}'] = admin.get('level8', '')
 
-                result['province'] = admin_dict.get('level4', '')
-                result['city'] = admin_dict.get('level5', '')
-                result['area'] = admin_dict.get('level6', '')
-                result['town'] = admin_dict.get('level8', '')
-                result['province_en'] = admin_dict_en.get('level4', '')
-                result['city_en'] = admin_dict_en.get('level5', '')
-                result['area_en'] = admin_dict_en.get('level6', '')
-                result['town_en'] = admin_dict_en.get('level8', '')
-
-                # 获取道路信息
+                # 获取道路信息（取各语言请求的道路名，id 时 *_id 用 id 请求名）
                 if rev['features'][0]['properties']['geocoding']['osm_type'] == 'way':
-                    result['road_name'] = rev['features'][0]['properties']['geocoding']['name']
-                    result['road_name_en'] = rev_en['features'][0]['properties']['geocoding']['name']
+                    for lang in languages:
+                        feats = revs[lang].get('features') or []
+                        if not feats:
+                            continue
+                        name = feats[0]['properties']['geocoding'].get('name', '')
+                        suffix = '' if lang == 'zh-CN' else f'_{lang}'
+                        result[f'road_name{suffix}'] = name
+                    # 现状：英文名与中文名相同时置空
                     if result['road_name_en'] == result['road_name']:
                         result['road_name_en'] = ''
 
@@ -123,19 +139,16 @@ class NominatimGeocoding(GeocodingService):
                     details = details_response.json()
                     if 'names' in details and 'ref' in details['names']:
                         road_nums = details['names']['ref'].split(';')
-                        # 为省级高速添加省份前缀（如果还没有前缀）
                         processed_nums = []
                         for num in road_nums:
                             num = num.strip().upper()
-                            # 判断是否是省级高速（S开头 + 1-4位数字）
-                            if num.startswith('S') and len(num) >= 2 and num[1:].isdigit():
-                                # 检查是否已经有省份前缀
+                            # 为省级高速添加省份前缀为中国专属逻辑（仅 cn），印尼 raw ref 直接用
+                            if region == 'cn' and num.startswith('S') and len(num) >= 2 and num[1:].isdigit():
                                 has_province_prefix = any(
                                     num.startswith(prefix)
                                     for prefix in PROVINCE_NAME_TO_SHORT.values()
                                 )
                                 if not has_province_prefix:
-                                    # 尝试从省份信息中获取简称
                                     province_short = None
                                     if result['province']:
                                         province_short = PROVINCE_NAME_TO_SHORT.get(result['province'])
