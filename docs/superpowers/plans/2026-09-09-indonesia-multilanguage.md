@@ -3422,6 +3422,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 
 **Files:**
 - Modify: `backend/app/services/track_service.py`（`get_region_tree`、`get_region_tree_no_auth` → 提取共享 `_build_region_tree`）
+- Test: `backend/tests/test_region_tree.py`（**新建，Step 5**）
 
 > **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
 > 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
@@ -3445,9 +3446,15 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 
 实现：因两函数（1316/1559）除权限检查与 create_node 微小差异外全同（no_auth 每点额外 own point_count++ 后又被 _aggregate_node_stats 覆盖 → 与 auth 等价），提取单一共享方法。Task 步骤：
 
-- [ ] **Step 1: 读 L1310-1356（_aggregate_node_stats 开头）确认后开始**
+- [ ] **Step 1: 读 `_aggregate_node_stats` 与两个待合并的公共方法，**先验证二者确实等价**
 
-先 Read `backend/app/services/track_service.py` 的 L1310-1357（_aggregate_node_stats）确认行为（已核：聚合基于 own_* 字段并写回 distance/point_count）。
+先 Read `_aggregate_node_stats`（锚点：`def _aggregate_node_stats`）确认行为（已核：聚合基于 own_* 字段并写回 distance/point_count）。
+
+**然后是本 Task 最关键的一步**：完整读 `get_region_tree` 与 `get_region_tree_no_auth` 两个函数体，**逐段比对**，确认它们除「权限检查」与「no_auth 每点额外的 own_point_count++（随后被 `_aggregate_node_stats` 覆盖）」之外**确实没有其他差异**。
+
+> ⚠️ 本计划断言二者等价，但**这个断言本身没有证据**。把两个函数合并成一个共享实现，前提就是这个等价性成立——若不成立，合并会**静默改变其中一个端点**的行为，而两个端点分别服务于「登录用户看自己轨迹」与「公开分享页」，受影响面不同且不会被任何既有测试发现。
+>
+> **请把逐段比对结果写进报告**（哪些段落相同、哪些不同、不同处是否可安全归一）。若发现**实质差异**（不只是那两处），**停下来报告，不要合并**。Step 4 的冒烟验证是对等价性的**实证复核**，不是替代品——它只在开发库有轨迹、且该轨迹同时能被两个入口读到时才有效。
 
 - [ ] **Step 2: 新增共享方法 `_build_region_tree(self, points)`（放 get_region_tree 之前）**
 
@@ -3499,20 +3506,29 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
                 'children': [],
             }
 
-        def collect_names(point: TrackPoint, is_road: bool) -> dict:
+        def collect_names(point: TrackPoint, level: str) -> dict:
             """取点在本级展示的语言代表值（非空才入 names）
+
+            `level` ∈ {'province','city','district','road'} —— **必须按节点层级取对应字段**。
+            （早前版本用 `is_road: bool` 只有「道路 / 非道路」两分支，导致市节点与区节点
+            拿到的是**省**的三语名；`names` 是 Task 12 前端 tooltip 的数据源，
+            会把省名显示成市名/区名，且冒烟验证发现不了。已修正为按层级取。）
 
             按 zh → id → en 顺序**对值去重**：Nominatim 无译文时各语言常返回同一个
             本地名（如 zh 与 id 都是 'Jawa Timur'），不去重会让 tooltip 显示
             「Jawa Timur / Jawa Timur」、也让前端「单语言不出 tooltip」判定失效。
             """
+            candidates = {
+                'province': (('zh', point.province), ('id', point.province_id),
+                             ('en', point.province_en)),
+                'city': (('zh', point.city), ('id', point.city_id),
+                         ('en', point.city_en)),
+                'district': (('zh', point.district), ('id', point.district_id),
+                             ('en', point.district_en)),
+                'road': (('zh', point.road_name), ('id', point.road_name_id),
+                         ('en', point.road_name_en)),
+            }[level]
             names = {}
-            if is_road:
-                candidates = (('zh', point.road_name), ('id', point.road_name_id),
-                              ('en', point.road_name_en))
-            else:
-                candidates = (('zh', point.province), ('id', point.province_id),
-                              ('en', point.province_en))
             for key, value in candidates:
                 if value and value not in names.values():
                     names[key] = value
@@ -3554,7 +3570,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
                 # 创建新省级节点并设置起始索引
                 new_province = create_node(
                     province, 'province',
-                    names=collect_names(point, False), region=region)
+                    names=collect_names(point, 'province'), region=region)
                 new_province['start_index'] = time_idx
                 root_nodes.append(new_province)
                 current_province = ((region, province), new_province)
@@ -3578,7 +3594,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
                 # 创建新市级节点并设置起始索引
                 new_city = create_node(
                     city_key, 'city',
-                    names=collect_names(point, False), region=region)
+                    names=collect_names(point, 'city'), region=region)
                 new_city['start_index'] = time_idx
                 province_node['children'].append(new_city)
                 current_city = ((region, city_key), new_city)
@@ -3607,7 +3623,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
                     current_district[1]['end_index'] = time_idx - 1
                 new_district = create_node(
                     district_key, 'district',
-                    names=collect_names(point, False), region=region)
+                    names=collect_names(point, 'district'), region=region)
                 new_district['start_index'] = time_idx
                 city_node['children'].append(new_district)
                 current_district = ((region, district_key), new_district)
@@ -3627,7 +3643,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
                     current_road[1]['end_index'] = time_idx - 1
                 new_road = create_node(
                     road_name, 'road', road_number,
-                    names=collect_names(point, True), region=region)
+                    names=collect_names(point, 'road'), region=region)
                 new_road['start_index'] = time_idx
                 district_node['children'].append(new_road)
                 current_road = (road_key, new_road)
@@ -3744,10 +3760,28 @@ EOF
 ```
 Expected: 两入口节点数与 stats 一致（同轨迹）；首节点含 region/names 键。（若 get_region_tree 因 user_id 非 1 找不到轨迹返回空 → 用数据库实际第一个轨迹的 owner 替换 user_id，或选择共享轨迹 id。执行器以实际数据为准调整查询；若开发库为空则跳过本验证并注明。）
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: 回归测试（新建 `backend/tests/test_region_tree.py`）**
+
+**为什么必须有**：本 Task 的两类缺陷都**不会被冒烟验证发现**——(a) 节点 `names` 取错层级（市/区节点填了省名），冒烟只看「首节点含 region/names 键」，键在就通过；(b) 合并两函数时若等价性不成立，冒烟需要有「能被两个入口同时读到的轨迹」才会暴露。测试是唯一能真正钉住它们的东西。
+
+**推荐做法**：`_build_region_tree(points)` 的输入是**内存中的 `TrackPoint` 列表**，不依赖数据库；若 `self.spatial_service.distance(...)` 是纯计算（haversine，不查库），则可直接构造 `TrackPoint(...)` 对象（**不 add、不 commit**）后 `await track_service._build_region_tree(points)` 断言返回的 `(root_nodes, stats)`。**先确认 `spatial_service.distance` 是否触库**：若不触库就照此做（最省、最快）；若触库，退而用 `workdir` fixture + 建轨迹入库的方式，并在报告中说明。
+
+用例清单：
+1. `test_names_per_level` —— 构造一个点，**省/市/区/路四级的 zh、id、en 值两两不同**（如省 `P-zh/P-id/P-en`、市 `C-zh/C-id/C-en`…），断言省节点的 `names` 是省的三语值、市节点是市的三语值、区节点是区的三语值、道路节点是路的三语值。**这条直接钉住 `collect_names(point, level)` 的层级正确性**——把任一层的 `level` 参数写错就必红。
+2. `test_names_dedup_same_value` —— 某级 zh 与 id 值相同（Nominatim 无译文时的常见情形）→ 断言 `names` 里该值**只出现一次**（`len(names.values()) == len(set(names.values()))`）。
+3. `test_display_fallback_chain` —— 某级 zh 为空、id 有值 → 断言节点 `name` 取的是 id 值；zh/id 都空、en 有值 → 取 en 值。
+4. `test_region_grouping` —— 两个点的各级文本**完全相同但 `region` 分别为 `cn` 与 `id`** → 断言生成**两个**省级根节点（键含 region，不跨地区并组），且各自 `region` 字段正确、`stats` 把二者分别计数。
+5. `test_auth_no_auth_equivalent`（可选但推荐）—— 若有可入库的建轨迹路径：同一条轨迹分别经 `get_region_tree` 与 `get_region_tree_no_auth` → 断言两个返回的 `regions` 结构一致（节点数、各级 `name`/`region`/`point_count`/`distance` 一致）与 `stats` 相等。这是对「两函数确实等价」的**回归固化**，防将来又分叉。
+6. `test_road_number_keying` —— 同名道路但 `road_number` 不同 → 断言生成两个道路节点（道路键含编号）。
+
+**变异自检（至少 2 项；每项给出「变异前 / 还原后 sha256 一致」或 `git diff` 为空的证据）**：
+- 把市节点的 `collect_names(point, 'city')` 改成 `collect_names(point, 'province')` → 用例 1 **必须红**
+- 把分组键里的 region 去掉（如 `(region, province)` → `province`）→ 用例 4 **必须红**
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add backend/app/services/track_service.py
+git add backend/app/services/track_service.py backend/tests/test_region_tree.py
 git commit -m "feat(region-tree): 区域树按(region,文本)分组、节点携带 names/region，抽取共享构建
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
