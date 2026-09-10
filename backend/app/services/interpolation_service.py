@@ -417,6 +417,25 @@ class InterpolationService:
         )
         points_to_update = result.scalars().all()
 
+        # 插值点继承区段锚点（point_index == start_point_index 的真实点）的 region。
+        # 点级 region 是权威，不能用 tracks.region 顶替：编辑轨迹地区只改行级、不覆盖已有点级，
+        # 两者可能不一致。锚点取不到时才回退行级，再回退默认 'cn'。
+        # ponytail: 区段跨地区边界时整段取锚点 region，不做逐点细分
+        anchor_region = (await db.execute(
+            select(TrackPoint.region)
+            .where(
+                and_(
+                    TrackPoint.track_id == track_id,
+                    TrackPoint.point_index == start_point_index
+                )
+            )
+            .limit(1)
+        )).scalar_one_or_none()
+        if anchor_region is None:
+            anchor_region = (await db.execute(
+                select(Track.region).where(Track.id == track_id)
+            )).scalar_one_or_none() or 'cn'
+
         # 计算索引偏移量
         offset = len(points)
 
@@ -442,6 +461,7 @@ class InterpolationService:
                 elevation=point_data.elevation,
                 is_interpolated=True,
                 interpolation_id=interpolation_id,
+                region=anchor_region,
                 # 插值点不包含地理信息
                 province=None,
                 city=None,

@@ -14,6 +14,8 @@ from fastapi import HTTPException, UploadFile
 
 from app.api import shared, tracks
 from app.models.live_recording import LiveRecording
+from app.schemas.interpolation import InterpolationCreateRequest
+from app.services.interpolation_service import interpolation_service
 from app.services.track_service import track_service
 from conftest import _db_env, _gpx, _track_points
 
@@ -375,5 +377,43 @@ class TestSerializationRegion:
                 by_id = {i['id']: i for i in items}
                 assert by_id[track.id]['region'] == 'id'
                 assert by_id[-1]['region'] == 'cn'  # 虚拟实时项无轨迹，固定 'cn'
+
+        asyncio.run(case())
+
+
+class TestInterpolationRegion:
+    """插值点 region 继承区段锚点（点级权威），不得落到模型默认 'cn'
+
+    `interpolation_service._insert_interpolated_points` 构造 TrackPoint 时不传 region，
+    点就落默认值 'cn'：印尼轨迹插值后，这些点会在区域树里以 region=cn 冒出一个
+    「未知区域」根节点与 id 分组并列，导出 CSV 也会 cn/id 行混杂。
+    """
+
+    def test_inherits_anchor_region(self, workdir):
+        """锚点优先于行级；锚点缺失才回退 tracks.region"""
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                # ① 常规：id 轨迹的插值点必须是 'id'（漏传 region 时这里是 'cn'）
+                a = await track_service.create_from_gpx(db, user, 'a.gpx', _gpx(), 'a', region='id')
+
+                # ② 锚点与行级不一致：编辑轨迹地区只改行级、不覆盖已有点级，
+                #    故必须取锚点的 'cn' —— 用 tracks.region（'id'）顶替的实现在这里变红
+                b = await track_service.create_from_gpx(db, user, 'b.gpx', _gpx(), 'b', region='id')
+                (await _track_points(db, b.id))[0].region = 'cn'
+                await db.commit()
+
+                for track, expected in ((a, 'id'), (b, 'cn')):
+                    await interpolation_service.create_interpolation(
+                        db, track.id,
+                        InterpolationCreateRequest(
+                            start_point_index=0, end_point_index=1,
+                            interpolation_interval_seconds=2,
+                        ),
+                        user.id,
+                    )
+                    interp = [p for p in await _track_points(db, track.id) if p.is_interpolated]
+                    assert len(interp) == 5, f'10s 区段 / 2s 间隔应为 5 点，实际 {len(interp)}'
+                    assert {p.region for p in interp} == {expected}
 
         asyncio.run(case())
