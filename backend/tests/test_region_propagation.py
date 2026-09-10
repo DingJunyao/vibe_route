@@ -196,21 +196,26 @@ class TestServiceRegion:
         asyncio.run(case())
 
     def test_merge_keeps_per_point_region(self, workdir):
-        """合并：产物 track.region 取首段源轨迹，点级 region 与 4 个 *_id 逐点复制"""
+        """合并：产物 track.region 取首段源轨迹，点级 region 与 4 个 *_id 逐点复制
+
+        每个点的 4 个 *_id 值唯一（轨号 + 点序 + 字段序号），断言按排序后的集合比较：
+        既钉住「逐点复制」不串字段，也钉住同轨点位不取错，同时不规定同轨内点序。
+        """
 
         async def case():
             async with _db_env(workdir) as (db, user):
                 a = await track_service.create_from_gpx(db, user, 'a.gpx', _gpx(8), 'a', region='id')
                 b = await track_service.create_from_gpx(db, user, 'b.gpx', _gpx(9), 'b', region='cn')
 
-                # 合并前给两轨的点各赋互不相同的 *_id：任取错来源（如 province_id=p.city_id）
-                # 或整体漏复制，都会让下面的断言变红。
+                # 合并前给两轨的点各赋互不相同的 *_id：值里编入「轨号 + 点序 + 字段序号」，
+                # 使同轨两点的值也彼此不同 —— 任取错来源（如 province_id=p.city_id）、整体漏复制、
+                # 或「点取错」（如把同轨第一个点的值复制给了第二个点）都会让下面的断言变红。
                 # 这 4 个字段是 Task 10 collect_names 直读的字段，写错会静默污染多语 tooltip。
                 id_fields = ('province_id', 'city_id', 'district_id', 'road_name_id')
                 for track, prefix in ((a, 'A'), (b, 'B')):
-                    for pt in await _track_points(db, track.id):
+                    for i, pt in enumerate(await _track_points(db, track.id), start=1):
                         for n, field in enumerate(id_fields, start=1):
-                            setattr(pt, field, f'{prefix}{n}')
+                            setattr(pt, field, f'{prefix}{i}{n}')
                 await db.commit()
 
                 # 刻意倒转入参顺序：a 是较早轨迹但不是首参 → 取 track_ids[0] 的实现会红
@@ -218,11 +223,14 @@ class TestServiceRegion:
                 assert merged.region == 'id'  # 取 start_time 较早者，而非入参首个
                 points = await _track_points(db, merged.id)
                 assert [p.region for p in points] == ['id', 'id', 'cn', 'cn']  # 逐点复制，非统一填充
-                # 每个合并后的点必须带着它原来那个点的 4 个 *_id（merge 只复制这几列）
-                assert [tuple(getattr(p, f) for f in id_fields) for p in points] == [
-                    ('A1', 'A2', 'A3', 'A4'), ('A1', 'A2', 'A3', 'A4'),
-                    ('B1', 'B2', 'B3', 'B4'), ('B1', 'B2', 'B3', 'B4'),
-                ]
+                # 每个合并后的点必须带着它原来那个点的 4 个 *_id（merge 只复制这几列）。
+                # 排序后比较：同轨两点谁先谁后由上面的 region 断言钉住，此处只负责「多点集合正确」，
+                # 不引入「同轨内点序」这一脆弱前提；同轨两点值互不相同 → 点位错位必红。
+                got = sorted(tuple(getattr(p, f) for f in id_fields) for p in points)
+                assert got == sorted([
+                    ('A11', 'A12', 'A13', 'A14'), ('A21', 'A22', 'A23', 'A24'),
+                    ('B11', 'B12', 'B13', 'B14'), ('B21', 'B22', 'B23', 'B24'),
+                ])
 
         asyncio.run(case())
 
