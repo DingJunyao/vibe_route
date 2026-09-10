@@ -4038,6 +4038,13 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 **修复值的事实依据**：`backend/app/services/live_recording_service.py` **全文无 `region`**（grep 实测零命中）→ 实时记录建点时不传 region、落模型默认值 `'cn'`。故 4 个 `*_id` 填 `null`、`region` 填 `'cn'` 是**事实正确**而非猜测（与 Task 14 待记录的已知限制「实时记录恒 cn」一致）。
 
+**「本仓前端无 TS 门禁」的加固证据（协调者复核，进一步支持不改依赖的裁决）**
+
+1. **排除 `@ts-nocheck` 豁免**：全仓 `grep -rn "@ts-nocheck\|@ts-ignore\|@ts-expect-error" src/` 只命中 `src/auto-imports.d.ts:3/86` 与 `src/components.d.ts:3`——均为**自动生成**的声明文件，非手写源码。`TrackDetail.vue` 未被豁免。
+2. **确认检查强度**：`frontend/tsconfig.json` 为 `"strict": true`、`"noUnusedLocals": true`、`"noUnusedParameters": true`，且 `"include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.tsx", "src/**/*.vue"]` → `.vue` 在检查范围内，对象字面量缺必需属性确会报错。**故上一轮「新增 TS2739」的定性成立。**
+3. **关键推论（比「vue-tsc 崩了」更重要的裁决依据）**：由 2 与前述存量 TS2339 可知，**`build:check` 即便在 vue-tsc 可用的环境里也是红的**——base 上就有一批存量类型错误。所以修 vue-tsc **不是「恢复一道绿色门禁」，而是「打开一屏存量错误」**，随之而来的是分类、triage 与「哪些算本计划引入」的归属争议。**这是一个独立议题、独立工作量，明确不属于本计划。** 本计划改用 `npm run build`（项目自身文档标准）+ 定点人工核对，是当前最省且最诚实的路径。
+4. **由此得出的通用教训（Task 12 及后续前端任务通用）**：`npm run build` 通过**不构成类型正确的证据**——esbuild 只剥离类型。凡涉及**新增必填字段、改函数签名、删改 import**，必须人工定点核对（新增必填字段 → 找对象字面量构造点；改签名 → 找全部调用点；删 import 依赖 → 看有没有别的使用点）。Task 12 的 `ParsedRoadNumber` 未使用 import 正是此类（esbuild 静默丢弃、构建不会变红）。
+
 ---
 
 ### Task 12: 前端视图：上传地区选择、编辑对话框地区、区域树印尼盾牌与多语 tooltip
@@ -4052,6 +4059,18 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 > 实况前提（Task 5 质量审查实测）：后端 `get_or_create_sign` 走 `output_path` 分支再回读文件，**返回的 SVG 带固定 `width="562.0px" height="451px"`**（仅字符串分支剥 width/height；CN 盾牌同形，前端既有渲染已兼容）。故此处沿用现有内联/尺寸处理即可，**不要**指望靠 viewBox 自适应撑满容器；如需缩放由外层 CSS 定尺寸。
 
 两个文件模板中两处 el-tree slot 均以 `<component :is="() => renderNodeLabel(data)" />` 输出标签 → **模板零改动**（tooltip 用原生 title 属性在 renderNodeLabel 内实现，不侵入 el-tree）。
+
+> ⚠️ **附带必改：`ParsedRoadNumber` 类型 import 会变成未使用（本计划原先漏写，协调者实测补入）**
+>
+> 实测（`grep -n "ParsedRoadNumber\|parseRoadNumber"`）：
+> - `TrackDetail.vue`：import 在 L1081，类型**仅**用于 L1814 的 `loadRoadSignSvg(parsed: ParsedRoadNumber)`；函数 `parseRoadNumber` 用在 L1854。
+> - `SharedTrack.vue`：import 在 L557，类型**仅**用于 L805；函数用在 L845。
+>
+> 本任务的 Step 1/2 把 `loadRoadSignSvg` 的形参改成 `RoadSignFetchOptions` 后，**该类型 import 再无任何使用点** → 成为未使用 import。本仓 `tsconfig.json` 为 `"strict": true` + `"noUnusedLocals": true`，vue-tsc 下会报 TS6133。
+>
+> **处置**：两文件的 import 行改为只留函数——`import { parseRoadNumber } from '@/utils/roadSignParser'`（**不要**整个删掉该 import：`parseRoadNumber` 在 cn 分支仍被 `renderNodeLabel` 调用，见 Step 1 代码块 `const parsed = parseRoadNumber(num)`）。
+>
+> **注意这不影响 `npm run build`**：esbuild 会静默丢弃未使用 import，故构建不会因此变红——**这正是本仓无 TS 门禁时最容易漏掉的一类问题**，必须靠人工核对。
 
 - [ ] **Step 1: TrackDetail.vue —— 替换三个 SVG 函数与 renderNodeLabel（L1780-1885 区段整体替换）**
 
