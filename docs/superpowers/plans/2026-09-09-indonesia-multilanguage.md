@@ -2953,6 +2953,29 @@ Expected: 全绿（用例数不变，本轮只加断言）。
 
 **变异自检（证明 R1 的新断言真的拦得住）**：把 merge 的 `"province_id": point.province_id` 改成 `point.city_id` → 必须**红**（改动前为全绿）→ 还原并给 `sha256sum` 一致或 `git diff` 为空的证据。
 
+- [ ] **Step 4（R1 补强）：把同轨点序错位也封上**
+
+**首轮执行已完成**（`2a6de1c`，变异自检证据完整：变异前/还原后 `sha256` 一致、变异期 `1 failed` 且失败信息正是被复制错的 `province_id`）。但 implementer 上报一条真实残余：**同轨内点序错位仍零覆盖**——同一轨的两个点共享同一组 `*_id`（`'A1'..'A4'`），所以「merge 把 point[1] 的 ids 复制给了 point[0]」这类**点位错位**不会变红；逐点 region 断言同样拦不住（同轨两点 region 相同）。而「批量逐点复制时取错点」正是 R1 存在的理由，故判定**值得补**。
+
+改法（**用集合比较，避免引入「同轨内点序」这一脆弱前提**）：赋值时把点位序号编进值里，断言时比较**排序后的元组列表**（顺序已由上面的 `[p.region ...]` 断言钉住，此处只需保证多集合正确）：
+
+```python
+                id_fields = ('province_id', 'city_id', 'district_id', 'road_name_id')
+                for track, prefix in ((a, 'A'), (b, 'B')):
+                    for i, pt in enumerate(await _track_points(db, track.id), start=1):
+                        for n, field in enumerate(id_fields, start=1):
+                            setattr(pt, field, f'{prefix}{i}{n}')
+                await db.commit()
+                ...
+                got = sorted(tuple(getattr(p, f) for f in id_fields) for p in points)
+                assert got == sorted([
+                    ('A11', 'A12', 'A13', 'A14'), ('A21', 'A22', 'A23', 'A24'),
+                    ('B11', 'B12', 'B13', 'B14'), ('B21', 'B22', 'B23', 'B24'),
+                ])
+```
+
+同轨两点值此时互不相同 → 点位错位必红。**变异自检**：把 merge 的 `"province_id": point.province_id` 改成对同轨第二个点取错（如把 `point` 换成循环外的固定点）不易构造时，退而验证：手工交换某轨两点的赋值顺序后断言仍绿（证明集合比较不依赖点序），再用 V-型变异确认字段错位仍红。
+
 提交：确认 `git log --oneline -1` 是否仍是 Task 7 的提交；是则 `--amend --no-edit`，否则普通 commit（**若 HEAD 已是 Task 8 的提交，必须用普通 commit，不要 amend 到 Task 8 上**）。
 
 > ⚠️ **执行前必须确认 Task 8 已提交完毕**（`git log --oneline -1` 不是 Task 8 的在途状态、`git status` 无他人的未完成改动）——两个 agent 并发提交会抢 git 索引。
@@ -2967,6 +2990,7 @@ Expected: 全绿（用例数不变，本轮只加断言）。
 | M5 点接口 dict 缺 `memo`（`tracks.py` 点端点） | 不改 | 既有问题、非本轮引入；该端点未声明 `response_model`，补 `memo` 会改变响应契约，属独立议题 |
 | R3 `TrackUpdate` 允许显式 `null` → 写 NOT NULL 列 500 | 不改 | 与 `name`（`models/track.py` 同为 NOT NULL）**完全同形**，是 PATCH 端点的既有通病、**非 region 回归**；只为 region 打补丁会造成同族字段行为不一致，要收口应在端点/服务层统一 `model_dump(exclude_none=True)`，属独立议题 |
 | R4 本提交用过 `amend`，旧哈希 `5f1935b` 已不在历史中 | 不改 | 已 grep `docs/` 与 `cc/`，无悬空引用（复审确认） |
+| BOM 独占首行：`csv_lines = ["﻿", headers, ...]` 经 `"\n".join` 后导出 CSV 的首行是**只含 BOM 的空行**，表头落在第 2 行 | 不改 | **既有问题、非本计划引入**（`2ba3326` 之前即如此）。与本计划的多语言列改名无关；修它要动导出拼接结构（应把 BOM 并进首个字段而非独立元素），属独立议题。**已在 Task 14 记为已知问题**，不在本计划范围 |
 
 #### 交接提醒（Task 9 必读，已同步写入 Task 9 段落）
 
@@ -3095,6 +3119,9 @@ Task 8 首轮已提交（`2ba3326`，67 passed）。implementer 上报一条 DON
 
 **Files:**
 - Modify: `backend/app/services/track_service.py`（`update_point_fields`、`has_area`/`has_road` 重算、`_create_from_csv_project_format` 地理字段与检测段、`point_data`、`insert_values`；GPS Logger 检测后 project 分支）
+- Test: `backend/tests/test_import_multilanguage.py`（**新建，Step 6**）
+
+> ⚠️ **为什么本 Task 必须有测试**（本段与下面那句「写错了测试不红就等于没写」是同一条理由）：别名表与行级 region 的全部失效模式都是**静默**的——别名查不到 = 该字段不更新（不报错）；`point_data`/`insert_values` 少一个键 = INSERT 省略该列 = 模型 `default` 生效（不报错）；`insert_values` 里的 `"region": region` 忘了改成 `point_data.get("region") or region` = 行级 region 被轨迹默认值整体覆盖（不报错）。**这三种错了都不会让任何既有用例变红，因为此前没有任何用例跑过导入路径。** 故本 Task 的测试不是「顺手补」，是这次改动的唯一防线。
 
 > ⚠️ **Task 7 交接的必改点**：`_create_from_csv_project_format` 内的 `point_data` 字典**目前不含 `region` 键**，Task 7 注入的是 `"region": region` 这个字面量（当时正确）。**本 Task 接行级 region 时必须把它改成 `point_data.get("region") or region`**——否则行级解析出的 region 会被轨迹级默认值覆盖，行级功能静默失效（且因为列有默认值，不会报错）。
 >
@@ -3330,10 +3357,44 @@ Expected: ok
 
 同步确认：GPS Logger 格式（无 project 列）不读地理列 → 无需改动（Track() 与插入已由 Task 7 注入 region）。`create_from_xlsx` 走 `_create_from_csv_project_format` 自动获得别名/行级 region 能力（xlsx 表头与 CSV 一致的假定不变）。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: 闭环测试（新建 `backend/tests/test_import_multilanguage.py`）**
+
+**推荐顺序**：先写本步骤的测试并确认它们**红**（此时别名表还不存在 → 新格式的 `*_zh`/`*_id`/`region` 列解析不到；行级 region 被轨迹默认值整体覆盖），再执行 Step 1-5，最后回到本步骤确认转绿。
+
+复用 `tests/test_region_propagation.py` 里的 `workdir` fixture 与 `_db_env` 上下文（**不要用 `tmp_path`**——本机 `%TEMP%/pytest-of-Administrator` 不可访问，会直接 `PermissionError`）。建轨迹用现有的 `track_service.create_from_gpx(db, user, 'a.gpx', _gpx(8), 'a', region=...)` helper。
+
+关键接口（已实测）：
+- `await track_service.import_points_from_file(db, track_id, user_id, file_content: bytes, file_format='csv', match_mode='index')`
+- `await track_service.export_points_to_csv(db, track_id, user_id) -> (filename, content: str)`
+- CSV 导入走 `csv.DictReader`，且已 `decode('utf-8-sig')` → BOM 与首行空行不成问题
+
+新格式表头常量（与 Task 8 导出的 30 列一致）：
+
+```python
+NEW_HEADERS = ("index,time_date,time_time,time_microsecond,elapsed_time,"
+               "longitude_wgs84,latitude_wgs84,longitude_gcj02,latitude_gcj02,"
+               "longitude_bd09,latitude_bd09,elevation,distance,course,speed,"
+               "region,province_zh,province_id,province_en,city_zh,city_id,city_en,"
+               "area_zh,area_id,area_en,road_num,road_name_zh,road_name_id,"
+               "road_name_en,memo")
+```
+
+用例清单：
+1. `test_new_format_all_columns_applied` —— 新格式两行（region 列分别 `id` / `cn`）；导入后逐点断言 `province/province_id/province_en`、`city*`、`area*`（注意落到模型的 `district*`）、`road_number/road_name/road_name_id/road_name_en`、`region` 全部等于文件值。
+2. `test_row_region_overrides_track_default` —— 轨迹建成 `region='cn'`，文件 region 列写 `id` → 断言点 `region == 'id'`。**这条就是钉住 `"region": point_data.get("region") or region` 的守卫**（改回字面量 `region` 必须变红）。
+3. `test_empty_region_falls_back_to_track` —— region 列**存在但值为空** → 点 region 取轨迹自身 region；另建一条跑**旧格式**（无 region 列）→ 点 region **保持原值不变**（不是被改成轨迹 region）。
+4. `test_invalid_region_raises` —— region 列写 `sg` → `pytest.raises(ValueError)`。
+5. `test_legacy_format_still_works` —— 旧格式表头（`index,province,city,area,road_num,road_name`，无后缀）→ 中文列照旧落库（回归守卫，防别名表把老文件读坏）。
+6. `test_export_import_roundtrip` —— 建一条带全套多语言字段的轨迹 → `export_points_to_csv` 取 content → `content.encode('utf-8')` 直接喂回 `import_points_from_file`（喂给**另一条**轨迹）→ 断言目标点与源点字段一致。**这条把 Task 8 的 30 列导出与 Task 9 的别名表锁在一起**，是「导出→导入闭环」的直接验证（否则该闭环只剩 Task 13 的冒烟覆盖）。
+
+**变异自检（至少 2 项；每项给出「变异前 / 还原后 sha256 一致」或 `git diff` 为空的证据）**：
+- 把 `insert_values` 的 `"region": point_data.get("region") or region` 改回 `"region": region` → 用例 2 **必须红**
+- 把 `_IMPORT_FIELD_ALIASES` 里 `'district': ['area_zh', 'area']` 的 `'area_zh'` 删掉 → 用例 1 **必须红**（证明别名表真的被读取，而非碰巧同名命中）
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add backend/app/services/track_service.py
+git add backend/app/services/track_service.py backend/tests/test_import_multilanguage.py
 git commit -m "feat(import): CSV/XLSX 导入列名别名表（兼容三类格式）与行级 region 写入
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
@@ -4208,6 +4269,7 @@ Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）
 8. 冒烟结论（含开发者确认过的 UI 表现）
 9. **已知限制（必须写，勿省）**：**实时记录链路恒为 `cn`**。`live_recording_service.py:435-459` 走**自己的内联地理编码**（`geo_service.get_point_info(lat, lon)` 两参调用），**不经过** `fill_geocoding_info` → 既不写 `*_id`、也不写 `point.region`；且 `LiveRecording` 模型**无 region 列**（迁移 016 也未加），`app/api/live_recordings.py:474` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹会按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可正确回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外。
 10. **已知限制（必须写，勿省）**：**Geo Editor（地理信息编辑器）不认识多语言字段**。`geo_editor_service.py` 读路径（L82-105）构造的 `TrackPointGeoData` 只含 `province/city/district/road_number/road_name` 及其 `_en` 对，**不含 `*_id`、不含 region**；写路径（L152-184）的 `field_mapping` 同样只映射这几对，批量 `update(TrackPoint).values(**update_data)`。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 被更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id`/`region`）；**region 与图标不受影响**（编辑器不改 region）。**范围外原因**：修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；计划全篇（Task 1-14）未覆盖该文件。若后续要修，最小改动是给 `TrackPointGeoData`/`GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`。
+11. **既有问题（非本计划引入，记录备查）**：**导出的 CSV 首行是空行**。`export_points_to_csv` 把 `csv_lines` 以 `["﻿", headers, *rows]` 组成、再 `"\n".join`，于是 BOM 成为独立元素 → 导出文件首行是「只含 BOM 的空行」，表头在第 2 行（Excel 打开会看到一行空行）。该写法在本次列改名**之前**即存在，与多语言工作无关；正确修法是把 BOM 并进首个字段（如 `"﻿" + headers`）而非作为独立元素。**本计划不改**（会动导出拼接结构，属独立议题）。另注：行分隔符是 `\n` 而非 RFC 4180 的 `\r\n`，同属既有。
 
 - [ ] **Step 1: 读 cc 现状 → 追加 → Commit**
 
