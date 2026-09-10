@@ -3414,15 +3414,59 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 
 **2. 越界修复（必要，非顺手）**：首轮 implementer 修了 `export_points_to_csv` 的 BOM 独占首行缺陷（**Task 8 的函数**）。经独立复现确认该缺陷真实且后果严重——旧写法下 `DictReader` 的 `fieldnames` 为 `[]`、每行键为 `None`，导入**静默匹配 0 个点**。也就是说本节要求的 `test_export_import_roundtrip` **在未修时不可能通过**，修它是完成本 Task 的前提而非扩大范围。**已同步更正上方「本轮不改」表与 Task 14 第 11 条**（原判「不改、记为已知问题」已作废）。
 
-**3. 新发现未修（既有缺口）**：`_create_from_csv_project_format` **既不解析也不写入 `memo`** —— 走「创建」路径的 CSV/XLSX 会丢备注（导入路径正常）。不在本计划列出的 `insert_values` 字段清单内，属既有缺口，已在测试 helper 的文档串中标明。**是否补属独立议题**（补它要同时改 `point_data` 与 `insert_values` 两处，且与多语言无关）。
+**3. 新发现未修（既有缺口）**：`_create_from_csv_project_format` **既不解析也不写入 `memo`** —— 走「创建」路径的 CSV/XLSX 会丢备注（导入路径正常）。不在本计划列出的 `insert_values` 字段清单内，属既有缺口，已在测试 helper 的文档串中标明。**是否补属独立议题**（补它要同时改 `point_data` 与 `insert_values` 两处，且与多语言无关）。**→ 此定性已被质量审推翻，见下条 F9。**
+
+#### 质量审后的处置（2026-09-10）
+
+质量审结论：**无严重缺陷**（无数据丢失/安全问题；`region` 只有入参或 `track.region or 'cn'` 两个来源，不会写 NULL；导入路径的 `ValueError` 在 `db.commit()` 之前抛出，会话关闭即回滚，无半写状态）。全量 **76 passed** 经实跑确认；别名表与 Task 8 导出的 30 列**逐列核对无遗漏**，旧格式 10 个历史列名全部仍可达；`region` 兜底值在导出/导入/创建/响应四处已统一 `'cn'`。判定 **修完可合**。以下为逐条裁决。
+
+**采纳（9 项，交 fix loop 执行）**
+
+| # | 问题 | 修法 |
+|---|---|---|
+| F1 | **创建路径完全绕过 `_IMPORT_FIELD_ALIASES`**（L3087-3099 是硬编码列名对），日后改表（加列/调优先级）只有导入侧生效 | 按本节 L3278 原提议补模块级 `_row_aliased(row, field)`（紧邻别名表），十三行改调用；并在 `_create_from_csv_project_format` docstring 写明两条路径的语义差异（见下「裁决说明」） |
+| F2 | **`_build_merge_plan` 的 `has_area/has_road` 未同步加 `*_id`**，与紧邻注释「口径同 `import_points_from_file`」直接矛盾 | `track_service.py:3887-3894` 各补 `or p.province_id or p.city_id or p.district_id` 与 `or p.road_name_id`（共 2 行） |
+| F3 | **XLSX 导入分支零覆盖**：`get_val` 的 `headers.index(alias)` 分支（L2498-2503）是本次重写的代码，而 `tests/` 里 `file_format` 只出现 `'csv'` | 新文件补一个 `file_format='xlsx'` 用例（openpyxl 写 `NEW_HEADERS` + 两行），复用 `_new_format_csv` 的字段值与 `_assert_full_fields` |
+| F4 | **旧格式「无 region 列」断言无分辨力**（`test_import_multilanguage.py:262-270`：期望值恰等于轨迹自身默认值） | 让点值与轨迹值**不同**（建轨迹 `region='cn'` 后把点改成 `'id'`，或反之），使「一律写 `track.region`」这种错误必红 |
+| F5 | `headers: set \| list \| None` 注解与实现不符（`.index` 对 set 抛 `AttributeError`；旧代码的 `list(headers)` 兜底本次被去掉） | 注解删去 `set`（无 set 调用者 —— 两处调用点传的是 dict 与 list，YAGNI） |
+| F6 | region 白名单项目**已有** `REGION_VALUES`（`gpxutil_wrapper/indonesia.py:18`，`svg_gen.py` 已在用）却未被复用 | 本次新增的两处（`update_point_fields`、`_create_from_csv_project_format`）改用 `REGION_VALUES` |
+| F7 | `pytest.raises(ValueError)` 未带 `match`，任意 `ValueError` 都能顶替 | 两处补 `match='无效的地区值'` |
+| F8 | 创建路径 region 用例两行同值（`_new_format_csv(region0='id', region1='id')`），分辨力弱 | 改 `region1='cn'`；并补一条「`province_zh` 列**存在但为空** + 旧列 `province` 有值 → 创建路径取旧列值」钉住 F1 的语义 |
+| F9 | **`memo` 在创建路径丢失**（走「创建」路径的 CSV/XLSX 丢备注） | `point_data` 与 `insert_values` 各加 1 行（`"memo": point_data.get("memo")`），并加创建路径的 memo 断言 |
+
+**裁决说明**
+
+- **F1 只统一来源，不改语义**：两条路径的取值语义本就不同——导入路径是「第一个**存在**的列，空值也算值」（**覆盖**语义：用户清空一列即期望清空），创建路径是「第一个**非空**的值」（**建点**语义：无既有值可覆盖）。质量审实测的分歧（表头 `province_zh` 空 + `province` 有值 → 导入 `province=None`、创建 `province='旧省'`）**予以保留**并写进 docstring。理由：该组合只在「新旧列混排」的文件里出现，而 Task 8 导出的 30 列**不含无后缀旧列**，故「导出 → 上传」闭环里不可达；强行统一反而会让「清空某列」的语义在创建路径失效。
+- **F9 推翻了上条第 3 项的定性**。原判「既有缺口、与多语言无关、是否补属独立议题」在**事实层面**成立（base commit 同函数同样只有 docstring 提到 memo，非本次引入），但漏了两点：① 三处 docstring（`create_from_csv`、`_create_from_csv_project_format`、`create_from_xlsx`）至今**对外宣称支持 memo**，且导出（`export_points_to_csv` / `export_points_to_xlsx`）**确实写出 memo 列** —— 即「导出 → 上传」这条闭环会丢备注；② 本 Task 正在改的正是这两个 dict，补它是**各 1 行**。故改判为**补**：Task 8 建立的 30 列导出与上传链路的闭环完整性属本计划范围。
+
+**不改（记录理由）**
+
+| 项 | 判定 | 理由 |
+|---|---|---|
+| `fill_geocoding` 的 region 兜底（`track_service.py:569-571`）遇未知地区 `logger.warning` 后**静默按 `cn` 填充** | 不改 | 本 Task 未触及，且修它要先判断填充语义（拒绝，还是按点级 region 分流）；质量审认定它是六处白名单里**唯一会静默填出整段错区数据**的一处 → **记入 Task 14 已知限制**，不掩盖 |
+| 测试 helper 第三份拷贝（`test_region_propagation.py` / `test_import_multilanguage.py` 逐字节相同，`test_indonesia_shield.py` 亦有 `workdir`） | 不在本 Task 抽 | 抽 `conftest.py` 要改动既有测试文件、扩大本 Task 的审查面；**改列为 Task 10 的 Step 0**（单独 commit），届时正好出现第 4 份 |
 
 ---
 
 ### Task 10: 区域树：共享聚合重构 + region 分组 + names + 显示回退链
 
 **Files:**
+- Create: `backend/tests/conftest.py`（**Step 0**）
+- Modify: `backend/tests/test_region_propagation.py`、`backend/tests/test_import_multilanguage.py`（**Step 0**：删除本地副本、改为 import）
 - Modify: `backend/app/services/track_service.py`（`get_region_tree`、`get_region_tree_no_auth` → 提取共享 `_build_region_tree`）
 - Test: `backend/tests/test_region_tree.py`（**新建，Step 5**）
+
+- [ ] **Step 0: 抽 `backend/tests/conftest.py`（独立 commit，在动 `track_service.py` 之前）**
+
+本 Task 的 Step 5 用例 5 需要入库（走两个公共入口），若照旧就地复制就是**第 4 份** helper 拷贝：`test_region_propagation.py` 与 `test_import_multilanguage.py` 的 `workdir`/`_db_env`/`_track_points`/`_gpx` 经质量审**逐字节比对完全相同**，`test_indonesia_shield.py` 另有一份 `workdir`；而 `tests/` 下**没有 conftest.py**。`_db_env` 一改（加模型、换 `expire_on_commit`）要同步改四处，**漏改一处是静默的**（该文件的测试会用上缺模型的 schema）——此前收窄 `dependency_overrides` 清理范围时就已付出过一次代价。
+
+**前提已核（不必再试）**：`backend/tests/` 下**没有 `__init__.py`**，仓库里也**没有任何 pytest 配置文件**（无 `pytest.ini`/`pyproject.toml`/`setup.cfg`/`tox.ini`）。故 pytest 用 prepend 导入模式，把测试文件所在目录 `backend/tests` 插入 `sys.path` → `from conftest import _db_env, _track_points, _gpx` 可用（现有的 `from app.models import ...` 也正是靠从 `backend/` 跑 `python -m pytest` 时 cwd 在 `sys.path` 上）。
+
+**做法（最小 diff）**：新建 `backend/tests/conftest.py`，把 `workdir`（fixture）与 `_db_env`/`_track_points`/`_gpx`（普通函数）**逐字搬过去，保持原名**（`_` 前缀不影响 pytest 注入 fixture，也无需改名——改名会波及三份拷贝里的全部引用点，得不偿失）。两个测试文件里**删掉已搬走的定义**，各加一行 `from conftest import _db_env, _track_points, _gpx`（`workdir` 是 fixture，自动注入，无需 import）。
+
+**验收**：`cd backend && ../.venv/Scripts/python -m pytest tests/ -q` 与改动前**用例数与通过数完全一致**（当前基线 **76 passed**）；两个既有测试文件除「删定义 + 加一行 import」外**无其他改动**（用 `git diff` 自查，`_db_env` 的正文必须是**逐字未改**的搬运）。
+
+> ⚠️ **Step 0 是独立 commit**（`test: 抽 tests/conftest.py 收编共享 fixture`），与 Step 1-6 分开，便于单独回滚与审查。若实测 `from conftest import ...` 不可用，**跳过 Step 0 并在报告中说明**，用例 5 就地复制 helper 即可（它是「可选但推荐」的一条）——不要为抽 helper 把 Task 10 主体搭进去。
 
 > **⚠️ 行号基准（2026-09-10 第二次实测，Task 9 完成后；`track_service.py` 会随每个任务持续漂移）**
 > **不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
