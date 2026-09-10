@@ -1859,16 +1859,18 @@ class TrackService:
         csv_lines = []
         csv_lines.append("\ufeff")  # UTF-8 BOM
 
-        # CSV 表头
+        # CSV 表头（region + 三语言地理列：中文无后缀 / _id 印尼语 / _en 英语）
         headers = [
             "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
             "longitude_wgs84", "latitude_wgs84",
             "longitude_gcj02", "latitude_gcj02",
             "longitude_bd09", "latitude_bd09",
             "elevation", "distance", "course", "speed",
-            "province", "city", "area",
-            "province_en", "city_en", "area_en",
-            "road_num", "road_name", "road_name_en", "memo"
+            "region",
+            "province_zh", "province_id", "province_en",
+            "city_zh", "city_id", "city_en",
+            "area_zh", "area_id", "area_en",
+            "road_num", "road_name_zh", "road_name_id", "road_name_en", "memo"
         ]
         csv_lines.append(",".join(headers))
 
@@ -1920,14 +1922,19 @@ class TrackService:
                 f"{total_distance:.2f}",
                 f"{point.bearing:.2f}" if point.bearing is not None else "",
                 f"{point.speed:.2f}" if point.speed is not None else "",
+                point.region or "",
                 point.province or "",
-                point.city or "",
-                point.district or "",
+                point.province_id or "",
                 point.province_en or "",
+                point.city or "",
+                point.city_id or "",
                 point.city_en or "",
+                point.district or "",
+                point.district_id or "",
                 point.district_en or "",
                 point.road_number or "",
                 point.road_name or "",
+                point.road_name_id or "",
                 point.road_name_en or "",
                 getattr(point, 'memo', None) or "",
             ]
@@ -1990,16 +1997,18 @@ class TrackService:
         ws = wb.active
         ws.title = "轨迹点"
 
-        # 设置表头
+        # 设置表头（与 CSV 导出保持一致的 30 列）
         headers = [
             "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
             "longitude_wgs84", "latitude_wgs84",
             "longitude_gcj02", "latitude_gcj02",
             "longitude_bd09", "latitude_bd09",
             "elevation", "distance", "course", "speed",
-            "province", "city", "area",
-            "province_en", "city_en", "area_en",
-            "road_num", "road_name", "road_name_en", "memo"
+            "region",
+            "province_zh", "province_id", "province_en",
+            "city_zh", "city_id", "city_en",
+            "area_zh", "area_id", "area_en",
+            "road_num", "road_name_zh", "road_name_id", "road_name_en", "memo"
         ]
 
         # 写入表头（加粗）
@@ -2057,14 +2066,19 @@ class TrackService:
                 round(total_distance, 2),
                 round(point.bearing, 2) if point.bearing is not None else None,
                 round(point.speed, 2) if point.speed is not None else None,
+                point.region or 'cn',
                 point.province,
-                point.city,
-                point.district,
+                point.province_id,
                 point.province_en,
+                point.city,
+                point.city_id,
                 point.city_en,
+                point.district,
+                point.district_id,
                 point.district_en,
                 point.road_number,
                 point.road_name,
+                point.road_name_id,
                 point.road_name_en,
                 getattr(point, 'memo', None),
             ]
