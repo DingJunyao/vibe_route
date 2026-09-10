@@ -3446,6 +3446,32 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 | `fill_geocoding` 的 region 兜底（`track_service.py:569-571`）遇未知地区 `logger.warning` 后**静默按 `cn` 填充** | 不改 | 本 Task 未触及，且修它要先判断填充语义（拒绝，还是按点级 region 分流）；质量审认定它是六处白名单里**唯一会静默填出整段错区数据**的一处 → **记入 Task 14 已知限制**，不掩盖 |
 | 测试 helper 第三份拷贝（`test_region_propagation.py` / `test_import_multilanguage.py` 逐字节相同，`test_indonesia_shield.py` 亦有 `workdir`） | 不在本 Task 抽 | 抽 `conftest.py` 要改动既有测试文件、扩大本 Task 的审查面；**改列为 Task 10 的 Step 0**（单独 commit），届时正好出现第 4 份 |
 
+#### Fix loop 落地（2026-09-10，`dcd6223` + `d9c4e46`）
+
+九项全部落地，**78 passed**（基线 76，**+2**；协调者独立复跑确认），5 项变异自检全部转红并成功还原。实现者**主动多改了第三个文件** `tests/test_region_propagation.py`（+4 行，在 `test_merge_keeps_per_point_region` 上补 F2 的 `has_area_info` 断言）——该文件的源点恰好只有 `*_id` 有值，正是 F2 的输入形态，比在新文件里重建一套 merge fixture 更省；**采纳**。F9 选了「memo 加进 `_assert_full_fields` 并同步改 docstring」这条，消除了「docstring 说不含 memo、实际却含」的矛盾；`_import` 的签名放宽（支持 bytes 以跑 xlsx）不影响既有调用点。
+
+**F1 的等价性结论被更正（重要）**：本清单原写「行为必须逐字保持不变」，**实测不成立**。实现者用穷举把旧表达式与 `_row_aliased` 对拍（取值域 `{键缺失, None, '', '   ', ' X ', 'X'}`，双别名键全组合，共 **204** 组）：**196 组一致，8 组不一致**，且 8 组是同一形状——
+
+> `{'province_zh': '   ', 'province': 'X'}` → 旧写法 `None`，新写法 `'X'`
+>
+> 原因：旧写法 `(row.get(a) or row.get(b) or '').strip() or None` 按**原始**真值短路（`'   '` 为真 → 短路 → strip 后为空 → `None`）；`_row_aliased` 按 **strip 后**是否为空决定是否继续下一个别名。（8 组 = 4 个双别名键 [`province`/`city`/`district`/`road_name`] × 2 组取值。）
+
+**裁决：保留新行为**——空白单元格不应遮蔽旧列的真值，且新写法更贴合 `_row_aliased` 自己声明的「第一个非空」语义。**但已用测试钉住**（`d9c4e46`）：`_bare_province_csv()` 增加第 4 行「`province_zh` 只有空白 + `province` 有值」→ 断言创建路径取 `'旧省四'`；变异（判空改回原始真值短路）实测该用例**变红**，还原后 sha256 一致。钉它的理由：这个子情形正是「两条路径语义分歧」的核心（**空白算不算值**），不钉住就可能被日后「恢复等价」的人静默改回去。
+
+**关于「先红后绿」的诚实说明（记录为后续 Task 的范例）**：F3/F4/F7/F8 的断言在实现前**就是绿的**（它们钉的是既有正确行为，不是本次修出来的），只有 F9（memo）与 F2（merge 口径）真的先红。实现者没有把这四条说成 TDD 红过，而是用变异自检证明其**非空转**（M1/M4/M5）——这是正确且必要的补证方式。
+
+#### ⚠️ 变异自检的还原验收标准（本窗口实测教训，**Task 10-13 通用**）
+
+协调者本轮亲手踩了一次，务必写进每个 Task 的自检要求：
+
+> **还原的验收标准是 `git status --porcelain` 为空（或 shell 侧 `sha256sum` 一致），不是脚本自己算的哈希。**
+>
+> 原因：Python 的 `Path.read_text()` / `write_text()` 会做**换行符翻译**（读时 `\r\n`→`\n`；Windows 上写时 `\n`→`\r\n`）。一次「读-改-写」往返会把整个文件的换行符翻掉——实测把 4134 行的 `track_service.py` 从 LF 变成 CRLF，`git diff` 显示 **4134 增 / 4134 删**。而**若 sha256 也是用同样的 `read_text` 算的，它对这个错误是瞎的**：两侧都归一化了，哈希当然一致。
+>
+> 正确做法二选一：① 变异脚本用 `read_bytes()`/`write_bytes()`（二进制，无翻译）或 `open(..., newline='')`；② 还原后用 **`git status --porcelain` / `git diff`** 或 **shell 的 `sha256sum`**（读原始字节）验收。**git 是唯一的地面真相。**
+>
+> 本 window 的修复 loop（`dcd6223`）用的是 ②（`sha256sum -c`），方法本身没问题；踩坑的是协调者自写的 Python 脚本。
+
 ---
 
 ### Task 10: 区域树：共享聚合重构 + region 分组 + names + 显示回退链
