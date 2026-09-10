@@ -4046,6 +4046,29 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 3. **关键推论（比「vue-tsc 崩了」更重要的裁决依据）**：由 2 与前述存量 TS2339 可知，**`build:check` 即便在 vue-tsc 可用的环境里也是红的**——base 上就有一批存量类型错误。所以修 vue-tsc **不是「恢复一道绿色门禁」，而是「打开一屏存量错误」**，随之而来的是分类、triage 与「哪些算本计划引入」的归属争议。**这是一个独立议题、独立工作量，明确不属于本计划。** 本计划改用 `npm run build`（项目自身文档标准）+ 定点人工核对，是当前最省且最诚实的路径。
 4. **由此得出的通用教训（Task 12 及后续前端任务通用）**：`npm run build` 通过**不构成类型正确的证据**——esbuild 只剥离类型。凡涉及**新增必填字段、改函数签名、删改 import**，必须人工定点核对（新增必填字段 → 找对象字面量构造点；改签名 → 找全部调用点；删 import 依赖 → 看有没有别的使用点）。Task 12 的 `ParsedRoadNumber` 未使用 import 正是此类（esbuild 静默丢弃、构建不会变红）。
 
+**Task 11 关闭（复审结论）**
+
+提交序列：`a8da60e`（实现，2 文件 +15/-1）→ `11fa8f1`（fix loop，1 文件 +5/-0）→ `c18d436`（nit，1 文件 +1/-1）。全程 `git status --porcelain` 为空。
+
+- **spec 复审**：原发现**已消除**。机械比对实测输出（脚本动态定位 `points.value.push({` 字面量、提取键集 vs 解析接口必需字段集）：
+  ```
+  BASE TrackPoint required fields: 25
+  HEAD TrackPoint required fields: 30
+  literal keys: 30
+  >>> MISSING vs HEAD: []          >>> MISSING vs BASE: []
+  >>> DUPLICATE KEYS: []           >>> EXTRA keys not in HEAD interface: []
+  >>> exact key order match vs interface order? true
+  ```
+  无新问题；范围干净（`git diff a8da60e^ 11fa8f1 --name-only` 无 `liveTrackWebSocket.ts`）；`track.ts:91-95` 五字段**仍必填无 `?`**（未被弱化为绕过）；9 处存量 TS2339 **一行未碰**。
+- **质量审**：**Ready to merge: Yes**，无 block。命名/风格一致性良好；`region: 'cn'` 用裸值而周围用 `point.x || null` 是**有益的差异**（视觉标出「无载荷来源」），非疏漏。
+- **唯一 nit 已采纳**（`c18d436`）：`// 实时记录恒 cn` → `// 实时记录链路不传 region，落模型默认 cn`。理由：原措辞像在陈述**策略**，而事实是**当前实现事实**；将来给印尼开实时记录时，按策略读的人可能继续硬编码 `'cn'` 而不接真实值。**此改动为纯注释、零行为风险，故未再开一轮复审**（审查者原判即「非阻塞」，且改动逐字采用其建议措辞）。
+- **复审者提出的残留风险（已知天花板，记录在案）**：该字面量是 WS 增量点的**乐观值**，`fetchTrackPoints()`（`TrackDetail.vue:1705`）在后端返回时用 `points.value = response.points` **全量覆盖**，故生命周期有限。今日前后端一致（服务端模型 `backend/app/models/track.py:104` 的 `server_default='cn'` 也存 `'cn'`）。**若将来后端让实时点继承 `track.region`（如 `'id'`），则在下次 refetch 之前新到的实时点会短暂显示 CN 图标。**
+- **顺带发现的存量问题（本计划不修，列为独立议题候选——供最终 review 与 Task 14 参考）**：
+  1. `PointAddedData`（`frontend/src/utils/liveTrackWebSocket.ts:62-73`）**接口陈旧**：`point` 只声明 9 个字段，而 `TrackDetail.vue` 读了 `latitude_wgs84`/`*_gcj02`/`*_bd09`/`province`/`*_en`/`memo` 等十余个未声明属性（≥9 处 TS2339）。根因在此接口，修它才能一次性消除。
+  2. `TrackDetail.vue:2913` 的 `point.memo` 既是 TS2339、又是**恒为空操作**（后端 `point_data` 载荷不含 `memo`）。
+  3. `src/utils/animationUtils.ts:3` 的 `import type { TrackPoint } from '@/types/track'` 是**断链导入**（`src/types/` 只有 `animation.ts`/`poster.ts`，无 `track`）。因是 `import type`、esbuild 剥离，故构建不报错。
+  4. **本仓前端无 TS 门禁**（见上）；上述 1-3 均属「构建通过但类型不干净」的存量欠账。
+
 ---
 
 ### Task 12: 前端视图：上传地区选择、编辑对话框地区、区域树印尼盾牌与多语 tooltip
