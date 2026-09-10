@@ -2905,6 +2905,11 @@ async function handleNewPointAdded(data: PointAddedData) {
     city_en: point.city_en || null,
     district_en: point.district_en || null,
     road_name_en: point.road_name_en || null,
+    province_id: null,
+    city_id: null,
+    district_id: null,
+    road_name_id: null,
+    region: 'cn',  // 实时记录恒 cn
     memo: point.memo || null,
   })
 
