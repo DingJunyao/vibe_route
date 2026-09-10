@@ -13,6 +13,7 @@ from app.models.track import Track, TrackPoint
 from app.models.user import User
 from app.gpxutil_wrapper.coord_transform import convert_point_to_all, CoordinateType
 from app.gpxutil_wrapper.geocoding import create_geocoding_service, GeocodingProvider
+from app.gpxutil_wrapper.indonesia import REGION_VALUES
 from app.core.query_helper import QueryHelper, SoftDeleteMixin, AuditMixin as QueryAuditMixin
 from loguru import logger
 
@@ -49,6 +50,21 @@ _IMPORT_FIELD_ALIASES = {
     'memo': ['memo'],
     'region': ['region'],
 }
+
+
+def _row_aliased(row: dict, field: str) -> Optional[str]:
+    """按别名表顺序取第一个非空值（创建路径用）
+
+    与导入路径 update_point_fields 的 get_val 语义**不同且必须保持不同**：
+    那里取「第一个**存在**的列」（空值也算值 → 把该字段覆盖为空，是用户的显式清空意图），
+    这里取「第一个**非空**的值」（创建路径是新建点，没有既有值可覆盖）。
+    两者共用同一张别名表，故列的映射与优先级永远一致。
+    """
+    for alias in _IMPORT_FIELD_ALIASES.get(field, []):
+        val = row.get(alias)
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return None
 
 
 class TrackService:
@@ -2469,7 +2485,7 @@ class TrackService:
 
             return None
 
-        def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
+        def update_point_fields(point: TrackPoint, row: dict, headers: list | None = None):
             """更新点的可编辑字段（多语言别名列名 + 行级 region）
 
             只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
@@ -2543,7 +2559,7 @@ class TrackService:
                 region_val = get_val('region')
                 if region_val is None or region_val == '':
                     point.region = track.region or 'cn'
-                elif region_val in ('cn', 'id'):
+                elif region_val in REGION_VALUES:
                     point.region = region_val
                 else:
                     raise ValueError(
@@ -2991,6 +3007,12 @@ class TrackService:
         - elevation, distance, course, speed
         - province, city, area, province_en, city_en, area_en
         - road_num, road_name, road_name_en, memo
+
+        列名与优先级一律取自 _IMPORT_FIELD_ALIASES（*_zh / *_id / *_en 新格式与无后缀旧格式），
+        但两条路径的取值语义**不同**（见 _row_aliased）：本函数是「建点」——取第一个**非空**
+        的别名值；import_points_from_file 是「覆盖」——取第一个**存在**的列（空值也算值，
+        用户清空一列即期望清空）。故同一份「province_zh 为空 + province 有值」的文件，
+        本函数落回 province，导入路径则把 province 覆盖为 None。
         """
         from datetime import datetime
 
@@ -3083,23 +3105,24 @@ class TrackService:
             speed = self._parse_float(row.get('speed'))
             bearing = self._parse_float(row.get('course'))  # course 即 bearing
 
-            # 解析地理信息（别名：新格式 *_zh / *_id / *_en；旧格式无后缀=中文）
-            province = (row.get('province_zh') or row.get('province') or '').strip() or None
-            city = (row.get('city_zh') or row.get('city') or '').strip() or None
-            district = (row.get('area_zh') or row.get('area') or '').strip() or None
-            province_en = (row.get('province_en') or '').strip() or None
-            city_en = (row.get('city_en') or '').strip() or None
-            district_en = (row.get('area_en') or '').strip() or None
-            province_id = (row.get('province_id') or '').strip() or None
-            city_id = (row.get('city_id') or '').strip() or None
-            district_id = (row.get('area_id') or '').strip() or None
-            road_number = (row.get('road_num') or '').strip() or None
-            road_name = (row.get('road_name_zh') or row.get('road_name') or '').strip() or None
-            road_name_en = (row.get('road_name_en') or '').strip() or None
-            road_name_id = (row.get('road_name_id') or '').strip() or None
+            # 解析地理信息（列名与优先级一律来自 _IMPORT_FIELD_ALIASES，见 _row_aliased）
+            province = _row_aliased(row, 'province')
+            city = _row_aliased(row, 'city')
+            district = _row_aliased(row, 'district')
+            province_en = _row_aliased(row, 'province_en')
+            city_en = _row_aliased(row, 'city_en')
+            district_en = _row_aliased(row, 'district_en')
+            province_id = _row_aliased(row, 'province_id')
+            city_id = _row_aliased(row, 'city_id')
+            district_id = _row_aliased(row, 'district_id')
+            road_number = _row_aliased(row, 'road_num')
+            road_name = _row_aliased(row, 'road_name')
+            road_name_en = _row_aliased(row, 'road_name_en')
+            road_name_id = _row_aliased(row, 'road_name_id')
+            memo = _row_aliased(row, 'memo')
             # 行级 region（可选）：非空须为 cn/id，空则用轨迹默认
-            row_region = (row.get('region') or '').strip()
-            if row_region and row_region not in ('cn', 'id'):
+            row_region = _row_aliased(row, 'region') or ''
+            if row_region and row_region not in REGION_VALUES:
                 raise ValueError(f"无效的地区值 '{row_region}'，可选值: cn, id")
             point_region = row_region or region
 
@@ -3183,6 +3206,7 @@ class TrackService:
                 'road_name': road_name,
                 'road_name_en': road_name_en,
                 'road_name_id': road_name_id,
+                'memo': memo,
                 'region': point_region,
             }
             points_data.append(point_data)
@@ -3251,6 +3275,7 @@ class TrackService:
                 "road_number": point_data.get("road_number"),
                 "road_name_en": point_data.get("road_name_en"),
                 "road_name_id": point_data.get("road_name_id"),
+                "memo": point_data.get("memo"),
                 "region": point_data.get("region") or region,
                 "created_by": user.id,
                 "updated_by": user.id,
@@ -3886,10 +3911,11 @@ class TrackService:
         # 行政区划/道路信息标记（口径同 import_points_from_file）
         has_area_info = any(
             p.province or p.city or p.district or p.province_en or p.city_en or p.district_en
+            or p.province_id or p.city_id or p.district_id
             for p in all_points
         )
         has_road_info = any(
-            p.road_number or p.road_name or p.road_name_en
+            p.road_number or p.road_name or p.road_name_en or p.road_name_id
             for p in all_points
         )
 

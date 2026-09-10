@@ -101,12 +101,12 @@ def _new_format_csv(region0='id', region1='cn'):
 
 
 def _assert_full_fields(p0, p1):
-    """逐字段核值：行政区划/道路 × 三语言
+    """逐字段核值：行政区划/道路 × 三语言 + memo
 
     两条写入路径（导入的 ORM 赋值 / 创建的批量 INSERT）共用本断言：
     批量 INSERT 少一个键就是 INSERT 省略该列 → 模型 default 生效，不报错。
     两行的值互不相同 → 取错行、串字段、漏列都会红。
-    不含 memo：创建路径的 insert_values 至今不写 memo（既有缺口，非本次改动）。
+    含 memo：创建路径此前不写 memo（导出写、创建丢），补上后两条路径都在这里钉住。
     """
     assert (p0.province, p0.province_id, p0.province_en) == ('东爪哇省', 'JI', 'East Java')
     assert (p0.city, p0.city_id, p0.city_en) == ('泗水市', 'SURABAYA', 'Surabaya')
@@ -121,12 +121,51 @@ def _assert_full_fields(p0, p1):
     assert (p1.road_number, p1.road_name, p1.road_name_id, p1.road_name_en) == (
         'R2', '街道二', 'Jalan Dua', 'Road Two')
 
+    assert (p0.memo, p1.memo) == ('备注一', '备注二')
+
     assert p0.province_en != p1.province_en  # 同行取错 → 也会红
 
 
-async def _import(db, track_id, user_id, content: str, fmt='csv'):
+def _new_format_xlsx(region0='id', region1='cn'):
+    """把 _new_format_csv 的同一份内容写成 xlsx（值逐字段一致，只换载体）
+
+    XLSX 导入走的是 row 为 tuple + headers.index 的取值分支，与 CSV 的 DictReader
+    dict 分支是两套代码 —— CSV 全绿不能说明 XLSX 正确。
+    """
+    import csv as _csv
+    from io import BytesIO, StringIO
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    for row in _csv.reader(StringIO(_new_format_csv(region0, region1))):
+        ws.append(row)
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _bare_province_csv():
+    """新列 province_zh 与旧列 province 并存：前两行 zh 为空、第三行两列都有值"""
+    rows = []
+    for i, (tm, lon, lat, zh, bare) in enumerate((
+        ('08:00:00', '112.735000', '-7.280000', '', '旧省一'),
+        ('08:00:10', '112.736000', '-7.281000', '', '旧省二'),
+        ('08:00:20', '112.737000', '-7.282000', '新省', '旧省三'),
+    )):
+        rows.append(_row(index=i, time_date='2026/09/01', time_time=tm,
+                         longitude_wgs84=lon, latitude_wgs84=lat, region='cn',
+                         province_zh=zh)
+                    + f',{bare}')
+    return NEW_HEADERS + ',province\n' + '\n'.join(rows)
+
+
+async def _import(db, track_id, user_id, content, fmt='csv'):
+    if isinstance(content, str):
+        content = content.encode('utf-8')
     return await track_service.import_points_from_file(
-        db, track_id, user_id, content.encode('utf-8'), file_format=fmt, match_mode='index'
+        db, track_id, user_id, content, file_format=fmt, match_mode='index'
     )
 
 
@@ -143,9 +182,29 @@ class TestNewFormatColumns:
 
                 p0, p1 = await _track_points(db, track.id)
                 _assert_full_fields(p0, p1)
-                assert (p0.memo, p1.memo) == ('备注一', '备注二')  # memo 只走导入路径
                 assert p0.region == 'id'  # 行级 region，与轨迹默认 'cn' 不同
                 assert p1.region == 'cn'
+
+        asyncio.run(case())
+
+    def test_xlsx_import_all_columns_applied(self, workdir):
+        """XLSX 导入：走 row 为 tuple + headers.index 的取值分支（与 CSV 的 dict 分支不同）
+
+        get_val 的 XLSX 分支（headers.index(alias)）是本次重写的代码，而此前 tests/ 里
+        file_format 只出现过 'csv' —— CSV 全绿不能说明这一支正确。
+        顺带覆盖行级 region（两行取值不同）与 memo。
+        """
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                track = await track_service.create_from_gpx(
+                    db, user, 'a.gpx', _gpx(), 'a', region='cn'
+                )
+                await _import(db, track.id, user.id, _new_format_xlsx(), fmt='xlsx')
+
+                p0, p1 = await _track_points(db, track.id)
+                _assert_full_fields(p0, p1)
+                assert (p0.region, p1.region) == ('id', 'cn')
 
         asyncio.run(case())
 
@@ -234,13 +293,14 @@ class TestRowRegion:
                 await _import(db, track.id, user.id, _new_format_csv(region0='id', region1='id'))
                 assert {p.region for p in await _track_points(db, track.id)} == {'id'}
 
-                # ② 创建路径：轨迹参数 region='cn'，文件 region 列写 'id'
+                # ② 创建路径：轨迹参数 region='cn'，文件 region 列写 'id' / 'cn'
                 created = await track_service.create_from_csv(
-                    db, user, 'c.csv', _new_format_csv(region0='id', region1='id'), 'c', region='cn'
+                    db, user, 'c.csv', _new_format_csv(region0='id', region1='cn'), 'c', region='cn'
                 )
                 assert created.region == 'cn'  # 轨迹级仍是入参，只点级被文件覆盖
                 c0, c1 = await _track_points(db, created.id)
-                assert (c0.region, c1.region) == ('id', 'id')
+                # 两行取值不同：漏掉行级解析、整体写死 region 的做法都会红
+                assert (c0.region, c1.region) == ('id', 'cn')
                 # 批量 INSERT 与导入的 ORM 赋值是两套写入方式，字段要各自钉一遍
                 _assert_full_fields(c0, c1)
 
@@ -258,16 +318,22 @@ class TestRowRegion:
                 await _import(db, t_empty.id, user.id, _new_format_csv(region0='', region1=''))
                 assert {p.region for p in await _track_points(db, t_empty.id)} == {'id'}
 
-                # ② 旧格式无 region 列 → 完全不动点 region（已有 'cn' 保持 'cn'）
+                # ② 旧格式无 region 列 → 完全不动点 region。
+                # 点值 'id' 与轨迹值 'cn' 刻意不同：期望值若等于轨迹默认值，
+                # 「删掉 has_key('region') 守卫、一律写 track.region」这种错误也会绿。
                 t_legacy = await track_service.create_from_gpx(
                     db, user, 'b.gpx', _gpx(9), 'b', region='cn'
                 )
+                for pt in await _track_points(db, t_legacy.id):
+                    pt.region = 'id'
+                await db.commit()
+
                 await _import(db, t_legacy.id, user.id,
                               'index,province,city,area,road_num,road_name\n'
                               '0,甲省,甲市,甲区,R1,路一\n'
                               '1,乙省,乙市,乙区,R2,路二\n')
                 pts = await _track_points(db, t_legacy.id)
-                assert {p.region for p in pts} == {'cn'}
+                assert {p.region for p in pts} == {'id'}  # 保持原值，未被轨迹 region 覆盖
                 assert [p.province for p in pts] == ['甲省', '乙省']  # 其余字段照旧更新
 
         asyncio.run(case())
@@ -278,7 +344,7 @@ class TestRowRegion:
                 track = await track_service.create_from_gpx(
                     db, user, 'a.gpx', _gpx(), 'a', region='cn'
                 )
-                with pytest.raises(ValueError):
+                with pytest.raises(ValueError, match='无效的地区值'):
                     await _import(db, track.id, user.id, _new_format_csv(region0='sg', region1='cn'))
 
         asyncio.run(case())
@@ -293,11 +359,45 @@ class TestRowRegion:
 
         async def case():
             async with _db_env(workdir) as (db, user):
-                with pytest.raises(ValueError):
+                with pytest.raises(ValueError, match='无效的地区值'):
                     await track_service.create_from_csv(
                         db, user, 'c.csv', _new_format_csv(region0='sg', region1='cn'),
                         'c', region='cn',
                     )
+
+        asyncio.run(case())
+
+    def test_create_path_takes_first_nonempty_alias(self, workdir):
+        """新列 province_zh 与旧列 province 并存时，创建路径取「第一个非空」的值
+
+        F1 的防线，两条断言各钉一半：
+        - 前两行 zh 列为空 → 落回旧列（若 `_row_aliased` 被写成「取第一个存在的列」，
+          照抄导入路径的 get_val，这里只会得到 None）；
+        - 第三行两列都有值 → 新列优先（若别名表里 'province' 项漏了 'province_zh'，
+          即创建路径没真的读这张表，这里会拿到 '旧省三'）。
+        同一份文件走导入路径得到 None —— 两条路径的语义差异（建点 vs 覆盖）在此钉住，
+        以免日后被「统一一下」悄悄改掉。
+        """
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                csv = _bare_province_csv()
+
+                # 创建路径：取第一个非空的别名列 → 落回旧列 province
+                created = await track_service.create_from_csv(
+                    db, user, 'c.csv', csv, 'c', region='cn'
+                )
+                c0, c1, c2 = await _track_points(db, created.id)
+                assert (c0.province, c1.province) == ('旧省一', '旧省二')
+                assert c2.province == '新省'  # 两列都有值 → 新列优先
+
+                # 导入路径：列存在即覆盖（空值也算值）→ province 被清空
+                # （本轨迹只有 2 点，第三行 index=2 无对应点，不影响本断言）
+                track = await track_service.create_from_gpx(
+                    db, user, 'a.gpx', _gpx(), 'a', region='cn'
+                )
+                await _import(db, track.id, user.id, csv)
+                assert [p.province for p in await _track_points(db, track.id)] == [None, None]
 
         asyncio.run(case())
 

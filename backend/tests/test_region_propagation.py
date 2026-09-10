@@ -221,6 +221,10 @@ class TestServiceRegion:
                 # 刻意倒转入参顺序：a 是较早轨迹但不是首参 → 取 track_ids[0] 的实现会红
                 merged = await track_service.merge_tracks(db, user, [b.id, a.id], 'm')
                 assert merged.region == 'id'  # 取 start_time 较早者，而非入参首个
+                # 源点只有 *_id 列有值（中文/英文列全空）→ 合并产物的标志必须同导入路径的口径，
+                # 否则前端 `!has_area_info && !has_road_info` 会直接清空区域树（用户可见且静默）
+                assert merged.has_area_info is True
+                assert merged.has_road_info is True
                 points = await _track_points(db, merged.id)
                 assert [p.region for p in points] == ['id', 'id', 'cn', 'cn']  # 逐点复制，非统一填充
                 # 每个合并后的点必须带着它原来那个点的 4 个 *_id（merge 只复制这几列）。
