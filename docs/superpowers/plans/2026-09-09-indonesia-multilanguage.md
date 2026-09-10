@@ -3455,6 +3455,15 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 > ⚠️ 本计划断言二者等价，但**这个断言本身没有证据**。把两个函数合并成一个共享实现，前提就是这个等价性成立——若不成立，合并会**静默改变其中一个端点**的行为，而两个端点分别服务于「登录用户看自己轨迹」与「公开分享页」，受影响面不同且不会被任何既有测试发现。
 >
 > **请把逐段比对结果写进报告**（哪些段落相同、哪些不同、不同处是否可安全归一）。若发现**实质差异**（不只是那两处），**停下来报告，不要合并**。Step 4 的冒烟验证是对等价性的**实证复核**，不是替代品——它只在开发库有轨迹、且该轨迹同时能被两个入口读到时才有效。
+>
+> **已核（协调者独立逐段比对，2026-09-10；实现者请复核，而非重新从零发现）**：逐段比对了 `get_region_tree`（L1396-1637）与 `get_region_tree_no_auth`（L1639-1846），**差异只有两处**，均可安全归一：
+> 1. **权限检查**：auth L1418-1421（`track = await self.get_by_id(db, track_id, user_id)` → 早退空结构 `{'regions': [], 'stats': {...0}}`）；no_auth 无此段。→ **保留在薄壳里，不进共享方法**。
+> 2. **`point_count` 多加一次**：no_auth L1803-1804 比 auth L1595 多一行 `active_node['point_count'] += 1`。→ **无害**：`_aggregate_node_stats`（L1386）对每个节点**无条件赋值** `node['point_count'] = total_points`，而 `total_points` 从 `own_point_count` 起算（L1355），该行在 `for node in root_nodes:` 后处理时被覆盖。**共享方法只保留 `own_point_count += 1`**，与 auth 版一致。
+>
+> 其余逐段一致，无差异：SQL（同 `select` / `and_(is_valid == True)` / `order_by(time, created_at)`）、空点集早退（两函数都返回同一空结构）、`create_node` 结构（差异仅在中文字面注释）、省/市/区/路四级建节点与各层 `end_index` 收尾、`start_time`/`end_time` 更新、`await self.spatial_service.distance(...)` 距离累加、末尾 `_aggregate_node_stats` 与 `stats` 四键组装。
+> **若你比对出上表之外的差异，以你的发现为准并立刻停下来报告** —— 上表是协调者的比对结论，不是你复核的替代品。
+>
+> **一处需知晓的行为变化（不是等价性问题，是回退链的必然结果）**：`province` 现在可能取自 `province_id`/`province_en`，而市节点的判定 `city_key = city if city and city != province else None` 仍拿 city 与它比较。故当「省的中文为空、且其 id/en 值恰与 city 值相同」时会**不再生成市级节点**（雅加达这类省市同名的情形）。这与既有「city == province 则并入省级」的意图一致，且原实现下该点因 `province` 落到哨兵 `'未知区域'` 本就会另建市节点——属**可接受的行为变化，无需额外处理**；若实现者认为必须保序，请停下来报告。
 
 - [ ] **Step 2: 新增共享方法 `_build_region_tree(self, points)`（放 get_region_tree 之前）**
 
