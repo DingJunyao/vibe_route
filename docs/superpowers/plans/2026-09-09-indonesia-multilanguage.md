@@ -3178,7 +3178,8 @@ _IMPORT_FIELD_ALIASES = {
 
             只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
             所有别名列都不存在时，才保留数据库中的原值。
-            region 特殊：值为空时按『无 region 列』处理（不动该点 region）。
+            region 特殊：列存在但该行值为空 → 回退到轨迹级 region（track.region or 'cn'）；
+            列完全不存在 → 不动该点 region。
             """
             def has_key(field: str) -> bool:
                 """字段是否有任一别名列存在于文件中"""
@@ -3389,6 +3390,8 @@ NEW_HEADERS = ("index,time_date,time_time,time_microsecond,elapsed_time,"
 4. `test_invalid_region_raises` —— region 列写 `sg` → `pytest.raises(ValueError)`。
 5. `test_legacy_format_still_works` —— 旧格式表头（`index,province,city,area,road_num,road_name`，无后缀）→ 中文列照旧落库（回归守卫，防别名表把老文件读坏）。
 6. `test_export_import_roundtrip` —— 建一条带全套多语言字段的轨迹 → `export_points_to_csv` 取 content → `content.encode('utf-8')` 直接喂回 `import_points_from_file`（喂给**另一条**轨迹）→ 断言目标点与源点字段一致。**这条把 Task 8 的 30 列导出与 Task 9 的别名表锁在一起**，是「导出→导入闭环」的直接验证（否则该闭环只剩 Task 13 的冒烟覆盖）。
+7. `test_create_path_invalid_region_raises` —— **创建路径**的 `raise ValueError`（Step 3 的 `row_region` 校验）：`create_from_csv` 喂入 region 列写 `sg` 的文件 → `pytest.raises(ValueError)`。**这与用例 4 不是同一条分支**：用例 4 走 `import_points_from_file` → Step 1 的 region 分支；本条走 `create_from_csv` → Step 3 的 `row_region` 校验。删掉任一处校验，只有对应用例会红。
+8. `test_create_path_id_only_sets_has_area_flag` —— **创建路径**的检测段（Step 4 的 `has_area_info`/`has_road_info`）：`create_from_csv` 喂入**只有 `*_id` 列有值、中文/英文列全空**的行 → 断言返回轨迹的 `has_area_info`（与 `has_road_info`）为真。**用例 1/2 的 `has_area` 断言走的是导入路径的重算（Step 2）；创建路径的检测段此前无任何断言**，删掉检测段里的 `*_id` 判断不会有任何用例变红。implementer 首轮自加的 `test_id_only_columns_set_has_area_flag` 覆盖的是**导入路径**那一份，本条补**创建路径**那一份，两者不可互替。
 
 **变异自检（至少 2 项；每项给出「变异前 / 还原后 sha256 一致」或 `git diff` 为空的证据）**：
 - 把 `insert_values` 的 `"region": point_data.get("region") or region` 改回 `"region": region` → 用例 2 **必须红**
