@@ -4116,11 +4116,13 @@ interface RoadSignFetchOptions {
 
 function buildSignCacheKey(opts: RoadSignFetchOptions): string {
   const region = opts.region || 'cn'
-  // cn: 维持现状键（signType:code[:province]）；id: 键含地区与路名
-  // （路名决定 TOL/NASIONAL 判定，必须参与键，防同名编号不同路串样）
+  // id：后端对 [name, name_id] 两段文本联合匹配关键词判 TOL/NASIONAL（任一命中即 TOL），
+  // 故二者都必须进键，防「同编号不同路名」的两个节点串用同一张盾牌。
+  // 用 JSON 数组而非 join(':')：成分含冒号或为空时不会跨字段错位，天然单射。
   if (region !== 'cn') {
-    return [region, opts.signType, opts.code, opts.name || ''].filter(Boolean).join(':')
+    return JSON.stringify([region, opts.signType, opts.code, opts.name ?? '', opts.nameId ?? ''])
   }
+  // cn：维持现状键（signType:code[:province]）
   return opts.province ? `${opts.signType}:${opts.code}:${opts.province}` : `${opts.signType}:${opts.code}`
 }
 
@@ -4450,6 +4452,25 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 **Q2（哨兵字符串）裁定：不改。** `node.name === '（无名）'` 与 `Object.keys(node.names||{}).length === 0` 在本函数语境下**等价**，审查者给了双向证明：哨兵只由后端一处写入（`track_service.py:1601-1605`，仅当 `point.road_name or road_name_id or road_name_en` **全假**时），而 `collect_names(point,'road')` 只收三语中的真值、按值去重 → 空字典 ⟺ 三者全假；正反向均成立，连副作用也一致（哨兵时 `nameId` 必缺失、`roadName` 落 `''`、不传 `name` → 后端判 NASIONAL）。
 > 唯一理论反例是「地理编码返回的路名恰为字面量 `'（无名）'`」，实测**全仓无第二个生产者**（`grep -rn "（无名）" backend/app` 仅注释 L1600 与哨兵赋值 L1604）。**裁定不改**：行为已证明等价，改它属未经请求的重构（Ponytail：不做）；且 `node.names` 对旧数据可能是 `undefined`，现有写法已用 `|| {}` 兜住。**此分析记录在案，供将来若要重构时直接取用。**
 
+**Task 12 质量审（`Ready to merge: Yes`，0 Critical / 0 Important）**
+
+审查者独立复跑的四项验证（非采信转述）：① `diff` 两文件 160 行**字节级全等**；② `npm run build` ✓ built in 56.34s、`git status` 干净；③ **`vue-tsc` 虽崩，但 `node node_modules/typescript/bin/tsc` 可跑** —— 把三函数表达式逐字拷入临时 `.ts`（对真实 `vue@3.5.26` 与真实类型），**0 报错**，跑完删除；④ 缓存键使用点全集 `TD:1808/1850/1917`、`ST:790/832/899`，无第四处手写。
+另确认：4 棵 `el-tree` **每一棵**都挂了 `:key="treeForceUpdateKey"`，不存在「渲染 `renderNodeLabel` 却没挂 key」的树；`saveEdit` 对照原文逐条比对**无丢失行为**，唯一语义变更是规格指定的存量 bug 修复。
+
+**Minor 处置（6 条）**
+
+- **M1（采纳，必修）注释与后端实现不符**：现文称「TOL/NASIONAL 判级看 `name_id` 命中关键词、`name` 仅作兜底」——**错**。`svg_gen.py:996-1002` 调 `parse_indonesia_road_num(code, [name, name_id], …)`，`indonesia.py:171-174` 把两段文本 `' '.join(...)` 后**一起**匹配关键词，任一命中即 TOL；默认关键词 `['收费','Tol']` 里的 `收费` 正是给中文 `name` 用的。**失败场景**：后来者据此推断「只改 `nameId` 就够」或据「仅作兜底」去精简缓存键 → 把刚修好的串样问题改回去。**改为**「联合匹配，任一命中即 TOL → 二者都必须进键」。
+- **M2（采纳）键非单射**：`.filter(Boolean)` 抹掉位置信息 → `(name='', nameId='a')` 与 `(name='a', nameId='')` 同键。可达性审查者已逐支算过：前者从 `renderNodeLabel` **不可达**（`nameId` 非空 ⟹ `name` 非空）；剩余可达面仅「成分含 `:`」与「`road_number` 含空元素」两类，均需跨字段对齐才碰撞，真实数据构造不出。**改用 `JSON.stringify([...])`**：天然单射、同为纯函数，且免去今后再论证 `filter(Boolean)` 边界。与 M1 同行同函数，一次改完。
+- **M3（记录，不改）id 分支不发 `province`/`province_id`**：`indonesia.py:190-194` 的省码来源有两条——编号内嵌前缀（`'35-024'` ✓）与 `province_texts` 查找（**前端永不提供**）。故 `'024'` 这类三位编号的盾牌 `province_code=None`（`svg_gen.py:894` 对 None 有兜底，只少色带小字，不崩）。与 Task 11 的 YAGNI 记录（L4026）一致。**结论钉死：缺失只少渲染省份色带、不会渲染错等级 → Task 13 冒烟时不必怀疑等级判定。**
+- **M4（记录，明确不「统一」）计数 `filter` vs 取值不过滤**：`TD:1885-1887`/`ST:867-869` 计数用 `filter(k => nodeNames[k])`、取值用未过滤的 `Object.values`。目前不会产生 `"A / B / "` 尾巴（后端 `collect_names`「非空且按值去重才入 dict」，`track_service.py:1486-1490`，空串不可能出现，该 filter 是恒真的纯防御）。**不要为「一致」去掉它**——将来后端若放行空值，计数会先失效。附带：同行注释「≥2 种语言」严格说是「≥2 个**不同文本**」（按值去重使 zh 与 id 同名的节点不出 tooltip），属后端有意决策。
+- **M5（记录，不加代码）换 CRS 后 PATCH 失败留部分状态**：表现为「CRS 已改完、地图已按新 CRS 刷新、toast 已报成功，但对话框不关、名称/地区未保存」。**可自愈**：重试时 `needsCrsChange` 已为 false，只发 PATCH 即成功；无数据丢失。触发条件近乎不可达（`region` 只可能来自 radio 或 `track.value.region || 'cn'`，后端列有 default + pattern）。按 Ponytail 不加防御代码。
+- **M6（上报，写入 Task 14）本仓 TS 基线不干净**：审查者的 tsc 跑出 4 条，其中 3 条为真错——`src/api/request.ts:31,46` 的 `config.skipProgress`、`src/api/roadSign.ts:35` 的 `skipAuth`；`src/` 下**无任何 `declare module 'axios'` 增补**（`src/*.d.ts` 仅 3 个自动生成文件）。**含义**：修好 `vue-tsc` 的那天仓库**不会立刻全绿**，「无新增类型错误」只能相对这个脏基线判定。
+
+**156 行重复是否抽 composable —— 裁定：本计划外单开 ticket，现在不动。**
+审查者给出的理由（协调者认可）：**收益只覆盖 2/7 份副本**，另 5 份在 `src/components/map/*.vue` 且**形状不同**（非响应式 `new Map`、`loadingSigns` 是普通 `Set`、无 `treeForceUpdateKey`、输出 HTML 字符串、键字面量另在 3 处手写）——一次抽干净需先统一形状差异，是另一个量级；而一旦动手，composable 的 API（响应式 map vs 注入式 map）**极可能立刻重写**。先抽 2 份 = 付一次风险、留 5 份分叉、还可能马上返工。时机上本仓 `build:check` 坏死、前端零测试，抽取是「零行为变化但回归面为正」的重构，应等 `vue-tsc` 修好（或与地图 5 份合并）再付这一次风险。**廉价折中记录在案**（若将来要当下止血）：只把纯函数 `buildSignCacheKey` 搬到既有的 `src/utils/roadSignParser.ts`，有状态的三个函数保持现状——砍掉「靠人工同步两份拷贝」的风险点，不触碰响应式/渲染语义。
+
+**审查者明确未能验证的部分（诚实边界）**：① **SFC 层面未做类型检查**——`vue-tsc` 崩，临时 tsc 只覆盖拷入的表达式，**不覆盖** `.vue` 特有部分（模板类型、两处 `v-model="…region"`、自动导入、`<component :is>` slot 类型）；② 无浏览器冒烟（属 Task 13）；③ 数据库迁移未执行（属 Task 13）；④ `npm run build` 是语法/打包级验收，**不构成类型正确的证据**。
+
 ---
 
 ### Task 13: 数据库迁移（需授权）+ 后端全量测试 + 端到端冒烟
@@ -4458,33 +4479,51 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - 无新增（验证与冒烟任务；需要开发者配合：① 数据库迁移授权 ② 浏览器人工冒烟确认）
 - 冒烟样例文件（临时，不入库）：`backend/data/smoke_indonesia.csv`
 
-> ⚠️ **授权点 1（数据库）**：Task 2 的迁移文件与 SQL 脚本已就位但未执行。CLAUDE.md 规定开发期间不自行修改数据库——本任务第 1 步需向开发者申请执行迁移（或请开发者手动执行 alembic/SQL 后继续）。**授权前**：Task 1-12 与 pytest（纯函数）不触库可安全执行；Task 10 Step 4 的 DB 冒烟若缺列失败属预期，迁移完成后回跑即可。
+> ✅ **授权点 1（数据库）——已获授权（2026-09-10）**：开发者授权执行数据库迁移与冒烟写库。
+>
+> **实际状态与计划预期的偏差（执行前取证）**：开发库**早已**在 09-10 00:00:53（`c15cc13` 提交后 1 分钟）被 `alembic upgrade head` 到 `016_add_multilanguage_region`，而 Task 6 的 `eab2df2`（10:35）**又给这个已执行的迁移追加了一条 DDL**（`road_sign_cache.province` 10→100）。alembic 以版本号判重，重跑是 no-op，故**该 DDL 从未落到开发库**——实测 `sqlite_master` 里仍是 `province VARCHAR(10)`，而模型侧已是 `String(100)`。
+>
+> 实测影响面：SQLite 不校验 VARCHAR 长度（临时库插 29 字符实测成功），**开发库功能上无影响**；MySQL/PG 的全新部署一次性执行完整 016 也不受影响。唯一实际代价是 schema 与模型不一致，会让将来的 `alembic autogenerate` 产生噪音。故补 **017** 迁移显式对齐（Step 1）。
+>
+> 既有数据零破坏（实测）：98 条轨迹 / 338101 个点的 `region` 全为 `cn`，4 个 `*_id` 列全 NULL，`road_sign_cache.region` 88 行全 `cn`。
 >
 > ⚠️ **授权点 2（浏览器）**：前端手动冒烟在已打开的 localhost:5173 页面用 Edge devtools MCP 执行，需开发者配合在 UI 上操作/确认（上传对话框、区域树视觉、tooltip）。
 
-- [ ] **Step 1: 申请授权并执行数据库迁移**
+- [ ] **Step 1: 新建 017 迁移（对齐 province 列宽）并执行 alembic upgrade head**
 
-向开发者说明：`016_add_multilanguage_region` 迁移新增 Track/TrackPoint 各 1 列 region + TrackPoint 4 个 `*_id` 列 + RoadSignCache.region，请求执行：
+**1a. 新建 `017_widen_road_sign_province.py`**（`down_revision = '016_add_multilanguage_region'`）：
+唯一变更 `road_sign_cache.province` `String(10)` → `String(100)`，升级与降级都用
+`op.batch_alter_table`（SQLite 不支持直接改列类型，batch 模式重建表；MySQL/PG 退化为普通 ALTER）。
+016 里的同款 `batch_alter_table` 块可直接作为模板。
+
+**1b. 同步三份 SQL 脚本** `017_widen_road_sign_province.sql.{sqlite,mysql,postgresql}`：
+- sqlite：`-- SQLite 不校验 VARCHAR 长度，本迁移为与模型对齐的声明性变更` + 验证查询
+- mysql：`ALTER TABLE road_sign_cache MODIFY COLUMN province VARCHAR(100) NULL;`
+- postgresql：`ALTER TABLE road_sign_cache ALTER COLUMN province TYPE VARCHAR(100);`
+
+> 为何要独立迁移而非改 016：016 已在开发库 stamped，改它对既有环境是 no-op（正是这次的坑）。
+> 新迁移号才能让「已应用 016 的环境」真正拿到这条 DDL。幂等：全新环境 016 已放宽，017 再放宽是 no-op。
+
+**1c. 执行并验证**
 
 Run: `cd backend && ../.venv/Scripts/python -m alembic upgrade head`
-Expected: 迁移成功（输出 upgrade 行）。验证列存在：
+Expected: 输出 `Running upgrade 016_add_multilanguage_region -> 017_widen_road_sign_province`。
 
 Run:
 ```bash
 cd backend && ../.venv/Scripts/python - <<'EOF'
-import sqlite3, os
-from app.core.config import settings  # 或直接按 backend/.env 的 DATABASE_URL
-db = settings.DATABASE_URL
-print("db:", db)
-# SQLite 场景: 直接查询
-path = db.replace('sqlite:///', '')
-con = sqlite3.connect(path)
-cols = [r[1] for r in con.execute("PRAGMA table_info(track_points)")]
-print("region in track_points:", 'region' in cols, "| *_id cols:", [c for c in cols if c.endswith('_id')])
+import sqlite3
+con = sqlite3.connect('file:data/vibe_route.db?mode=ro', uri=True)
+print('version:', con.execute('SELECT version_num FROM alembic_version').fetchone()[0])
+sql = con.execute("SELECT sql FROM sqlite_master WHERE name='road_sign_cache'").fetchone()[0]
+print('province 列声明:', [l.strip() for l in sql.splitlines() if 'province' in l])
+print('region 列存在:', 'region' in [r[1] for r in con.execute('PRAGMA table_info(road_sign_cache)')])
 EOF
 ```
-Expected: region in track_points: True（_id 列随 Task 2 的完整列表核对）。
-若开发者选择手动执行，按其方式执行后跳过本步命令。
+Expected: `version: 017_widen_road_sign_province`、`province 列声明: ['province VARCHAR(100),']`、`region 列存在: True`。
+
+**1d. 回归**：`cd backend && ../.venv/Scripts/python -m pytest tests/ -q` → 仍 84 passed
+（017 只改列宽，不应影响任何用例）。
 
 - [ ] **Step 2: 后端全量 pytest**
 
