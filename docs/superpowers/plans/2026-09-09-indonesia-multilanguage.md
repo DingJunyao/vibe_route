@@ -14,7 +14,7 @@
 - 直接在 master 分支执行，每个任务一次 commit，git 署名追加 `Co-Authored-By: Claude Code <noreply@anthropic.com>`。
 - 后端测试运行：`cd backend && ../.venv/Scripts/python -m pytest tests/xxx.py -v`（pytest 9.1.1 已装于根 .venv）。仓库无 pytest 配置——Task 1 建立。
 - 前端无测试 runner，验证用 `npm run build:check`（vue-tsc && vite build）。
-- 后端文件较大（track_service.py 3950 行），修改前先 Read 目标区段核对行号（本计划行号为 2026-09-09 快照，可能漂移）。
+- 后端文件较大（track_service.py 已 3960+ 行），修改前先 Read 目标区段核对。**本计划中所有 `track_service.py` 行号都是历史快照，且会随每个任务持续漂移——一律以语义锚点（函数名 / 字段名 / 注释文本）grep 定位，行号只用于理解结构，不要按数字跳转。**
 - 所有错误消息/注释/日志沿用仓库中文风格。
 - 冒烟阶段需用户配合的事项（Clearview 字体许可确认）见 Task 3 开头，由执行协调者在 Task 3 前向用户确认。
 
@@ -2309,7 +2309,371 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 ---
 
+### Task 6 fix loop（质量审查 2 Important + 1 Minor，2026-09-10）
+
+质量审查结论 **✅ 通过**（无 Critical），另提 2 项 Important、5 项 Minor。本 fix loop 只处理其中 3 项（#1 参数校验、#2 补测、#4 回填判定）；其余在文末「不改判定」记录，**不要顺手改**。
+
+**审查者实测的背景（Why）**：
+- `region` Query 参数无类型约束 → 传 `region='ID'`（大写）时服务层按非法值回落 `'cn'` 仅记 warning → 一条 `region='id'` 的轨迹**所有点**被写 `region='cn'`、`*_id` 全部清空、`track.region` 被持久化为 `'cn'`。而 `track.region` 是点级权威字段，误改后 `incremental=True` **修不回来**（增量条件只看 `province` 是否为空，id/cn 填充后都非空），只能整条重填。
+- 本 Task 的核心分派（语言集、`*_id` 映射、S 前缀门控）在 `tests/` 中**零覆盖**——现有 43 用例全部来自 Task 1/4/5。其中「cn 高速编号丢省份前缀」是**既有功能回归**，最贵。
+
+**Files:**
+- Modify: `backend/app/api/tracks.py`（L5 导入 + L496 参数类型）
+- Modify: `backend/app/services/track_service.py`（L658 回填判定条件）
+- Create: `backend/tests/test_nominatim_region.py`
+
+- [ ] **Step 1: 写测试 `backend/tests/test_nominatim_region.py`**
+
+说明：本组测试是对**已完成实现**的回归守卫（不是 TDD 新功能），写完即应全绿；若某条红，说明实现有缺陷，**停下来报告**，不要改测试去迁就实现。
+
+```python
+# -*- coding: utf-8 -*-
+"""Nominatim region 分派回归守卫：语言集、*_id 字段映射、S 前缀门控
+
+Task 6 质量审查 Important #2：本 Task 的核心分派逻辑此前零覆盖。
+无网络、无数据库：替换 httpx.AsyncClient 为按 accept-language 回放固定 geocodejson 的假 client。
+"""
+import asyncio
+
+import pytest
+
+from app.gpxutil_wrapper import geocoding as geo_module
+from app.gpxutil_wrapper.geocoding import NominatimGeocoding
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+def _payload(osm_type='way', name=None, admin=None, place_id=1):
+    """构造单 feature 的 geocodejson 响应（字段层级与 Nominatim 实际响应一致）"""
+    geocoding = {'osm_type': osm_type, 'admin': admin or {}, 'place_id': place_id}
+    if name is not None:
+        geocoding['name'] = name
+    return {'features': [{'properties': {'geocoding': geocoding}}]}
+
+
+@pytest.fixture
+def fake_http(monkeypatch):
+    """替换 httpx.AsyncClient：记录每次请求参数，按 accept-language 回放固定响应"""
+    state = {'calls': [], 'payloads': {}}
+
+    class _FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, params=None):
+            params = dict(params or {})
+            state['calls'].append((url, params))
+            if url.endswith('/details'):
+                return _FakeResponse(state['payloads']['details'])
+            return _FakeResponse(state['payloads'][params['accept-language']])
+
+    monkeypatch.setattr(geo_module.httpx, 'AsyncClient', _FakeAsyncClient)
+    return state
+
+
+def _svc():
+    return NominatimGeocoding({'url': 'http://fake-nominatim'})
+
+
+def _reverse_langs(state):
+    """按调用顺序取出 reverse 请求的 accept-language（排除 /details）"""
+    return [p['accept-language'] for u, p in state['calls'] if not u.endswith('/details')]
+
+
+def _details_count(state):
+    return sum(1 for u, _ in state['calls'] if u.endswith('/details'))
+
+
+class TestRegionDispatch:
+    """region 分派：语言集、*_id 映射、S 前缀门控"""
+
+    def test_id_three_languages_and_id_fields(self, fake_http):
+        """region='id' → 三语请求；*_id 取印尼语响应；S 编号不套中国省份前缀"""
+        fake_http['payloads'].update({
+            'zh-CN': _payload(name='Jalan Dago', admin={
+                'level4': 'Jawa Barat', 'level5': 'Kota Bandung', 'level6': 'Coblong'}),
+            'id': _payload(name='Jalan Dago', admin={
+                'level4': 'Provinsi Jawa Barat', 'level5': 'Kota Bandung', 'level6': 'Coblong'}),
+            'en': _payload(name='Dago Street', admin={
+                'level4': 'West Java', 'level5': 'Bandung', 'level6': 'Coblong'}),
+            'details': {'names': {'ref': 'S123,024'}},
+        })
+        info = asyncio.run(_svc().get_point_info(-6.9, 107.6, region='id'))
+
+        assert _reverse_langs(fake_http) == ['zh-CN', 'id', 'en']
+        assert _details_count(fake_http) == 1
+        # 中文列取 zh-CN 响应、英文列取 en、印尼语列取 id
+        assert info['province'] == 'Jawa Barat'
+        assert info['province_en'] == 'West Java'
+        assert info['province_id'] == 'Provinsi Jawa Barat'
+        assert info['city_id'] == 'Kota Bandung'
+        assert info['area_id'] == 'Coblong'
+        assert info['road_name'] == 'Jalan Dago'
+        assert info['road_name_en'] == 'Dago Street'
+        assert info['road_name_id'] == 'Jalan Dago'
+        # 印尼 raw ref 原样输出，不加省份前缀
+        assert info['road_num'] == 'S123,024'
+
+    def test_cn_two_languages_and_province_prefix(self, fake_http):
+        """两参调用（既有调用点形态）→ 双语；S 编号加中国省份简称前缀"""
+        fake_http['payloads'].update({
+            'zh-CN': _payload(name='沪宁高速', admin={'level4': '江苏省'}),
+            'en': _payload(name='Hu-Ning Expressway', admin={'level4': 'Jiangsu'}),
+            'details': {'names': {'ref': 'S123'}},
+        })
+        # 注意：不传 region，守住 live_recording_service 等既有调用点
+        info = asyncio.run(_svc().get_point_info(31.3, 120.6))
+
+        assert _reverse_langs(fake_http) == ['zh-CN', 'en']
+        assert info['province'] == '江苏省'
+        assert info['road_num'] == '苏S123'
+        assert info['province_id'] == ''  # cn 不写印尼语字段
+        assert info['city_id'] == ''
+        assert info['road_name_id'] == ''
+
+    def test_non_way_skips_road_fields(self, fake_http):
+        """osm_type 非 way → 不取路名、不发 /details（既有分支）"""
+        fake_http['payloads'].update({
+            'zh-CN': _payload(osm_type='node', admin={'level4': '江苏省'}),
+            'en': _payload(osm_type='node', admin={'level4': 'Jiangsu'}),
+        })
+        info = asyncio.run(_svc().get_point_info(31.3, 120.6))
+
+        assert info['province'] == '江苏省'
+        assert info['road_name'] == ''
+        assert info['road_num'] == ''
+        assert _details_count(fake_http) == 0
+```
+
+- [ ] **Step 2: 跑测试**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_nominatim_region.py -v`
+Expected: **3 passed**。若任一红 → 停止并报告（实现缺陷，不要改测试迁就）。
+
+- [ ] **Step 3: `tracks.py` 收紧 `region` 参数类型（Important #1）**
+
+L5 导入改为：
+
+```python
+from typing import Optional, Literal
+```
+
+L496 改为：
+
+```python
+    region: Optional[Literal['cn', 'id']] = Query(None, description="填充的地区 (cn/id)；缺省用轨迹自身 region"),
+```
+
+（FastAPI 会依此生成 enum 校验，非法值直接 422，不再进入服务层的「回落 'cn'」路径。
+服务层 `fill_geocoding_info` 内的非法值告警回落**保留不动**——它是内部调用（如 `region=None`）的防御，现在不会再被外部误触发。）
+
+- [ ] **Step 4: `track_service.py` 回填判定加 ASCII 兜底（Minor #4）**
+
+实测 L658，将：
+
+```python
+                                if (not zh_province or zh_province == id_province) and id_province:
+```
+
+改为：
+
+```python
+                                if (not zh_province or zh_province == id_province
+                                        or zh_province.isascii()) and id_province:
+```
+
+理由：zh-CN 请求在无中译时可能返回英文/拼音形态（如 `West Java` 而 id 侧为 `Jawa Barat`），
+此时旧条件不成立 → 中文列留下非中文值。加 `isascii()` 后仍由 `if zh:` 守卫兜底
+（查表失败不会清空已有值）。
+
+- [ ] **Step 5: 全量测试 + 参数校验的 schema 断言**
+
+```bash
+cd backend
+../.venv/Scripts/python -m pytest tests/ -q
+```
+Expected: **46 passed**（原 43 + 新增 3）
+
+```bash
+../.venv/Scripts/python -c "from app.main import app; p=[x for x in app.openapi()['paths']['/api/tracks/{track_id}/fill-geocoding']['post']['parameters'] if x['name']=='region'][0]; print(p['schema']); assert ['cn','id'] in [b.get('enum',[]) for b in p['schema'].get('anyOf',[p['schema']])]"
+```
+Expected: 打印 `{'anyOf': [{'enum': ['cn', 'id'], 'type': 'string'}, {'type': 'null'}], 'title': 'Region', ...}` 且断言通过
+（若路径前缀不是 `/api`，以实际 OpenAPI 为准）
+
+> **⚠️ 2026-09-10 实测修正**：`Optional[Literal['cn','id']]` 在 Pydantic v2 下被包进 `anyOf`，
+> 顶层**没有** `enum` 键——写 `p['schema']['enum']` 会 `KeyError`。上面的断言已按实际形状书写
+> （`anyOf` 缺失时回落顶层 `enum` 的兼容分支）。这是**计划文本缺陷**，与代码无关：
+> `Literal` 写法本身正确，422 校验由函数签名标注保证，**不要**为迁就 OpenAPI 的呈现形状去改代码。
+
+- [ ] **Step 6: Commit（amend 到 Task 6 的提交）**
+
+```bash
+git log --oneline -1        # 必须输出 a38ea6f feat(geocoding): ...（Task 6 的提交）
+```
+**若 HEAD 不是 `a38ea6f`（例如控制方在此期间提交了文档），不要 amend，改用普通 `git commit`**——这是 Task 5 那次 amend 事故的防范。
+
+```bash
+git add backend/app/api/tracks.py backend/app/services/track_service.py backend/tests/test_nominatim_region.py
+git commit --amend --no-edit
+```
+
+**不改判定（记录，勿动）**
+
+| 审查项 | 判定 | 理由 |
+|---|---|---|
+| Minor #3 三语循环内任一请求异常 → 整点数据全丢 | 不改 | **非本 Task 引入**（旧实现 en 失败同样全丢，审查者实测一致）。改它会改变 cn 失败路径行为，破坏「cn 路径零回归」的验收基线；当前「整点失败 → 不写 → 下次重试」不会留下半截数据，是安全的 |
+| Minor #5 多出 `town_id` 键 | 不改 | 实测不入库（`track_service` 只取 4 个键）、`TrackPoint` 无 `town`/`town_id` 列、无撞车；与旧实现同样不写 town 系列 |
+| Minor #6 三次 reverse 串行 | 不改 | 长轨迹主导开销是每点固定 `sleep(0.2)`，请求数非瓶颈；如要提速应先动 sleep 与并发 |
+| Minor #7 告警措辞对 Google 不准确 | 不改 | 本 Task 计划即限定 Nominatim；Google provider 的印尼语支持属后续任务（`GoogleGeocoding._request` 已带 `language` 参数，改动很小） |
+| 范围外：`live_recording_service` 实时填充用两参调用 | 记录 | 实时记录过程的即时填充恒 cn 行为，且不写 `point.region`/`*_id`。**可接受的绕行**：记录结束后用 PATCH `/tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省 → 回读轨迹 region）即可正确填充。**Task 14 要点须记录此项**（实时记录界面的地区选择是后续工作，Task 7/12 均不含 `live_recording_service.py`） |
+
+---
+
+### Task 6 fix loop 2（复审发现：`isascii()` 兜底零覆盖，2026-09-10）
+
+复审结论：fix loop 三处改动**均可靠**（变异 A/B/C/D/F 精准打红，`Literal` 经有效认证实测确为 422、`isascii()` 五个边界场景行为正确、git 结构为 3 文件标准 amend 形态）。唯一 Important：**变异 E** —— 删掉 `track_service.py` 的 `or zh_province.isascii()` 后**全量 46 passed 全绿**，本次唯一裸奔的改动。
+
+**不采用**复审者给的「伪 session 驱动整个 `fill_geocoding_info`」方案（桩 `async_session_maker` + `_get_geocoding_service`，约 40-60 行）：它强耦合内部结构（两次 `execute` 的返回顺序、`_filling_progress` 形态、`_get_geocoding_service` 签名），一次重构就碎，维护成本高于它守护的 1 行逻辑。**改为抽出纯函数 + 直接断言**：5 行测试换同样的保护，且不随内部结构漂移。
+
+**Files:**
+- Modify: `backend/app/services/track_service.py`（新增模块级纯函数 + 改回填调用点）
+- Modify: `backend/tests/test_nominatim_region.py`（顶部 import + 追加一个测试类）
+
+- [ ] **Step 1: 追加失败测试**
+
+`tests/test_nominatim_region.py` 顶部 import 区加：
+
+```python
+from app.services.track_service import _should_backfill_province_zh
+```
+
+文件末尾追加：
+
+```python
+class TestBackfillDecision:
+    """印尼中文省名回填判定（复审变异 E：此前 isascii 兜底零覆盖）"""
+
+    def test_should_backfill(self):
+        # 需要回填：zh 为空 / zh 与 id 相同 / zh 是非中文（ASCII，如 Nominatim 返回英文名）
+        assert _should_backfill_province_zh('', 'Jawa Barat')
+        assert _should_backfill_province_zh('Jawa Barat', 'Jawa Barat')
+        assert _should_backfill_province_zh('West Java', 'Jawa Barat')
+
+    def test_should_not_backfill(self):
+        # 已是中文 → 不覆盖
+        assert not _should_backfill_province_zh('江苏省', 'Jiangsu')
+        assert not _should_backfill_province_zh('西爪哇省', 'Jawa Barat')
+        # 无印尼语省名可取 → 不触发
+        assert not _should_backfill_province_zh('', '')
+        assert not _should_backfill_province_zh('West Java', '')
+```
+
+- [ ] **Step 2: 跑测试确认失败**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_nominatim_region.py -q`
+Expected: 收集期即 **ImportError: cannot import name '_should_backfill_province_zh'**（整个文件 0 用例可跑，属预期的红灯）
+
+- [ ] **Step 3: 抽出纯函数并改调用点**
+
+在 `track_service.py` 的**模块级区域**（import 之后、`class TrackService` 之前，列 0 缩进）加：
+
+> ⚠️ **不要放到 `MERGE_GAP_THRESHOLD_SECONDS` 那里**——它是**类属性**、在 `class TrackService` **内部**（4 空格缩进），放进去会变成类方法而非模块级函数，Step 1 的 `from app.services.track_service import _should_backfill_province_zh` 会直接失败。（Task 6 fix loop 2 执行时实测发现此描述有误，此处已修正。）
+
+```python
+def _should_backfill_province_zh(zh_province: str, id_province: str) -> bool:
+    """印尼省级中文名是否需要回填
+
+    Nominatim 对无中译的省份返回本地名或英文名（zh 请求可能拿到 'Jawa Barat'
+    或 'West Java'），此时用 38 省译名表按印尼语名回填中文。
+    """
+    if not id_province:
+        return False
+    return not zh_province or zh_province == id_province or zh_province.isascii()
+```
+
+回填调用点（**实测 L655-662**，语义锚：`if region == 'id':` 内的 `zh_province = info.get('province', '')` 起）改为：
+
+```python
+                            if region == 'id':
+                                zh_province = info.get('province', '')
+                                id_province = info.get('province_id', '')
+                                if _should_backfill_province_zh(zh_province, id_province):
+                                    from app.gpxutil_wrapper.indonesia import get_indonesia_province_zh
+                                    zh = get_indonesia_province_zh(id_province)
+                                    if zh:
+                                        point.province = zh
+```
+
+**行为必须与现状逐字等价**——`if zh:` 守卫**必须保留**（查表失败时不清空已有中文，复审已实测该场景）。此步是纯粹的结构提取，**不得**顺手改判定条件或加新分支。
+
+- [ ] **Step 4: 跑测试**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/ -q`
+Expected: **48 passed**（原 46 + 新增 2）
+
+- [ ] **Step 5: 变异自检（必做，报告里附证据）**
+
+1. 临时把 `return not zh_province or zh_province == id_province or zh_province.isascii()`
+   改成 `return not zh_province or zh_province == id_province`（即去掉本次兜底）
+2. 跑 `../.venv/Scripts/python -m pytest tests/test_nominatim_region.py -q`
+   → **必须红**（`test_should_backfill` 的 `'West Java'` 断言失败）
+3. 还原该行，再跑一次确认全绿，并用 `git diff --stat` 证明工作区只剩计划列出的两个文件的预期改动
+
+- [ ] **Step 6: Commit（amend 到 `7588cef`）**
+
+```bash
+git log --oneline -1        # 必须输出 7588cef feat(geocoding): ...（Task 6 + fix loop 的提交）
+```
+**若 HEAD 不是 `7588cef`（例如控制方提交了文档），不要 amend，改用普通 `git commit`。**
+
+```bash
+git add backend/app/services/track_service.py backend/tests/test_nominatim_region.py
+git commit --amend --no-edit
+```
+
+**只 add 这两个文件**——工作区仍有控制方未提交的计划文档改动，**不要** `git add -A` / `git add docs/`。
+
+**本轮不改（复审 Minor，仅记录）**
+
+| 复审项 | 判定 | 理由 |
+|---|---|---|
+| C2：只删 `region == 'cn' and` 半边门控 → 未红 | 不改 | 要触发的现实条件极苛刻（id 侧 `province_en` 恰为中国省英文名**且** ref 形如 `S<纯数字>`），印尼数据不会同时满足。加固需把 fixture 的 `en.level4` 改成 `'Jiangsu'`，牺牲 fixture 真实性换一个不可达分支的覆盖——YAGNI |
+| 假 client 的 `KeyError` 被宽 `except` 吞 → 失败信息不指向真因 | 不改 | 纯可读性；A 变异已证实仍会红，拦截能力不受影响 |
+| 既有 `road_name_en == road_name` 置空逻辑无覆盖 | 不改 | 该行为在 Task 6 diff 中是上下文行而非新增，属既有代码，超出本 fix loop 范围 |
+
+---
+
 ### Task 7: 上传/创建/修改链路的 region 贯通（Form、create_* 签名、5 处批量插入、详情响应）
+
+> **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
+> 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
+> 本节原有的行号基于 Task 6 之前；Task 6 在该文件 L503 之后插入了 region 解析与分派代码，**L503 之后的所有锚点整体后移约 41 行**。以下为实测行号，**请以此表 + 语义锚点（函数名/字段名/注释文本）定位，正文中的旧行号仅作参考**：
+>
+> | 锚点 | 实测行号 |
+> |---|---|
+> | `create_from_gpx` 定义 / `Track()` / `insert_values` / 尾部 fill | L271 / L410 / L432 / L479 |
+> | `create_from_csv` 定义 / `Track()` / `insert_values` / 尾部 fill | L2593 / L2812 / L2834 / L2881 |
+> | `_create_from_csv_project_format` 定义 / `Track()` / `insert_values` | L2888 / L3102 / L3124 |
+> | `create_from_kml` 定义 / `Track()` / `insert_values` / 尾部 fill | L3179 / L3383 / L3405 / L3452 |
+> | `create_from_xlsx` 定义 | L3459 |
+> | `merge_tracks` 定义 / `Track()` / `insert_values` | L3892 / L3921 / L3944 |
+> | unified 列表 `'original_crs': track.original_crs,` / 虚拟实时项 `'original_crs': 'wgs84',` | L967 / L1005 |
+> | `fill_geocoding_info` 定义 | L503 |
+> | `_create_from_csv_project_format(` 调用点（在 `create_from_csv` / `create_from_xlsx` 内，**已实测**） | L2661 / L3529 |
+>
+> `tracks.py` 的行号未受 Task 6 影响（已实测吻合：`upload_track` L39、四个创建调用 L110/L131/L144/L175、第二个 KML 调用 L196）。
 
 **Files:**
 - Modify: `backend/app/api/tracks.py`（upload Form + 详情手工 dict + 点接口 dict + 各 create 调用传 region）
@@ -2347,13 +2711,13 @@ region 语义：`track.region` 是新建点默认；行级 CSV region（Task 9�
 
 `create_from_xlsx` 签名同样加 `region: str = 'cn'`。
 
-各方法内 Track() 构造（gpx L410 / csv L2771 / kml L3342 / xlsx 走 project 格式 L3061）加一行 `region=region,`。project 格式（`_create_from_csv_project_format`）签名加 `region: str = 'cn'` 并在 `create_from_xlsx` 与 `create_from_csv` 的 project 分支调用处透传：
-- `create_from_csv` L2618-2622 调用改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`；签名按位置序加 region 参数
-- `create_from_xlsx` L3488-3490 调用改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`
+各方法内 Track() 构造（gpx **L410** / csv **L2812** / kml **L3383** / xlsx 走 project 格式 **L3102**）加一行 `region=region,`。project 格式（`_create_from_csv_project_format`）签名加 `region: str = 'cn'` 并在 `create_from_xlsx` 与 `create_from_csv` 的 project 分支调用处透传：
+- `create_from_csv` 的 project 分支调用（原文 L2618-2622；**按 +41 换算约 L2659-2663，未逐一实测——以 `_create_from_csv_project_format(` 的调用点为语义锚 grep 定位**）改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`；签名按位置序加 region 参数
+- `create_from_xlsx` 的调用（原文 L3488-3490；**同样按 +41 换算约 L3529-3531**）改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`
 
 - [ ] **Step 3: gpx/csv/kml 尾部 fill_geocoding 调用加 region**
 
-gpx 尾部（L479）、csv 尾部（L2840）、kml 尾部（L3411）三处：
+gpx 尾部（**L479**，位于 Task 6 插入点之前故未偏移）、csv 尾部（**L2881**）、kml 尾部（**L3452**）三处：
 
 ```python
             task = asyncio.create_task(
@@ -2365,46 +2729,31 @@ gpx 尾部（L479）、csv 尾部（L2840）、kml 尾部（L3411）三处：
 
 每处 dict 在 `"road_name_en": ...` 后加一行（project 格式在 road_name_en 后、created_by 前；merge 在 road_name_en 后、memo 前）：
 
-**① create_from_gpx（L434-459）** —— point_data 无 region 键，全部用轨迹 region：
+**① create_from_gpx（实测 `insert_values` 起点 L432；在 `"road_name_en"` 行后插入）** —— point_data 无 region 键，全部用轨迹 region：
 
 ```python
                 "region": region,
 ```
 
-**② create_from_csv GPS Logger（L2795-2820）**：
+**② create_from_csv GPS Logger（实测 `insert_values` 起点 L2834）**：
 
 ```python
                 "region": region,
 ```
 
-**③ _create_from_csv_project_format（L3085-3110）** —— 行级 region 解析在 Task 9 实现；此处先加读取（Task 9 会精化别名与校验，本步先透传点级值或轨迹默认）：
-
-```python
-                "region": point_data.get("region") or region,
-```
-
-同时 point_data 构造（L3024-3045）在末尾加两个键（Task 9 才做别名解析时，本步先用简单读取占位，Task 9 会替换为别名版——若执行顺序保证 Task 7 在 Task 9 前完成，这里先用简单形式并保证与 Task 9 不冲突，Task 9 会再改一次）：
-
-```python
-                'region': row.get('region', '').strip() or None,
-            }
-            # region 值与 *_id 语言列由 Task 9 的别名解析统一处理；Task 7 只落 region 轨迹默认
-            point_data['region'] = point_data['region'] or region
-```
-
-> 执行顺序约定：Task 7 先提交「简单行级 region 读取」，Task 9 把 `province/city/area/road_name` 等全部字段升级为别名解析版并加 `*_id`。两步合并为一步在 Task 9 完成亦可——以不引入错误为准：**推荐执行器在 Task 7 直接不做 project 格式的 *_id 行级字段（维持现状无后缀列读取），只加 `"region": region` 轨迹默认注入**，行级字段/别名统一留到 Task 9 一次改完，避免两遍 diff。采用推荐路径时 ③ 与 point_data 的改动简化为：
+**③ _create_from_csv_project_format（insert_values 实测 L3124）** —— **本步只注入轨迹默认 `region`**：行级 `region` 列解析与 `*_id` 别名解析**统一由 Task 9 一次实现**（避免同一个 dict 改两遍）。本步**不改** `point_data` 构造：
 
 ```python
                 "region": region,
 ```
 
-**④ create_from_kml（L3366-3391）**：
+**④ create_from_kml（实测 `insert_values` 起点 L3405）**：
 
 ```python
                 "region": region,
 ```
 
-**⑤ merge_tracks（L3905-3933）** —— 点级数据复制：
+**⑤ merge_tracks（实测 `insert_values` 起点 L3944）** —— 点级数据复制：
 
 ```python
                 "province_id": point.province_id,
@@ -2414,7 +2763,7 @@ gpx 尾部（L479）、csv 尾部（L2840）、kml 尾部（L3411）三处：
                 "region": point.region or 'cn',
 ```
 
-merge 的 Track() 构造（L3880-3898）加 `region=plan['tracks'][0].region or 'cn' if hasattr(plan['tracks'][0], 'region') else 'cn',`——简化：首段轨迹 region 作为默认：
+merge 的 Track() 构造（实测 L3921）加一行——首段源轨迹的 region 作为默认：
 
 ```python
             region=plan['tracks'][0].region or 'cn',
@@ -2456,13 +2805,13 @@ merge 的 Track() 构造（L3880-3898）加 `region=plan['tracks'][0].region or 
             "region": point.region or 'cn',
 ```
 
-③ `backend/app/services/track_service.py` unified 列表 item dict（L920-946）——在 `'original_crs': track.original_crs,` 后加：
+③ `backend/app/services/track_service.py` unified 列表 item dict（原文 L920-946，**实测 `'original_crs': track.original_crs,` 在 L967**）——在该行后加：
 
 ```python
                 'region': track.region or 'cn',
 ```
 
-④ 同文件虚拟实时项 dict（L958 起，无关联轨迹的录制）——在 `'original_crs': 'wgs84',` 后加：
+④ 同文件虚拟实时项 dict（原文 L958 起，无关联轨迹的录制；**实测 `'original_crs': 'wgs84',` 在 L1005**）——在该行后加：
 
 ```python
                     'region': 'cn',
@@ -2473,7 +2822,7 @@ merge 的 Track() 构造（L3880-3898）加 `region=plan['tracks'][0].region or 
 - [ ] **Step 6: 语法检查 + grep 核对全部 create/fill 调用**
 
 Run: `cd backend && ../.venv/Scripts/python -c "import app.api.tracks; import app.services.track_service; print('ok')"`
-然后 grep：`fill_geocoding_info(` 应只剩 service 内部定义、live_recording_service 的调用（live recording 走增量 fill：Region 默认 cn，其调用 `fill_geocoding_info(db, ..., incremental=...)` 不带 region → None → 轨迹 region，正确）。
+然后 grep 核对 `fill_geocoding_info(`：本步做完后应命中 **5 处** —— ① `track_service.py` 的方法定义；② `live_recording_service.py` 的调用（不带 region，走增量 fill，`region=None` → 回读轨迹 region，正确）；③④⑤ 本 Task Step 3 刚加参数的 gpx / csv / kml 三处创建尾部。**若仍只有一两处，说明 Step 3 没改到位**。
 Expected: ok
 
 - [ ] **Step 7: Commit**
@@ -2493,6 +2842,21 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - Modify: `backend/app/services/track_service.py`（export_points_to_csv L1806-1886、export_points_to_xlsx L1937-2013）
 - Test: 无（表格结构变更由 Task 13 冒烟 + 导入闭环验证；后端当前无导出单测基建）
 
+> **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
+> 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
+>
+> | 锚点（语义定位用） | 计划旧行号 | **实测行号** |
+> |---|---|---|
+> | `export_points_to_csv` 内 CSV 表头列表 `headers = [` | L1806-1815 | **L1847-1856** |
+> | `export_points_to_csv` 内行值地理字段（`point.province or ""` … `getattr(point,'memo')`） | L1866-1875 | **L1907-1916** |
+> | `export_points_to_xlsx` 内 XLSX 表头列表 `headers = [` | L1937-1946 | **L1978-1987** |
+> | `export_points_to_xlsx` 内行值地理字段（`point.province` … `getattr(point,'memo')`） | L2003-2012 | **L2044-2053** |
+>
+> 统一偏移 **+41 行**（Task 6 在 `fill_geocoding_info` 内净增 41 行，全部位于这四个锚点之前）。
+> 下文步骤已按实测行号书写；若前序任务又有改动，**以语义锚点（函数名 + 字段序列）为准，重新 grep 定位**。
+> 注意：`headers = [` 在同一文件另有 L2519 / L3502 两处（导入侧），**不要改错**——只改 `export_points_to_csv`
+> （函数 def 实测 L1809）与 `export_points_to_xlsx`（实测 L1935）内的那两处。
+
 导出表头新格式（spec §3，坐标等既有列不重排，region 在 speed 之后）：
 
 ```
@@ -2508,7 +2872,7 @@ road_num, road_name_zh, road_name_id, road_name_en, memo
 
 - [ ] **Step 1: CSV 表头与行值（export_points_to_csv）**
 
-表头（L1806-1815）替换：
+表头（实测 L1847-1856，即 `export_points_to_csv` 内的 `headers = [` 到 `]`）替换：
 
 ```python
         headers = [
@@ -2525,7 +2889,7 @@ road_num, road_name_zh, road_name_id, road_name_en, memo
         ]
 ```
 
-行值（L1866-1875）替换：
+行值（实测 L1907-1916，即 `row = [` 列表内从 `point.province or ""` 到 `getattr(point, 'memo', None) or ""` 的 10 行）替换：
 
 ```python
                 point.region or "",
@@ -2547,7 +2911,7 @@ road_num, road_name_zh, road_name_id, road_name_en, memo
 
 - [ ] **Step 2: XLSX 表头与行值（export_points_to_xlsx）**
 
-表头（L1937-1946）与 CSV 相同的 30 列列表。行值（L2003-2012）替换为与 CSV 相同的字段序（xlsx 用 `point.region` 原值即 `point.region or 'cn'` 视 ORM 属性是否有值——SQLAlchemy 列 default 在查询返回后为 None 直至 Python 侧……注意：`server_default='cn'` 且 DB 侧填充 → 新库查询返回 'cn'；旧行迁移后亦为 'cn'。故写 `point.region` 即可，无需 or 兜底；为稳妥与 CSV 一致用 `point.region or 'cn'`）：
+表头（实测 L1978-1987）替换为与 CSV 相同的 30 列列表。行值（实测 L2044-2053，即 `row_data = [` 列表内从 `point.province` 到 `getattr(point, 'memo', None)` 的 10 行）替换为与 CSV 相同的字段序（xlsx 用 `point.region` 原值即 `point.region or 'cn'` 视 ORM 属性是否有值——SQLAlchemy 列 default 在查询返回后为 None 直至 Python 侧……注意：`server_default='cn'` 且 DB 侧填充 → 新库查询返回 'cn'；旧行迁移后亦为 'cn'。故写 `point.region` 即可，无需 or 兜底；为稳妥与 CSV 一致用 `point.region or 'cn'`）：
 
 ```python
                 point.region or 'cn',
@@ -2586,9 +2950,26 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 9: 导入器：列名别名表 + 行级 region（import_points_from_file 与 create 路径）
 
 **Files:**
-- Modify: `backend/app/services/track_service.py`（update_point_fields L2377-2430、has_area/has_road 重算 L2520-2535、_create_from_csv_project_format 地理解析 L2959-2974 与 point_data L3024-3045、insert L3085-3110、GPS Logger 检测后 project 分支）
+- Modify: `backend/app/services/track_service.py`（`update_point_fields`、`has_area`/`has_road` 重算、`_create_from_csv_project_format` 地理字段与检测段、`point_data`、`insert_values`；GPS Logger 检测后 project 分支）
 
-别名表（模块级常量，放 track_service.py 靠近 MERGE_GAP_THRESHOLD_SECONDS 的模块常量区即可；也可以就近放方法内——**推荐模块常量**，两处使用）：
+> **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
+> 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
+>
+> | 锚点（语义定位用） | 计划旧行号 | **实测行号** |
+> |---|---|---|
+> | `update_point_fields` 函数体（`def` 行 → `point.updated_by = user_id` 行） | L2377-2430 | **L2418-2471** |
+> | `has_area` / `has_road` 重算（`any(... for p in points)`） | L2520-2535 | **L2562-2575** |
+> | `_create_from_csv_project_format` 内地理字段硬编码读取（`# 解析地理信息` 注释起） | L2959-2968 | **L3000-3009** |
+> | 同函数内检测段（`if province or city or ...: has_area_info = True`） | L2970-2974 | **L3011-3015** |
+> | `point_data = {` 内地理字段（`'province': province,` → `'road_name_en': road_name_en,`） | L3036-3044 | **L3077-3085** |
+> | `insert_values.append({` 内地理字段（`"province": point_data.get("province")` → `"road_name_en"`） | L3098-3106 | **L3139-3147** |
+>
+> 统一偏移 **+41 行**（Task 6 在 `fill_geocoding_info` 内净增 41 行，全部位于这些锚点之前）。
+> 下文步骤已按实测行号书写；若前序任务又有改动，**以语义锚点（函数名 + 字段序列 + 注释文本）为准，重新 grep 定位**。
+> 引用风格提示：现文件中 `update_point_fields` 与 `insert_values` 用**双引号**、`point_data` 与
+> `_create_from_csv_project_format` 用**单引号**——两者都是既有风格，计划代码块的引号仅示意，照抄或因循原文皆可，不影响正确性。
+
+别名表（列表常量，放 track_service.py 的**模块级区域**——`class TrackService` 之前、列 0 缩进；也可以就近放方法内——**推荐模块级**，两处使用）：
 
 ```python
 # ========== CSV/XLSX 导入列名别名 ==========
@@ -2614,7 +2995,7 @@ _IMPORT_FIELD_ALIASES = {
 }
 ```
 
-- [ ] **Step 1: `update_point_fields` 改别名驱动（L2377-2430 整体替换函数体）**
+- [ ] **Step 1: `update_point_fields` 改别名驱动（实测 L2418-2471 整体替换函数体）**
 
 ```python
         def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
@@ -2701,7 +3082,7 @@ _IMPORT_FIELD_ALIASES = {
 
 注意：`track` 在 `update_point_fields` 闭包可见（函数定义在 import_points_from_file 方法体内，track 已在上文获取）。CSV 的 row 是 DictReader 行（dict）；XLSX 走 `row, headers` 列表分支——现有调用 `update_point_fields(point, row)`（CSV）与 `update_point_fields(point, row, headers)`（XLSX），签名已兼容。
 
-- [ ] **Step 2: has_area/has_road 重算加 *_id 列（L2520-2535）**
+- [ ] **Step 2: has_area/has_road 重算加 *_id 列（实测 L2562-2575）**
 
 ```python
         has_area = any(
@@ -2716,7 +3097,7 @@ _IMPORT_FIELD_ALIASES = {
         )
 ```
 
-- [ ] **Step 3: `_create_from_csv_project_format` 地理字段别名解析（L2959-2968）**
+- [ ] **Step 3: `_create_from_csv_project_format` 地理字段别名解析（实测 L3000-3009）**
 
 将硬编码无后缀读取替换为别名 helper（模块级或方法级，与 Task 9 Step 1 复用同一函数不便——CSV dict 行读取逻辑不同（create 是整行解析为字段而非列存在语义）。create 路径按行全量建点，语义：列存在 → 值；不存在 → None。添加方法级小工具 `_row_aliased(row, field, default=None)`——直接按别名表顺序取第一个非空值（create 语义无需区分「列存在但空」与「无列」，最终值都是 None 或空）：
 
@@ -2746,7 +3127,7 @@ _IMPORT_FIELD_ALIASES = {
 
 - [ ] **Step 4: has_area/has_road 检测与 point_data/insert（project 格式内）**
 
-检测段（L2970-2974）替换：
+检测段（实测 L3011-3015）替换：
 
 ```python
             if (province or city or district or province_en or city_en or district_en
@@ -2756,7 +3137,7 @@ _IMPORT_FIELD_ALIASES = {
                 has_road_info = True
 ```
 
-point_data dict（L3036-3044）改为：
+point_data dict（实测 L3077-3085）改为：
 
 ```python
                 'province': province,
@@ -2775,7 +3156,7 @@ point_data dict（L3036-3044）改为：
                 'region': point_region,
 ```
 
-insert_values（L3098-3106）替换为：
+insert_values（实测 L3139-3147）替换为：
 
 ```python
                 "province": point_data.get("province"),
@@ -2815,7 +3196,20 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 10: 区域树：共享聚合重构 + region 分组 + names + 显示回退链
 
 **Files:**
-- Modify: `backend/app/services/track_service.py`（get_region_tree L1316-1557、get_region_tree_no_auth L1559-1766 → 提取共享 `_build_region_tree`）
+- Modify: `backend/app/services/track_service.py`（`get_region_tree`、`get_region_tree_no_auth` → 提取共享 `_build_region_tree`）
+
+> **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
+> 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
+>
+> | 锚点（语义定位用） | 计划旧行号 | **实测行号** |
+> |---|---|---|
+> | `_aggregate_node_stats`（`def` 行） | L1269 | **L1310** |
+> | `get_region_tree`（`async def` 行至函数末） | L1316-1557 | **L1357-1598** |
+> | `get_region_tree` 内权限检查段（`track = await self.get_by_id(...)` → `return {'regions': [], ...}`） | L1338-1341 | **L1379-1382** |
+> | `get_region_tree_no_auth`（`async def` 行至函数末） | L1559-1766 | **L1600-1807** |
+>
+> 统一偏移 **+41 行**（Task 6 在 `fill_geocoding_info` 内净增 41 行，全部位于这些锚点之前）。
+> 下文步骤已按实测行号书写；若前序任务又有改动，**以语义锚点（函数名 + 注释文本）为准，重新 grep 定位**。
 - Modify: `backend/app/schemas/track.py`（RegionNode——Task 3 已加字段；无需再动）
 
 行为（spec §6）：
@@ -2826,9 +3220,9 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 实现：因两函数（1316/1559）除权限检查与 create_node 微小差异外全同（no_auth 每点额外 own point_count++ 后又被 _aggregate_node_stats 覆盖 → 与 auth 等价），提取单一共享方法。Task 步骤：
 
-- [ ] **Step 1: 读 L1269-1315（_aggregate_node_stats 开头）确认后开始**
+- [ ] **Step 1: 读 L1310-1356（_aggregate_node_stats 开头）确认后开始**
 
-先 Read `backend/app/services/track_service.py` 的 L1269-1316（_aggregate_node_stats）确认行为（已核：聚合基于 own_* 字段并写回 distance/point_count）。
+先 Read `backend/app/services/track_service.py` 的 L1310-1357（_aggregate_node_stats）确认行为（已核：聚合基于 own_* 字段并写回 distance/point_count）。
 
 - [ ] **Step 2: 新增共享方法 `_build_region_tree(self, points)`（放 get_region_tree 之前）**
 
@@ -3075,7 +3469,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 - [ ] **Step 3: 两公共方法改薄壳**
 
-`get_region_tree`（L1316-1557）保留权限检查（L1338-1341 不变），其后主体替换为：
+`get_region_tree`（实测 L1357-1598）保留权限检查（实测 L1379-1382 不变），其后主体替换为：
 
 ```python
         # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
@@ -3093,7 +3487,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
         return {'regions': root_nodes, 'stats': stats}
 ```
 
-`get_region_tree_no_auth`（L1559-1766）同样替换为薄壳（无权限检查）。删除原两函数内的重复构建体。
+`get_region_tree_no_auth`（实测 L1600-1807）同样替换为薄壳（无权限检查）。删除原两函数内的重复构建体。
 
 - [ ] **Step 4: 冒烟验证等价性（临时脚本，不入库）**
 
