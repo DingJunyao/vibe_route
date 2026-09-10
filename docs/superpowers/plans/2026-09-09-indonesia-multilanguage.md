@@ -4420,6 +4420,36 @@ git commit -m "feat(views): 上传/编辑对话框地区选择；区域树按节
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+**Task 12 记录（执行后回写）**
+
+- 实现：`643e95c`，3 文件 `+179/-52`（`SharedTrack.vue` 72/22、`TrackDetail.vue` 94/30、`TrackUpload.vue` 13/0）。
+- **spec 审查：✅ 合规**，且用的是**机械比对而非肉眼**——把规格代码块（计划 156 行）与 `TrackDetail.vue:1789-1944`、`SharedTrack.vue:771-926` 各 dump 后两两 `diff`，**三份字节级全等**（`TD_SPEC_IDENTICAL`/`ST_SPEC_IDENTICAL`/`TD_ST_IDENTICAL`），落实了规格「两文件这三函数逐字相同」的要求。区段头注释保留、模板零改动（`SharedTrack` 7 个 hunk 无模板 hunk；`TrackDetail` 11 个 hunk 仅 1 个模板 hunk）。
+- **越界检查**：提交恰 3 文件；`frontend/package.json`/`package-lock.json`/`frontend/src/api/*`/`backend/` 零改动；**三个 `.bak` 零触碰**（协调者另行独立验证：提交内 `.bak` 计数 0，且 `git diff 643e95c^ 643e95c -- <三个 .bak>` 输出 0 行）。
+- **import 收窄已落地**：两文件均改为 `import { parseRoadNumber } from '@/utils/roadSignParser'`，两视图文件内 `ParsedRoadNumber` 零残留（仅剩 5 个地图组件与 3 个 `.bak` 仍在用），`parseRoadNumber` 仍在 cn 分支被调用。定点自查的 4 个调用点（`TD:1859/1921`、`ST:841/903`）**全部落在被替换块内部**。
+- **`saveEdit` 控制流**：`else` 分支已删除、PATCH 在 if 块后无条件执行、toast 由 `!needsCrsChange` 单独控制（审查者读代码确认，非采信转述）。
+
+**Task 12 fix loop（spec 审查发现的规格缺陷，非实现者偏差）**
+
+**问题：`buildSignCacheKey` 的 id 分支漏了 `nameId`，可致复用错误盾牌。**
+
+原键：`[region, signType, code, name].filter(Boolean).join(':')`。但 id 分支的 TOL/NASIONAL 判级**由 `name_id` 决定**——`name` 是**中文**路名（`backend/app/api/road_signs.py:35`「name: id 时中文路名」），通常不含 `tol_keywords`（默认 `['收费','Tol']`，`backend/app/indonesia.py:168-172`），真正命中关键词的是 `name_id`（同文件 L37「印尼语路名」）。**即 `name` 进了键，而真正决定判级的 `name_id` 没进** —— 与本节注释自称的意图（「路名决定 TOL/NASIONAL 判定，必须参与键，防同名编号不同路串样」）不符。
+
+**可达性论证（审查者落到具体行，协调者复核认可）**：
+- 回退支**不可达**：`node.name` 为空/哨兵时 `roadName = nodeNames.id || nodeNames.en || ''`，故 `roadName` 为空 ⟹ `nodeNames.id` 为空 ⟹ `nameId` 同样被省略 —— 键内 `name` 单值即确定 `nameId`。
+- **`node.name` 支可达**：此时 `name = node.name`（zh 显示名）与 `nameId = nodeNames.id` 相互独立。后端 road 节点建点键为 `((region, road_name), road_number)`（`track_service.py:1601-1605`），但**父级一变就强制 `current_road = None` 重建**（省级 L1536、市级 L1560/L1574、区级 L1595），故同一 `(region, name, road_number)` 可存在**两个独立节点实例**，各自 `names` 取自**建点那一点**——而 Task 10 的 docstring 本就写明「names 取建点那一点的非空语言值，**组内后续点不补全缺失语言**」，即语言覆盖不一致是**设计预期**（本 Task 自己也在文案里写了「多语言列可随 CSV 逐行覆盖」）。
+- 又因盾牌对 id 分支只依赖 `code / level / province_code`（`svg_gen.py:997-1006`，且前端 id 分支**根本不发** `province`/`province_id`，省码来自编号内嵌前缀），故**唯一能翻盘的输入就是 `name_id`**。
+- 反例：同 `(region='id', name='雅加达-芝坎佩克高速公路', road_number='12')` 的两个实例，A 的建点有 `road_name_id`（命中 `Tol` → 高速盾牌），B 的建点无（→ NASIONAL 盾牌）。zh 名不含「收费」故不兜底 → **两个不同盾牌共用一个键**，先渲染者固化进 `roadSignSvgCache`（会话内不清空），后者复用错误盾牌。**用户可见且静默。**
+- 诚实边界：反例所需的「同路 zh 名相同、id 名覆盖不一致」在真实 Nominatim/CSV 数据下的**出现频率未实测**；本节记录的是**结构可达性**，不是已复现的真实现象。
+
+**修法（已授权 fix loop）**：id 分支键并入 `nameId` ——
+```ts
+    return [region, opts.signType, opts.code, opts.name || '', opts.nameId || ''].filter(Boolean).join(':')
+```
+两文件**同步**修改（`buildSignCacheKey` 在两处逐字相同，必须保持一致）。零行为风险：键函数纯计算，三个使用点（`getRoadSignSvg`/`loadRoadSignSvg`/`renderNodeLabel` 的查表）都走同一函数，自动一致。
+
+**Q2（哨兵字符串）裁定：不改。** `node.name === '（无名）'` 与 `Object.keys(node.names||{}).length === 0` 在本函数语境下**等价**，审查者给了双向证明：哨兵只由后端一处写入（`track_service.py:1601-1605`，仅当 `point.road_name or road_name_id or road_name_en` **全假**时），而 `collect_names(point,'road')` 只收三语中的真值、按值去重 → 空字典 ⟺ 三者全假；正反向均成立，连副作用也一致（哨兵时 `nameId` 必缺失、`roadName` 落 `''`、不传 `name` → 后端判 NASIONAL）。
+> 唯一理论反例是「地理编码返回的路名恰为字面量 `'（无名）'`」，实测**全仓无第二个生产者**（`grep -rn "（无名）" backend/app` 仅注释 L1600 与哨兵赋值 L1604）。**裁定不改**：行为已证明等价，改它属未经请求的重构（Ponytail：不做）；且 `node.names` 对旧数据可能是 `undefined`，现有写法已用 `|| {}` 兜住。**此分析记录在案，供将来若要重构时直接取用。**
+
 ---
 
 ### Task 13: 数据库迁移（需授权）+ 后端全量测试 + 端到端冒烟
