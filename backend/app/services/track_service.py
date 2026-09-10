@@ -2485,7 +2485,7 @@ class TrackService:
 
             return None
 
-        def update_point_fields(point: TrackPoint, row: dict, headers: list | None = None):
+        def update_point_fields(point: TrackPoint, row: dict | tuple, headers: list | None = None):
             """更新点的可编辑字段（多语言别名列名 + 行级 region）
 
             只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
@@ -3012,7 +3012,8 @@ class TrackService:
         但两条路径的取值语义**不同**（见 _row_aliased）：本函数是「建点」——取第一个**非空**
         的别名值；import_points_from_file 是「覆盖」——取第一个**存在**的列（空值也算值，
         用户清空一列即期望清空）。故同一份「province_zh 为空 + province 有值」的文件，
-        本函数落回 province，导入路径则把 province 覆盖为 None。
+        本函数落回 province，导入路径则把 province 覆盖为空 —— 空串落为 None，仅含空白的
+        串（'   '）落为 ''（该处 get_val 的真值判断先于 strip），两者都不是「保留原值」。
         """
         from datetime import datetime
 
