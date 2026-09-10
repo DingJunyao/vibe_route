@@ -196,17 +196,33 @@ class TestServiceRegion:
         asyncio.run(case())
 
     def test_merge_keeps_per_point_region(self, workdir):
-        """合并：产物 track.region 取首段源轨迹，点级 region 逐点复制"""
+        """合并：产物 track.region 取首段源轨迹，点级 region 与 4 个 *_id 逐点复制"""
 
         async def case():
             async with _db_env(workdir) as (db, user):
                 a = await track_service.create_from_gpx(db, user, 'a.gpx', _gpx(8), 'a', region='id')
                 b = await track_service.create_from_gpx(db, user, 'b.gpx', _gpx(9), 'b', region='cn')
+
+                # 合并前给两轨的点各赋互不相同的 *_id：任取错来源（如 province_id=p.city_id）
+                # 或整体漏复制，都会让下面的断言变红。
+                # 这 4 个字段是 Task 10 collect_names 直读的字段，写错会静默污染多语 tooltip。
+                id_fields = ('province_id', 'city_id', 'district_id', 'road_name_id')
+                for track, prefix in ((a, 'A'), (b, 'B')):
+                    for pt in await _track_points(db, track.id):
+                        for n, field in enumerate(id_fields, start=1):
+                            setattr(pt, field, f'{prefix}{n}')
+                await db.commit()
+
                 # 刻意倒转入参顺序：a 是较早轨迹但不是首参 → 取 track_ids[0] 的实现会红
                 merged = await track_service.merge_tracks(db, user, [b.id, a.id], 'm')
                 assert merged.region == 'id'  # 取 start_time 较早者，而非入参首个
-                regions = [p.region for p in await _track_points(db, merged.id)]
-                assert regions == ['id', 'id', 'cn', 'cn']  # 逐点复制，非统一填充
+                points = await _track_points(db, merged.id)
+                assert [p.region for p in points] == ['id', 'id', 'cn', 'cn']  # 逐点复制，非统一填充
+                # 每个合并后的点必须带着它原来那个点的 4 个 *_id（merge 只复制这几列）
+                assert [tuple(getattr(p, f) for f in id_fields) for p in points] == [
+                    ('A1', 'A2', 'A3', 'A4'), ('A1', 'A2', 'A3', 'A4'),
+                    ('B1', 'B2', 'B3', 'B4'), ('B1', 'B2', 'B3', 'B4'),
+                ]
 
         asyncio.run(case())
 
@@ -269,7 +285,9 @@ class TestUploadEndpoint:
                             files={'file': ('t.gpx', _gpx().encode('utf-8'), 'application/gpx+xml')},
                         )
                 finally:
-                    app.dependency_overrides.clear()
+                    # 只摘自己设的两个键：clear() 会连带摘掉其他用例的 override
+                    app.dependency_overrides.pop(get_db, None)
+                    app.dependency_overrides.pop(get_current_user, None)
 
                 assert resp.status_code == 200, resp.text
                 assert resp.json()['region'] == 'cn'
