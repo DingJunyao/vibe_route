@@ -85,6 +85,31 @@
 
 所有模型继承 [`AuditMixin`](backend/app/models/base.py)，包含 `created_at`, `updated_at`, `created_by`, `updated_by`, `is_valid` 字段。
 
+## 地区（Region）与多语言字段
+
+### region 三层存储（点级为权威）
+
+| 层 | 字段 | 语义 |
+|------|------|------|
+| 轨迹（行级） | `tracks.region` | 归属地区，默认 `'cn'`，编辑对话框可改 |
+| 轨迹点（**点级权威**） | `track_points.region` | **决定图标渲染与文本显示**；改轨迹 region **不覆盖**已有点 |
+| 道路标牌缓存 | `road_sign_cache.region` | 缓存隔离，同编号不同地区不串样 |
+
+当前取值 `cn`（中国）/ `id`（印尼）。图标与文本一律读**点级** region，故一个文件里跨地区的轨迹能逐点正确渲染。
+
+### 语言后缀平铺列
+
+`province` / `city` / `district` / `road_name` 四组，每组三列：中文**无后缀**（历史列，旧数据零迁移）、印尼语 `_id`、英语 `_en`。
+
+- 用平铺列而非 JSON：旧数据可直接读，导出 CSV 可直列
+- 扩展新地区 = 再加一组后缀列（当前 cn 无后缀 + id/en 已占位）
+- 注意 CSV 沿用历史列名：`district` 在 CSV 中为 `area`，`road_number` 为 `road_num`
+
+### 迁移
+
+- `016_add_multilanguage_region`：`tracks` / `track_points` 加 `region`（默认 `'cn'`）、`track_points` 加 4 个 `*_id` 印尼语列、`road_sign_cache` 加 `region`；附 sqlite / mysql / postgresql 三份 SQL（sqlite 版为本次新增）
+- `017_widen_road_sign_province`：`road_sign_cache.province` `10 → 100`。016 在开发库先被 stamped、该 DDL 追加在 016 之后而从未落地，故单开一支补齐
+
 ## 路由守卫
 - `guest`: 未登录可访问
 - `requiresAuth`: 需登录

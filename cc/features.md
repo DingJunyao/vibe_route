@@ -74,6 +74,60 @@
   - 不设区地级市 (东莞/中山/儋州/嘉峪关): 保留市级，无镇级
   - 省辖县级 (仙桃/潜江/天门/济源): 分类为 `area` 级别
 
+## 地区（Region）与多语言
+
+### 地区贯通
+
+- **上传**: 上传对话框可选地区（中国 / 印尼），缺省 `cn`
+- **编辑**: 编辑对话框可改轨迹地区——**只改轨迹行级**，已有轨迹点不受影响（点级权威不被覆盖）
+- **填充地理编码**: `POST /api/tracks/{id}/fill-geocoding` 支持 `region` 参数，缺省回读轨迹自身 region
+- **CSV 行级 region**: 导入以文件内每行的 `region` 列为准（跨地区文件的主通道，一个文件可含多地区点）
+- **合并轨迹**: 逐点复制点级 region
+- **地图组件**: 本次**未改动**——多语文本由前端回退链（zh → id → en）处理，地图侧不感知 region；地区只影响区域树渲染与道路盾牌
+
+### 反向地理编码（多语）
+
+- region=id 时 Nominatim 发**三次**请求（`zh-CN` / `id` / `en`），分别写中文列 / `_id` / `_en`
+- 省级中文名回填表（38 个印尼省，自 gpxutil 移植，含前缀容错）；查不到中文时**留空**而非填英文
+- 展示侧回退链 **zh → id → en**，故中文留空不会显示空段
+
+### 道路图标
+
+| 节点 region | 编号解析 | 生成 |
+|------|------|------|
+| `cn` | 前端 `parseRoadNumber` 解析国标编号 | 后端国标盾牌 |
+| `id` | 前端**不解析**，编号原样交后端 | 后端按编号 + 路名判级，生成六边形盾牌 |
+
+前端按节点 region 分派（详情页 [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)、分享页 [`SharedTrack.vue`](frontend/src/views/SharedTrack.vue)，共用 `renderNodeLabel`）。
+
+- **id 等级判定**（后端）:
+  - `PROVINSI`：编号含内嵌省码前缀（如 `35-024` → 大字 `024`、色带 `PROVINSI 35`），蓝 `#003E86`
+  - `TOL`：路名命中关键词（中文子串「收费」或 ASCII 词边界 `Tol`），红 `#B5273C`
+  - `NASIONAL`：其余，红 `#B5273C`
+- **色带省码**: 仅编号内嵌前缀可得（`35-024` 得 `35`）；1-2 位编号（如 `3`）色带只显示等级词、不带省码——前端不发 province 的必然结果，属预期行为
+- **缓存键含 region**: 后端 `road_sign_cache` 与前端内存缓存均按 region 隔离；id 分支的键**还含路名与印尼语路名**（后端对两段文本联合判 TOL，防「同编号不同路名」串用同一张图）
+- 生成失败回退纯文本
+- **配置** `indonesia_road_sign`: `template`（`backend/data/templates/id_sheild.svg`）、`tol_keywords`、`font_upper` / `font_lower`（Clearview 字体，商业字体，许可记录在案）
+
+### 区域树
+
+- 端点 `GET /api/tracks/{id}/regions`
+- 按 **(region, 文本)** 分组：同一文本不同 region 不合并 → 跨地区文件出现并列根节点（如「东爪哇省」与「广东省」两个根）
+- 节点带 `names`（存在的语言才出现该键）与 `region`；道路节点带 `road_number`
+- **多语 tooltip**: 原生 `title` 属性，`names` 中非空语言 ≥ 2 种时展示（如 `东爪哇省 / Provinsi Jawa Timur / Province of East Java`）；单语言**无 tooltip**
+- 道路编号标牌受配置 `show_road_sign_in_region_tree` 控制（关闭则纯文本）
+
+### 导入导出
+
+- **导出 30 列**（原 22 列）: 新增 `region`，`province` / `city` / `area` / `road_name` 扩为 `_zh` / `_id` / `_en` 三列，另有 `road_num`
+- **导入别名表**: 兼容三种列名格式——新格式（带语言后缀）、样例格式、旧版 vibe 导出（无后缀列按中文处理）
+- 导出 → 再导入闭环成立（`region`、三语列、`road_name` 为空时的回退链均可往返）
+
+### 已知限制
+
+- **实时记录链路恒为 `cn`**: `live_recording_service.py` 走自己的内联地理编码（`geo_service.get_point_info(lat, lon)`），**不经过** `fill_geocoding_info` → 既不写 `*_id` 也不写点级 `region`；且 `LiveRecording` 模型**无 region 列**，`app/api/live_recordings.py` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /api/tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外
+- **Geo Editor（地理信息编辑器）不认识多语言字段**: `geo_editor_service.py` 读路径构造的 `TrackPointGeoData` 只含 `province` / `city` / `district` / `road_number` / `road_name` 及其 `_en` 对，写路径的 `field_mapping` 同样只映射这几对，**不含 `*_id`、不含 region**。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id` / `region`）；**region 与图标不受影响**。修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；最小改动是给 `TrackPointGeoData` / `GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`
+
 ## PostGIS
 
 ### 架构
