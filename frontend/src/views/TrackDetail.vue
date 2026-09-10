@@ -766,6 +766,14 @@
           </el-radio-group>
           <div class="form-hint">更改坐标系会重新计算所有坐标并保存</div>
         </el-form-item>
+
+        <el-form-item label="地区">
+          <el-radio-group v-model="editForm.region">
+            <el-radio value="cn">中国</el-radio>
+            <el-radio value="id">印尼</el-radio>
+          </el-radio-group>
+          <div class="form-hint">轨迹的默认地区（新填充/新导入点的默认值；已有轨迹点不受影响）</div>
+        </el-form-item>
       
       <!-- <el-divider content-position="left"></el-divider> -->
         <el-form-item label="地理信息">
@@ -1078,7 +1086,7 @@ import type { AnimationConfig, ExportOptions } from '@/types/animation'
 import { exportWithPlaywright, downloadFile, generateExportFilename, checkExportPrerequisites, buildExportConfig } from '@/utils/animation/videoExport'
 import { calculateDuration, findPointIndexByTime, interpolatePosition } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
-import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { parseRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
 import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
@@ -1306,7 +1314,8 @@ const changingCrs = ref(false)
 const editForm = ref({
   name: '',
   description: '',
-  original_crs: 'wgs84'
+  original_crs: 'wgs84',
+  region: 'cn'
 })
 
 // 填充地理信息相关
@@ -1778,25 +1787,49 @@ function formatNodeLabel(node: RegionNode): string {
 // ========== 道路标志 SVG 相关 ==========
 
 /**
+ * 道路标志获取/加载的参数与缓存键
+ * region 缺省 'cn'；id 时 sign_type 恒 'way'（后端判级），name/name_id 供 TOL 判定
+ */
+interface RoadSignFetchOptions {
+  code: string
+  signType: 'way' | 'expwy'
+  province?: string
+  region?: string
+  name?: string
+  nameId?: string
+}
+
+function buildSignCacheKey(opts: RoadSignFetchOptions): string {
+  const region = opts.region || 'cn'
+  // cn: 维持现状键（signType:code[:province]）；id: 键含地区与路名
+  // （路名决定 TOL/NASIONAL 判定，必须参与键，防同名编号不同路串样）
+  if (region !== 'cn') {
+    return [region, opts.signType, opts.code, opts.name || ''].filter(Boolean).join(':')
+  }
+  return opts.province ? `${opts.signType}:${opts.code}:${opts.province}` : `${opts.signType}:${opts.code}`
+}
+
+/**
  * 异步获取道路标志 SVG
- * @param code 道路编号，如 "S88"
- * @param sign_type 标志类型 'way' 或 'expwy'
- * @param province 省份简称（仅省级高速需要）
+ * @param opts 编号、类型与地区参数（见 RoadSignFetchOptions）
  * @returns SVG 字符串，失败返回 null
  */
-async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
-  // 缓存 key 包含省份（省级高速需要省份参数）
-  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
+async function getRoadSignSvg(opts: RoadSignFetchOptions): Promise<string | null> {
+  const cacheKey = buildSignCacheKey(opts)
 
   // 检查缓存
   const cached = roadSignSvgCache.value.get(cacheKey)
   if (cached) return cached
 
   try {
+    const isId = (opts.region || 'cn') !== 'cn'
     const response = await roadSignApi.generate({
-      sign_type: signType,
-      code: code,
-      ...(province && { province }),
+      sign_type: isId ? 'way' : opts.signType,  // id: sign_type 无意义，后端忽略
+      code: opts.code,
+      ...(opts.province && { province: opts.province }),
+      ...(opts.name && { name: opts.name }),
+      ...(isId && { region: opts.region }),
+      ...(isId && opts.nameId && { name_id: opts.nameId }),
     })
     const svg = response.svg
     roadSignSvgCache.value.set(cacheKey, svg)
@@ -1809,11 +1842,11 @@ async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?
 
 /**
  * 异步加载单个道路编号的 SVG（不阻塞渲染）
- * @param parsed 解析后的道路编号信息
+ * @param opts 与 getRoadSignSvg 相同的参数
  */
-async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
-  // 缓存 key 包含省份（省级高速需要）
-  const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
+async function loadRoadSignSvg(opts: RoadSignFetchOptions) {
+  // 缓存 key 与 getRoadSignSvg 一致
+  const key = buildSignCacheKey(opts)
 
   // 防止重复加载
   if (loadingSigns.value.has(key)) {
@@ -1823,7 +1856,7 @@ async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
   loadingSigns.value.add(key)
 
   try {
-    const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
+    const svg = await getRoadSignSvg(opts)
     if (svg) {
       // 触发树组件重新渲染
       treeForceUpdateKey.value++
@@ -1837,11 +1870,20 @@ async function loadRoadSignSvg(parsed: ParsedRoadNumber) {
 
 /**
  * 渲染节点标签（支持 SVG 标牌）
+ * 节点按自身 region 分派：cn 走国标前端解析；id 编号不经前端解析，
+ * 直接交后端（按编号+路名判定等级并生成六边形盾牌）。失败回退纯文本。
+ * 多语言节点（names >= 2 种语言）附原生 title 展示全部语言。
  * 返回 VNode
  */
 function renderNodeLabel(node: RegionNode) {
   const config = configStore.config
   const showSigns = config?.show_road_sign_in_region_tree ?? true
+  const region = node.region || 'cn'
+
+  // 多语言提示：组内非空语言数 >= 2 才有（zh: 中文 / id: 印尼语 / en: 英语）
+  const nodeNames = node.names || {}
+  const multiLangNames = Object.keys(nodeNames).filter(k => nodeNames[k]).length >= 2
+  const titleAttr = multiLangNames ? { title: Object.values(nodeNames).join(' / ') } : {}
 
   // 处理道路节点且有道路编号
   if (node.type === 'road' && node.road_number) {
@@ -1851,15 +1893,32 @@ function renderNodeLabel(node: RegionNode) {
     if (showSigns) {
       // 开启标牌模式：尝试渲染 SVG
       roadNumbers.forEach((num, index) => {
-        const parsed = parseRoadNumber(num)
-        if (parsed) {
-          const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
-          const svg = roadSignSvgCache.value.get(cacheKey)
+        let opts: RoadSignFetchOptions | null = null
+        if (region !== 'cn') {
+          // 印尼：编号原样交后端（含路名用于 TOL 判定）
+          const roadName = node.name && node.name !== '（无名）'
+            ? node.name
+            : (nodeNames.id || nodeNames.en || '')
+          opts = {
+            code: num,
+            signType: 'way',
+            region,
+            ...(roadName && { name: roadName }),
+            ...(nodeNames.id && { nameId: nodeNames.id }),
+          }
+        } else {
+          const parsed = parseRoadNumber(num)
+          if (parsed) {
+            opts = { code: parsed.code, signType: parsed.sign_type, ...(parsed.province && { province: parsed.province }) }
+          }
+        }
+        if (opts) {
+          const svg = roadSignSvgCache.value.get(buildSignCacheKey(opts))
           if (svg) {
             contents.push(h('span', { innerHTML: svg, class: 'road-sign-inline' }))
           } else {
             contents.push(num)
-            loadRoadSignSvg(parsed)
+            loadRoadSignSvg(opts)
           }
         } else {
           contents.push(num)
@@ -1877,11 +1936,11 @@ function renderNodeLabel(node: RegionNode) {
       contents.push(node.name)
     }
 
-    return h('span', contents)
+    return h('span', titleAttr, contents)
   }
 
   // 非道路节点，使用原文本
-  return h('span', node.name)
+  return h('span', titleAttr, node.name)
 }
 
 // 格式化距离
@@ -2498,6 +2557,7 @@ function showEditDialog() {
     editForm.value.name = track.value.name
     editForm.value.description = track.value.description || ''
     editForm.value.original_crs = track.value.original_crs || 'wgs84'
+    editForm.value.region = track.value.region || 'cn'
   }
   editDialogVisible.value = true
 }
@@ -2548,13 +2608,17 @@ async function saveEdit() {
         mapRef.value.fitBounds()
       }
       ElMessage.success('坐标系更改成功')
-    } else {
-      // 只更新名称和描述
-      const updated = await trackApi.update(track.value.id, {
-        name: editForm.value.name.trim(),
-        description: editForm.value.description.trim() || undefined
-      })
-      track.value = updated
+    }
+
+    // 更新名称、描述与地区（无论是否换坐标系都保存）
+    const updated = await trackApi.update(track.value.id, {
+      name: editForm.value.name.trim(),
+      description: editForm.value.description.trim() || undefined,
+      region: editForm.value.region,
+    })
+    track.value = updated
+
+    if (!needsCrsChange) {
       ElMessage.success('保存成功')
     }
 

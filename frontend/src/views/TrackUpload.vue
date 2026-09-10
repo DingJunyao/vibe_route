@@ -95,6 +95,17 @@
             </div>
           </el-form-item>
 
+          <!-- 地区 -->
+          <el-form-item label="地区">
+            <el-radio-group v-model="form.region">
+              <el-radio value="cn">中国</el-radio>
+              <el-radio value="id">印尼</el-radio>
+            </el-radio-group>
+            <div class="form-tip">
+              轨迹的默认地区，决定道路图标样式与地理信息填充语言集；多语言列可随 CSV 逐行覆盖
+            </div>
+          </el-form-item>
+
           <!-- 处理选项 -->
           <el-divider content-position="left">处理选项</el-divider>
 
@@ -172,6 +183,7 @@ const form = reactive({
   name: '',
   description: '',
   original_crs: 'wgs84',
+  region: 'cn',
   fill_geocoding: false,
 })
 
@@ -218,6 +230,7 @@ async function handleSubmit() {
         name: form.name,
         description: form.description || undefined,
         original_crs: form.original_crs,
+        region: form.region,
         fill_geocoding: form.fill_geocoding,
       })
 
