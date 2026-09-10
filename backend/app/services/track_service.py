@@ -28,6 +28,29 @@ def _should_backfill_province_zh(zh_province: str, id_province: str) -> bool:
     return not zh_province or zh_province == id_province or zh_province.isascii()
 
 
+# ========== CSV/XLSX 导入列名别名 ==========
+# 新格式带语言后缀（province_zh/province_id/province_en）；样例与旧版 vibe 导出
+# 无后缀列表示中文（province/city/area/road_name/road_name_en 等历史格式）。
+# 解析顺序即优先级：语言后缀全显式的新列优先，其次旧列名。
+_IMPORT_FIELD_ALIASES = {
+    'province': ['province_zh', 'province'],
+    'city': ['city_zh', 'city'],
+    'district': ['area_zh', 'area'],
+    'province_en': ['province_en'],
+    'city_en': ['city_en'],
+    'district_en': ['area_en'],
+    'province_id': ['province_id'],
+    'city_id': ['city_id'],
+    'district_id': ['area_id'],
+    'road_name': ['road_name_zh', 'road_name'],
+    'road_name_en': ['road_name_en'],
+    'road_name_id': ['road_name_id'],
+    'road_num': ['road_num'],
+    'memo': ['memo'],
+    'region': ['region'],
+}
+
+
 class TrackService:
     """轨迹服务类"""
 
@@ -1855,9 +1878,8 @@ class TrackService:
         if not points:
             raise ValueError("轨迹没有数据点")
 
-        # CSV BOM 头
+        # CSV 内容行（首行为 BOM + 表头）
         csv_lines = []
-        csv_lines.append("\ufeff")  # UTF-8 BOM
 
         # CSV 表头（region + 三语言地理列：中文无后缀 / _id 印尼语 / _en 英语）
         headers = [
@@ -1872,7 +1894,9 @@ class TrackService:
             "area_zh", "area_id", "area_en",
             "road_num", "road_name_zh", "road_name_id", "road_name_en", "memo"
         ]
-        csv_lines.append(",".join(headers))
+        # BOM 必须紧贴表头：BOM 独占一行时 DictReader 会把空行当表头，
+        # 自家导入路径（decode utf-8-sig 后首行变空行）会静默匹配 0 个点
+        csv_lines.append("\ufeff" + ",".join(headers))
 
         # 计算累计距离
         total_distance = 0.0
@@ -2446,57 +2470,83 @@ class TrackService:
             return None
 
         def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
-            """更新点的可编辑字段
+            """更新点的可编辑字段（多语言别名列名 + 行级 region）
 
-            只要 CSV/Excel 中某列存在，就用其值（包括空值）覆盖数据库中的值。
-            只有当列不存在时，才保留数据库中的原值。
+            只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
+            所有别名列都不存在时，才保留数据库中的原值。
+            region 特殊：值为空时按『无 region 列』处理（不动该点 region）。
             """
-            def has_key(key: str) -> bool:
-                """检查列是否存在"""
-                if isinstance(row, dict):
-                    return key in row
-                else:
-                    return headers and key in (headers if isinstance(headers, list) else list(headers))
+            def has_key(field: str) -> bool:
+                """字段是否有任一别名列存在于文件中"""
+                for alias in _IMPORT_FIELD_ALIASES.get(field, []):
+                    if isinstance(row, dict):
+                        if alias in row:
+                            return True
+                    else:
+                        if headers and alias in headers:
+                            return True
+                return False
 
-            def get_val(key: str) -> str | None:
-                if isinstance(row, dict):
-                    val = row.get(key)
-                    return val.strip() if val else None
-                else:
-                    if headers and key in headers:
-                        # 如果 headers 已经是 list，直接使用；否则转换
-                        header_list = headers if isinstance(headers, list) else list(headers)
-                        idx = header_list.index(key)
-                        if idx < len(row):
-                            val = row[idx]
-                            return str(val).strip() if val else None
+            def get_val(field: str) -> str | None:
+                """取字段值：按别名优先级取第一个存在的列；无则 None"""
+                for alias in _IMPORT_FIELD_ALIASES.get(field, []):
+                    if isinstance(row, dict):
+                        if alias in row:
+                            val = row.get(alias)
+                            return val.strip() if val else None
+                    else:
+                        if headers and alias in headers:
+                            idx = headers.index(alias)
+                            if idx < len(row):
+                                val = row[idx]
+                                return str(val).strip() if val else None
                 return None
 
-            # 行政区划信息：只要列存在就更新
-            if has_key("province"):
-                point.province = get_val("province")
-            if has_key("city"):
-                point.city = get_val("city")
-            if has_key("area"):
-                point.district = get_val("area")
-            if has_key("province_en"):
-                point.province_en = get_val("province_en")
-            if has_key("city_en"):
-                point.city_en = get_val("city_en")
-            if has_key("area_en"):
-                point.district_en = get_val("area_en")
+            # 行政区划信息：只要列存在就更新（含 *_id 印尼语列）
+            if has_key('province'):
+                point.province = get_val('province')
+            if has_key('city'):
+                point.city = get_val('city')
+            if has_key('district'):
+                point.district = get_val('district')
+            if has_key('province_en'):
+                point.province_en = get_val('province_en')
+            if has_key('city_en'):
+                point.city_en = get_val('city_en')
+            if has_key('district_en'):
+                point.district_en = get_val('district_en')
+            if has_key('province_id'):
+                point.province_id = get_val('province_id')
+            if has_key('city_id'):
+                point.city_id = get_val('city_id')
+            if has_key('district_id'):
+                point.district_id = get_val('district_id')
 
             # 道路信息：只要列存在就更新
-            if has_key("road_num"):
-                point.road_number = get_val("road_num")
-            if has_key("road_name"):
-                point.road_name = get_val("road_name")
-            if has_key("road_name_en"):
-                point.road_name_en = get_val("road_name_en")
+            if has_key('road_num'):
+                point.road_number = get_val('road_num')
+            if has_key('road_name'):
+                point.road_name = get_val('road_name')
+            if has_key('road_name_en'):
+                point.road_name_en = get_val('road_name_en')
+            if has_key('road_name_id'):
+                point.road_name_id = get_val('road_name_id')
 
             # 备注：只要列存在就更新
-            if has_key("memo"):
-                point.memo = get_val("memo")
+            if has_key('memo'):
+                point.memo = get_val('memo')
+
+            # region：行级地区（跨地区文件主通道）。列存在且值为空 → 用轨迹默认；
+            # 值非法抛错终止导入（防误输入整段错区）。
+            if has_key('region'):
+                region_val = get_val('region')
+                if region_val is None or region_val == '':
+                    point.region = track.region or 'cn'
+                elif region_val in ('cn', 'id'):
+                    point.region = region_val
+                else:
+                    raise ValueError(
+                        f"无效的地区值 '{region_val}'，可选值: cn, id")
 
             point.updated_by = user_id
 
@@ -2591,11 +2641,12 @@ class TrackService:
         # 检查是否有行政区划或道路信息，更新 track 状态
         has_area = any(
             p.province or p.city or p.district or
-            p.province_en or p.city_en or p.district_en
+            p.province_en or p.city_en or p.district_en or
+            p.province_id or p.city_id or p.district_id
             for p in points
         )
         has_road = any(
-            p.road_number or p.road_name or p.road_name_en
+            p.road_number or p.road_name or p.road_name_en or p.road_name_id
             for p in points
         )
 
@@ -3031,21 +3082,31 @@ class TrackService:
             speed = self._parse_float(row.get('speed'))
             bearing = self._parse_float(row.get('course'))  # course 即 bearing
 
-            # 解析地理信息
-            province = row.get('province', '').strip() or None
-            city = row.get('city', '').strip() or None
-            district = row.get('area', '').strip() or None  # area 对应 district
-            province_en = row.get('province_en', '').strip() or None
-            city_en = row.get('city_en', '').strip() or None
-            district_en = row.get('area_en', '').strip() or None
-            road_number = row.get('road_num', '').strip() or None
-            road_name = row.get('road_name', '').strip() or None
-            road_name_en = row.get('road_name_en', '').strip() or None
+            # 解析地理信息（别名：新格式 *_zh / *_id / *_en；旧格式无后缀=中文）
+            province = (row.get('province_zh') or row.get('province') or '').strip() or None
+            city = (row.get('city_zh') or row.get('city') or '').strip() or None
+            district = (row.get('area_zh') or row.get('area') or '').strip() or None
+            province_en = (row.get('province_en') or '').strip() or None
+            city_en = (row.get('city_en') or '').strip() or None
+            district_en = (row.get('area_en') or '').strip() or None
+            province_id = (row.get('province_id') or '').strip() or None
+            city_id = (row.get('city_id') or '').strip() or None
+            district_id = (row.get('area_id') or '').strip() or None
+            road_number = (row.get('road_num') or '').strip() or None
+            road_name = (row.get('road_name_zh') or row.get('road_name') or '').strip() or None
+            road_name_en = (row.get('road_name_en') or '').strip() or None
+            road_name_id = (row.get('road_name_id') or '').strip() or None
+            # 行级 region（可选）：非空须为 cn/id，空则用轨迹默认
+            row_region = (row.get('region') or '').strip()
+            if row_region and row_region not in ('cn', 'id'):
+                raise ValueError(f"无效的地区值 '{row_region}'，可选值: cn, id")
+            point_region = row_region or region
 
             # 检测是否有地理信息
-            if province or city or district or province_en or city_en or district_en:
+            if (province or city or district or province_en or city_en or district_en
+                    or province_id or city_id or district_id):
                 has_area_info = True
-            if road_number or road_name or road_name_en:
+            if road_number or road_name or road_name_en or road_name_id:
                 has_road_info = True
 
             # 计算距离和速度（如果未提供）
@@ -3114,9 +3175,14 @@ class TrackService:
                 'province_en': province_en,
                 'city_en': city_en,
                 'district_en': district_en,
+                'province_id': province_id,
+                'city_id': city_id,
+                'district_id': district_id,
                 'road_number': road_number,
                 'road_name': road_name,
                 'road_name_en': road_name_en,
+                'road_name_id': road_name_id,
+                'region': point_region,
             }
             points_data.append(point_data)
             prev_point_data = point_data
@@ -3177,10 +3243,14 @@ class TrackService:
                 "province_en": point_data.get("province_en"),
                 "city_en": point_data.get("city_en"),
                 "district_en": point_data.get("district_en"),
+                "province_id": point_data.get("province_id"),
+                "city_id": point_data.get("city_id"),
+                "district_id": point_data.get("district_id"),
                 "road_name": point_data.get("road_name"),
                 "road_number": point_data.get("road_number"),
                 "road_name_en": point_data.get("road_name_en"),
-                "region": region,
+                "road_name_id": point_data.get("road_name_id"),
+                "region": point_data.get("region") or region,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
