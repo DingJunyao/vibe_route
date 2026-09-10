@@ -4696,6 +4696,12 @@ git commit -m "docs(cc): 记录印尼多语言轨迹与道路图标适配要点
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+> **修正记录 3（2026-09-10，Task 14 完成后补）**：Task 14 的 13 项要点已全部落位（提交 `e6310b9`），但**主会话复核时发现计划正文里另有两处显式要求「写入 Task 14 文档」的要点被漏掉**——它们不在上面那 13 项清单内，故 implementer 未覆盖：
+> 1. 第 1965 行（Task 5 段）：「缓存键换算法使既有 cn 缓存 100% 失效（实测 88 行 0 命中）→ 旧行与 `data/road_signs/*.svg` 成为孤儿，`/road-signs/list` 会对同编号显示新旧两条；发布后调一次 `POST /road-signs/clear-cache` 即可（**写入 Task 14 的 cc 文档**）」
+> 2. 第 3920 行（Task 9 段，质量审 Recommendation 4）：「`city`/`district`/`road_name` 现在会回退到 `*_en`/`*_id`，cn 轨在「zh 某级为空、en 该级有值」时会新出现英文名节点……**需在 changelog 留一句**」
+>
+> 两条已由主会话核实代码后补入 `cc/changelog.md`（`POST /api/road-signs/clear-cache` 端点存在于 `backend/app/api/road_signs.py:214`；回退链 `fallback_text` 与 `track_service.py:1504-1506` 确为 zh → id → en）。**教训**：要点清单若只列在 Task 正文，散落在其它 Task 段落里的「写入 Task N 文档」要求极易漏收——后续写计划时应把这类跨任务要求全部汇总到 Task 末尾的清单里。
+
 ---
 
 ## 计划自审记录
