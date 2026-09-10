@@ -1,0 +1,3435 @@
+# 印尼多语言与道路图标适配实现计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 将 Vibe Route 从仅中国内地适配扩展为支持印尼：保存/导入/导出多语言轨迹信息（zh/id/en）、生成印尼六边形道路盾牌并按 region 在轨迹详情正确显示，架构上预留其他地区（region 值域可扩展）。
+
+**Architecture:** region（`cn`/`id`，可扩展）为点级权威概念：`track_points.region` 决定图标解析/显示体系，`tracks.region` 是新建点的默认值，`road_sign_cache.region` 隔离不同地区缓存。多语言文本用语言后缀平铺列承载（中文无后缀历史遗留、`*_id` 印尼语、`*_en` 英语）。编号解析器/图标生成器按 region 分派，注册点集中在后端 `svg_gen.generate_road_sign` 与 `indonesia.py`。
+
+**Tech Stack:** Python FastAPI + SQLAlchemy async + Alembic（SQLite/MySQL/PostgreSQL 三引擎 SQL 脚本）、pytest（backend/tests 新建）、Vue3 + TS + Element Plus、fontTools/svgpathtools/svgwrite。
+
+**已批准设计:** `docs/superpowers/specs/2026-09-09-indonesia-multilanguage-design.md`（commit ef9386b）。本计划逐任务落实该 spec 第 10 节实施顺序。
+
+**执行环境须知（写入时核对，防止漂移）:**
+- 直接在 master 分支执行，每个任务一次 commit，git 署名追加 `Co-Authored-By: Claude Code <noreply@anthropic.com>`。
+- 后端测试运行：`cd backend && ../.venv/Scripts/python -m pytest tests/xxx.py -v`（pytest 9.1.1 已装于根 .venv）。仓库无 pytest 配置——Task 1 建立。
+- 前端无测试 runner，验证用 `npm run build:check`（vue-tsc && vite build）。
+- 后端文件较大（track_service.py 3950 行），修改前先 Read 目标区段核对行号（本计划行号为 2026-09-09 快照，可能漂移）。
+- 所有错误消息/注释/日志沿用仓库中文风格。
+- 冒烟阶段需用户配合的事项（Clearview 字体许可确认）见 Task 3 开头，由执行协调者在 Task 3 前向用户确认。
+
+**对 spec 的已记录实现级决策（写计划时确认，勿再变更）:**
+1. 前端「名称 tooltip」用原生 `title` 属性实现（多语言文本拼接），不引入新 UI 组件——单语言无 title。
+2. 前端为印尼图标请求 `/road-signs/generate` 时不传省名文本（道路节点拿不到父级省名），色带降级为只显示等级词（`NASIONAL`/`TOL`/`PROVINSI`）；`35-024` 类内嵌省码不受影响。spec 测试条目 8.3「无省码降级」因此是常态路径。
+3. 前端 parse 分派不做单测：仓库无前端测试基础设施，`parseRoadNumber` 的 id 分支是单行直通逻辑，以 `build:check` + 双 region 浏览器冒烟替代（spec §8.10 调整，冒烟覆盖）。
+4. `fill_geocoding_info` 的 region 参数缺省 None 时回读 `track.region`——上游 create 路径与 live recording 填充调用点零改动。
+5. 区域树聚合中地区键统一取「回退链显示文本」（zh→id→en→哨兵），region 并入键；节点 `names` 记录各组创建后首见的各语言非空值（组内语言中途变化不拆组——现状也只在主文本切换时拆组，`ponytail:` 近似）。
+6. SQL 脚本沿用仓库惯例放 `backend/alembic/versions/` 与迁移同目录，命名 `016_xxx.sql.sqlite|mysql|postgresql`（spec 未指定目录）。
+
+---
+
+### Task 1: pytest 基建 + 移植 `indonesia.py`（编号解析与 38 省表，含 TOL 词边界修正）+ 单元测试
+
+**Files:**
+- Create: `backend/tests/test_indonesia_road.py`
+- Create: `backend/app/gpxutil_wrapper/indonesia.py`
+- Modify: 无（本任务不碰既有文件）
+
+移植自 `D:\code\gpxutil\src\gpxutil\models\indonesia.py`（同作者项目），修正两处：① TOL 关键词匹配由子串改为「ASCII 词边界 + 中文子串」；② 省名查表对 Nominatim 风格无前缀文本（如 `Jawa Timur`）容错（补 `Provinsi ` 等前缀再查）。
+
+- [ ] **Step 1: 建目录并创建测试文件（红）**
+
+`backend/tests/` 目录不存在，创建之。写入 `backend/tests/test_indonesia_road.py`：
+
+```python
+# -*- coding: utf-8 -*-
+"""印尼道路编号解析与省份代码表单元测试"""
+import pytest
+
+from app.gpxutil_wrapper.indonesia import (
+    INDONESIA_PROVINCE_CODE_MAP,
+    IndonesiaRoadLevel,
+    get_indonesia_province_code,
+    parse_indonesia_road_num,
+)
+
+
+class TestParseIndonesiaRoadNum:
+    """编号解析（spec §8 用例 1）"""
+
+    def test_nasional(self):
+        info = parse_indonesia_road_num('3', None, [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.NASIONAL
+        assert info.code == '3'
+
+    def test_nasional_two_digits(self):
+        info = parse_indonesia_road_num('15', None, [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.NASIONAL
+
+    def test_tol_by_chinese_keyword(self):
+        info = parse_indonesia_road_num('8', ['泗水收费高速'], [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.TOL
+
+    def test_tol_by_english_keyword_case_insensitive(self):
+        info = parse_indonesia_road_num('8', ['jalan tol'], [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.TOL
+
+    def test_tol_keyword_upper(self):
+        info = parse_indonesia_road_num('8', None, [], ['收费', 'Tol'])
+        assert info is None or info.level == IndonesiaRoadLevel.NASIONAL  # 无路名不判 TOL
+
+    def test_tol_word_boundary_not_substring(self):
+        # 词边界：Toleransi 不应误判为 TOL
+        info = parse_indonesia_road_num('8', ['Jalan Toleransi'], [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.NASIONAL
+
+    def test_tol_from_road_name_id(self):
+        # 判定文本取 road_name 与 road_name_id 任一命中（road_names 序列）
+        info = parse_indonesia_road_num(
+            '8', ['', 'Jalan Tol Jagorawi'], [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.TOL
+
+    def test_provinsi_three_digits(self):
+        info = parse_indonesia_road_num('023', None, [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.PROVINSI
+        assert info.code == '023'
+        assert info.province_code is None
+
+    def test_provinsi_with_embedded_code(self):
+        info = parse_indonesia_road_num('35-024', None, [], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.PROVINSI
+        assert info.code == '024'
+        assert info.province_code == '35'
+
+    def test_embedded_code_not_in_table_falls_back(self):
+        # 99 不是合法省码：回退到省名文本查找
+        info = parse_indonesia_road_num(
+            '99-024', None, ['Provinsi Jawa Timur', '东爪哇省'], ['收费', 'Tol'])
+        assert info is not None and info.level == IndonesiaRoadLevel.PROVINSI
+        assert info.province_code == '35'
+
+    def test_province_from_chinese_text(self):
+        info = parse_indonesia_road_num('024', None, ['东爪哇省'], ['收费', 'Tol'])
+        assert info is not None and info.province_code == '35'
+
+    def test_province_from_prefixless_text(self):
+        # Nominatim 风格无前缀省名也要能查到
+        info = parse_indonesia_road_num('024', None, ['Jawa Timur'], ['收费', 'Tol'])
+        assert info is not None and info.province_code == '35'
+
+    def test_empty_returns_none(self):
+        assert parse_indonesia_road_num('', None, [], ['收费', 'Tol']) is None
+        assert parse_indonesia_road_num(None, None, [], ['收费', 'Tol']) is None
+
+    def test_garbage_returns_none(self):
+        assert parse_indonesia_road_num('abc', None, [], ['收费', 'Tol']) is None
+        assert parse_indonesia_road_num('35-ab', None, [], ['收费', 'Tol']) is None
+        assert parse_indonesia_road_num('-024', None, [], ['收费', 'Tol']) is None
+        # 全角数字视为无法识别
+        assert parse_indonesia_road_num('３', None, [], ['收费', 'Tol']) is None
+        # 过长编号
+        assert parse_indonesia_road_num('1234', None, [], ['收费', 'Tol']) is None
+
+
+class TestProvinceCodeMap:
+    """38 省代码表完整性（spec §8 用例 2）"""
+
+    def test_full_map_size(self):
+        # 38 个省份 × 双键 = 76 个条目
+        assert len(INDONESIA_PROVINCE_CODE_MAP) == 76
+
+    def test_no_duplicate_keys(self):
+        keys = list(INDONESIA_PROVINCE_CODE_MAP.keys())
+        assert len(keys) == len(set(keys))
+
+    def test_all_values_two_digits(self):
+        for code in INDONESIA_PROVINCE_CODE_MAP.values():
+            assert code.isdigit() and len(code) == 2, code
+
+    def test_roundtrip_by_code(self):
+        # 每个省代码同时有印尼语名与中文名两个键
+        seen = {}
+        for name, code in INDONESIA_PROVINCE_CODE_MAP.items():
+            seen.setdefault(code, []).append(name)
+        for code, names in seen.items():
+            assert len(names) == 2, code
+            id_name = names[0] if names[0].isascii() else names[1]
+            zh_name = names[1] if names[0].isascii() else names[0]
+            # 中文名含中文，印尼语名全 ASCII
+            assert id_name.isascii() and not zh_name.isascii()
+
+    def test_get_code_by_name(self):
+        assert get_indonesia_province_code('Provinsi Jawa Timur') == '35'
+        assert get_indonesia_province_code('东爪哇省') == '35'
+        assert get_indonesia_province_code('Jawa Timur') == '35'  # 无前缀容错
+        assert get_indonesia_province_code(None) is None
+        assert get_indonesia_province_code('不存在的地方') is None
+```
+
+- [ ] **Step 2: 运行测试确认失败**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_indonesia_road.py -q`
+Expected: 报 `ModuleNotFoundError: No module named 'app.gpxutil_wrapper.indonesia'`（模块不存在即红）。
+
+- [ ] **Step 3: 创建 `backend/app/gpxutil_wrapper/indonesia.py`**
+
+```python
+# -*- coding: utf-8 -*-
+"""地区常量与印尼道路编号/省份代码逻辑。
+
+移植自 gpxutil 项目 src/gpxutil/models/indonesia.py（同作者），两处修正：
+1. TOL 关键词匹配：ASCII 词使用 \\b 词边界（'Tol' 不误伤 'Toleransi'），中文等非 ASCII 词用子串；
+2. 省名查表对无前缀文本容错（Nominatim 返回的 'Jawa Timur' 可补 'Provinsi ' 前缀命中）。
+
+region 值域（'cn' | 'id'）常量暂居本文件；后续新增地区时如跨模块泛用，
+再抽独立常量模块（ponytail: 现阶段仅本文件与两处判断点引用）。
+"""
+import re
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import Enum, unique
+
+REGION_CN = 'cn'
+REGION_ID = 'id'
+REGION_VALUES = (REGION_CN, REGION_ID)
+
+# 印尼省份代码（ISO 3166-2:ID 两位代码）：印尼语省名（CSV province_id 字段）与中文省名双键。
+# 键顺序固定为 [印尼语名, 中文名] 成对出现，_PROVINCE_ZH_BY_CODE 依赖该约定推导。
+INDONESIA_PROVINCE_CODE_MAP = {
+    'Provinsi Aceh': '11', '亚齐特别行政区': '11',
+    'Provinsi Sumatera Utara': '12', '北苏门答腊省': '12',
+    'Provinsi Sumatera Barat': '13', '西苏门答腊省': '13',
+    'Provinsi Riau': '14', '廖内省': '14',
+    'Provinsi Jambi': '15', '占碑省': '15',
+    'Provinsi Sumatera Selatan': '16', '南苏门答腊省': '16',
+    'Provinsi Bengkulu': '17', '明古鲁省': '17',
+    'Provinsi Lampung': '18', '楠榜省': '18',
+    'Provinsi Kepulauan Bangka Belitung': '19', '邦加勿里洞群岛省': '19',
+    'Provinsi Kepulauan Riau': '21', '廖内群岛省': '21',
+    'Daerah Khusus Ibukota Jakarta': '31', '雅加达首都特区': '31',
+    'Provinsi Jawa Barat': '32', '西爪哇省': '32',
+    'Provinsi Jawa Tengah': '33', '中爪哇省': '33',
+    'Daerah Istimewa Yogyakarta': '34', '日惹特区': '34',
+    'Provinsi Jawa Timur': '35', '东爪哇省': '35',
+    'Provinsi Banten': '36', '万丹省': '36',
+    'Provinsi Bali': '51', '巴厘省': '51',
+    'Provinsi Nusa Tenggara Barat': '52', '西努沙登加拉省': '52',
+    'Provinsi Nusa Tenggara Timur': '53', '东努沙登加拉省': '53',
+    'Provinsi Kalimantan Barat': '61', '西加里曼丹省': '61',
+    'Provinsi Kalimantan Tengah': '62', '中加里曼丹省': '62',
+    'Provinsi Kalimantan Selatan': '63', '南加里曼丹省': '63',
+    'Provinsi Kalimantan Timur': '64', '东加里曼丹省': '64',
+    'Provinsi Kalimantan Utara': '65', '北加里曼丹省': '65',
+    'Provinsi Sulawesi Utara': '71', '北苏拉威西省': '71',
+    'Provinsi Sulawesi Tengah': '72', '中苏拉威西省': '72',
+    'Provinsi Sulawesi Selatan': '73', '南苏拉威西省': '73',
+    'Provinsi Sulawesi Tenggara': '74', '东南苏拉威西省': '74',
+    'Provinsi Gorontalo': '75', '哥伦打洛省': '75',
+    'Provinsi Sulawesi Barat': '76', '西苏拉威西省': '76',
+    'Provinsi Maluku': '81', '马鲁古省': '81',
+    'Provinsi Maluku Utara': '82', '北马鲁古省': '82',
+    'Provinsi Papua': '91', '巴布亚省': '91',
+    'Provinsi Papua Barat': '92', '西巴布亚省': '92',
+    'Provinsi Papua Selatan': '93', '南巴布亚省': '93',
+    'Provinsi Papua Tengah': '94', '中巴布亚省': '94',
+    'Provinsi Papua Pegunungan': '95', '高地巴布亚省': '95',
+    'Provinsi Papua Barat Daya': '96', '西南巴布亚省': '96',
+}
+
+# 印尼省份常见前缀（查表容错用）。'Jawa Timur' → 'Provinsi Jawa Timur'
+_PROVINCE_NAME_PREFIXES = ('Provinsi ', 'Daerah Istimewa ', 'Daerah Khusus Ibukota ')
+
+# 由双键表推导：省代码 → 中文省名（fill geocoding 中文回填用）
+_PROVINCE_ZH_BY_CODE = {
+    code: zh for name, code in INDONESIA_PROVINCE_CODE_MAP.items()
+    if not name.isascii() for zh in (name,)
+}
+# 省代码 → 印尼语省名（备查）
+_PROVINCE_ID_BY_CODE = {
+    code: id_ for name, code in INDONESIA_PROVINCE_CODE_MAP.items()
+    if name.isascii() for id_ in (name,)
+}
+
+
+def get_indonesia_province_code(province_text: str | None) -> str | None:
+    """按省名文本查省代码：支持印尼语全名、中文名与省略前缀的印尼语名（如 'Jawa Timur'）。
+
+    查不到返回 None。
+    """
+    if not province_text:
+        return None
+    text = province_text.strip()
+    if text in INDONESIA_PROVINCE_CODE_MAP:
+        return INDONESIA_PROVINCE_CODE_MAP[text]
+    # 无前缀容错：补常见前缀再查
+    for prefix in _PROVINCE_NAME_PREFIXES:
+        key = prefix + text
+        if key in INDONESIA_PROVINCE_CODE_MAP:
+            return INDONESIA_PROVINCE_CODE_MAP[key]
+    return None
+
+
+def get_indonesia_province_zh(province_id_text: str | None) -> str | None:
+    """按印尼语省名文本回查中文省名（fill geocoding 中文尽力而为用）。查不到返回 None。"""
+    code = get_indonesia_province_code(province_id_text)
+    return _PROVINCE_ZH_BY_CODE.get(code) if code else None
+
+
+@unique
+class IndonesiaRoadLevel(Enum):
+    """印尼道路等级"""
+    NASIONAL = 1
+    TOL = 2
+    PROVINSI = 3
+
+
+@dataclass
+class IndonesiaRoadInfo:
+    """解析后的印尼道路信息"""
+    level: IndonesiaRoadLevel
+    code: str              # 纯编号，盾牌大字显示用（如 '024'）
+    province_code: str | None  # 省份代码，色带显示用（如 '35'）
+
+
+def _keyword_in_text(keyword: str, text_lower: str) -> bool:
+    """关键词匹配：ASCII 字母数字词用词边界（\\btol\\b 不误伤 Toleransi），其余子串。"""
+    if keyword.isascii() and keyword.isalnum():
+        return re.search(rf'\b{re.escape(keyword.lower())}\b', text_lower) is not None
+    return keyword.lower() in text_lower
+
+
+def parse_indonesia_road_num(
+        road_num: str | None,
+        road_names: Sequence[str | None],
+        province_texts: Sequence[str | None],
+        tol_keywords: list[str],
+) -> IndonesiaRoadInfo | None:
+    """
+    解析印尼道路编号（spec 第 5 节规则）。
+
+    :param road_num: CSV road_num 字段，如 '3'、'023'、'35-024'；空则无盾牌
+    :param road_names: 道路名文本序列（如 [road_name, road_name_id]），任一含 TOL 关键词即判 TOL
+    :param province_texts: 候选省份文本（印尼语名、中文名，可为 None），按顺序查代码
+    :param tol_keywords: TOL 判定关键词（默认 ['收费', 'Tol']）
+    :return: 解析结果；无法识别返回 None
+    """
+    if not road_num:
+        return None
+    road_num = road_num.strip()
+
+    province_code = None
+    if '-' in road_num:
+        # '35-024'：连字符前为省代码；须命中省代码表才作为省码，
+        # 否则（含 'abc-024'、'99-024' 等）回退到下方 province_texts 查找；
+        # 空前缀（'-024'）无内嵌省码可查，视为无法识别的乱串
+        embedded, code = road_num.split('-', 1)
+        embedded, code = embedded.strip(), code.strip()
+        if not embedded:
+            return None
+        if embedded in INDONESIA_PROVINCE_CODE_MAP.values():
+            province_code = embedded
+    else:
+        code = road_num.strip()
+
+    # 仅接受 ASCII 数字，'３'（全角）等 Unicode 数字视为无法识别
+    if not (code.isascii() and code.isdigit()):
+        return None
+
+    if len(code) == 3:
+        level = IndonesiaRoadLevel.PROVINSI
+    elif len(code) in (1, 2):
+        # road_names 可为 None（无路名），此时无关键词可判，不判 TOL
+        names_lower = ' '.join(n for n in (road_names or []) if n).lower()
+        if any(_keyword_in_text(kw, names_lower) for kw in tol_keywords):
+            level = IndonesiaRoadLevel.TOL
+        else:
+            level = IndonesiaRoadLevel.NASIONAL
+    else:
+        return None
+
+    if province_code is None:
+        for text in province_texts:
+            province_code = get_indonesia_province_code(text)
+            if province_code:
+                break
+
+    return IndonesiaRoadInfo(level=level, code=code, province_code=province_code)
+```
+
+- [ ] **Step 4: 运行测试确认通过**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_indonesia_road.py -q`
+Expected: 全部通过（约 20 passed）。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/tests/test_indonesia_road.py backend/app/gpxutil_wrapper/indonesia.py
+git commit -m "feat(indonesia): 移植印尼道路编号解析与38省代码表，修正TOL词边界匹配
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 2: 数据模型 + alembic 迁移 016 + 三引擎 SQL 脚本
+
+**Files:**
+- Modify: `backend/app/models/track.py`（Track、TrackPoint）
+- Modify: `backend/app/models/road_sign.py`
+- Create: `backend/alembic/versions/016_add_multilanguage_region.py`
+- Create: `backend/alembic/versions/016_add_multilanguage_region.sql.sqlite`
+- Create: `backend/alembic/versions/016_add_multilanguage_region.sql.mysql`
+- Create: `backend/alembic/versions/016_add_multilanguage_region.sql.postgresql`
+
+新增列清单（spec §2）：
+| 表 | 列 | 定义 |
+|---|---|---|
+| tracks | region | String(10) NOT NULL default 'cn' |
+| track_points | region | String(10) NOT NULL default 'cn' |
+| track_points | province_id / city_id / district_id | String(100) NULL（对齐 *_en 尺寸） |
+| track_points | road_name_id | String(200) NULL |
+| road_sign_cache | region | String(10) NOT NULL default 'cn' |
+
+- [ ] **Step 1: 修改 `backend/app/models/track.py`**
+
+在 Track 的 `original_crs` 行（L25）后插入：
+
+```python
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
+```
+
+在 TrackPoint 的 `road_name_en` 行（L94）后插入：
+
+```python
+
+    # 多语言（印尼语，*_en 为英语历史惯例；中文无后缀）
+    province_id = Column(String(100), nullable=True)
+    city_id = Column(String(100), nullable=True)
+    district_id = Column(String(100), nullable=True)
+    road_name_id = Column(String(200), nullable=True)
+
+    # 地区（图标/显示体系的点级权威）
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
+```
+
+- [ ] **Step 2: 修改 `backend/app/models/road_sign.py`**
+
+先 Read 该文件（22 行）。在合适的字段后加：
+
+```python
+    region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")
+```
+
+（字段名以文件内既有字段风格为准，保持与 Track/TrackPoint 注释一致。）
+
+- [ ] **Step 3: 创建 alembic 迁移 `backend/alembic/versions/016_add_multilanguage_region.py`**
+
+head 当前为 `eac60779d33a`（`revision = 'eac60779d33a'`、`down_revision = '015_add_overlay_templates'`），先 Read 该文件确认格式与最新 revision id，若与下述不同以文件实际为准（revision 是新十六进制串或描述性串均可，须全局唯一）。
+
+```python
+"""add multilanguage and region columns for Indonesia support
+
+Revision ID: 016_add_multilanguage_region
+Revises: eac60779d33a
+Create Date: 2026-09-09
+
+兼容 SQLite / MySQL / PostgreSQL。
+tracks/track_points 增加 region 默认 'cn'；track_points 增加 *_id 印尼语列；
+road_sign_cache 增加 region。
+"""
+from alembic import op
+import sqlalchemy as sa
+
+
+# revision identifiers, used by Alembic.
+revision = '016_add_multilanguage_region'
+down_revision = 'eac60779d33a'
+branch_labels = None
+depends_on = None
+
+
+def _add_column_if_missing(table: str, column_name: str, column: sa.Column) -> None:
+    """检查列不存在再添加（数据库可能已手动建过）"""
+    from sqlalchemy import inspect
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    columns = {c['name'] for c in inspector.get_columns(table)}
+    if column_name not in columns:
+        op.add_column(table, column)
+
+
+def upgrade():
+    """添加地区与多语言列"""
+    # tracks.region
+    _add_column_if_missing(
+        'tracks', 'region',
+        sa.Column('region', sa.String(10), nullable=False,
+                  server_default='cn', comment='地区: cn=中国, id=印尼')
+    )
+    # track_points.region + *_id
+    _add_column_if_missing(
+        'track_points', 'region',
+        sa.Column('region', sa.String(10), nullable=False,
+                  server_default='cn', comment='地区: cn=中国, id=印尼')
+    )
+    for col in ('province_id', 'city_id', 'district_id'):
+        _add_column_if_missing(
+            'track_points', col,
+            sa.Column(col, sa.String(100), nullable=True)
+        )
+    _add_column_if_missing(
+        'track_points', 'road_name_id',
+        sa.Column('road_name_id', sa.String(200), nullable=True)
+    )
+    # road_sign_cache.region
+    _add_column_if_missing(
+        'road_sign_cache', 'region',
+        sa.Column('region', sa.String(10), nullable=False,
+                  server_default='cn', comment='地区: cn=中国, id=印尼')
+    )
+
+
+def downgrade():
+    """回滚：删除新增列（列存在才删）"""
+    from sqlalchemy import inspect
+    bind = op.get_bind()
+    inspector = inspect(bind)
+
+    def drop_if_exists(table: str, column_name: str) -> None:
+        columns = {c['name'] for c in inspector.get_columns(table)}
+        if column_name in columns:
+            op.drop_column(table, column_name)
+
+    for col in ('road_name_id', 'province_id', 'city_id', 'district_id'):
+        drop_if_exists('track_points', col)
+    drop_if_exists('track_points', 'region')
+    drop_if_exists('tracks', 'region')
+    drop_if_exists('road_sign_cache', 'region')
+```
+
+注意：down_revision 先 Read `backend/alembic/versions/eac60779d33a_add_animation_export_task_table.py` 头部确认 `revision` 的确切值，若不同则以实际为准并同步更新上面代码。
+
+- [ ] **Step 4: 创建三份 SQL 脚本**
+
+`backend/alembic/versions/016_add_multilanguage_region.sql.sqlite`：
+
+```sql
+-- ============================================
+-- 为印尼多语言支持添加 region 与 *_id 列（SQLite）
+-- ============================================
+-- 执行方式: sqlite3 vibe_route.db < 016_add_multilanguage_region.sql.sqlite
+
+ALTER TABLE tracks ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+ALTER TABLE track_points ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+ALTER TABLE track_points ADD COLUMN province_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN city_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN district_id VARCHAR(100);
+ALTER TABLE track_points ADD COLUMN road_name_id VARCHAR(200);
+
+ALTER TABLE road_sign_cache ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+-- 验证
+SELECT name FROM pragma_table_info('tracks') WHERE name = 'region';
+SELECT name FROM pragma_table_info('track_points') WHERE name IN ('region','province_id','city_id','district_id','road_name_id');
+SELECT name FROM pragma_table_info('road_sign_cache') WHERE name = 'region';
+```
+
+`backend/alembic/versions/016_add_multilanguage_region.sql.mysql`：
+
+```sql
+-- ============================================
+-- 为印尼多语言支持添加 region 与 *_id 列（MySQL）
+-- ============================================
+-- 执行方式: mysql -u vibe_route -p vibe_route < 016_add_multilanguage_region.sql.mysql
+
+ALTER TABLE tracks
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼';
+
+ALTER TABLE track_points
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼',
+    ADD COLUMN province_id VARCHAR(100) NULL,
+    ADD COLUMN city_id VARCHAR(100) NULL,
+    ADD COLUMN district_id VARCHAR(100) NULL,
+    ADD COLUMN road_name_id VARCHAR(200) NULL;
+
+ALTER TABLE road_sign_cache
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼';
+
+-- 验证
+SHOW COLUMNS FROM tracks LIKE 'region';
+SHOW COLUMNS FROM track_points LIKE '%_id';
+SHOW COLUMNS FROM track_points LIKE 'region';
+SHOW COLUMNS FROM road_sign_cache LIKE 'region';
+```
+
+`backend/alembic/versions/016_add_multilanguage_region.sql.postgresql`：
+
+```sql
+-- ============================================
+-- 为印尼多语言支持添加 region 与 *_id 列（PostgreSQL）
+-- ============================================
+-- 执行方式: psql -U vibe_route -d vibe_route -f 016_add_multilanguage_region.sql.postgresql
+
+ALTER TABLE tracks
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+ALTER TABLE track_points
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn',
+    ADD COLUMN province_id VARCHAR(100),
+    ADD COLUMN city_id VARCHAR(100),
+    ADD COLUMN district_id VARCHAR(100),
+    ADD COLUMN road_name_id VARCHAR(200);
+
+ALTER TABLE road_sign_cache
+    ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
+
+-- 验证
+SELECT column_name, data_type, column_default
+FROM information_schema.columns
+WHERE table_name = 'tracks' AND column_name = 'region';
+
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'track_points' AND column_name IN
+    ('region','province_id','city_id','district_id','road_name_id')
+ORDER BY column_name;
+
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'road_sign_cache' AND column_name = 'region';
+```
+
+- [ ] **Step 5: 验证迁移可执行（临时 sqlite）**
+
+对开发库不做任何改动（CLAUDE.md：不经允许不动数据库）。用临时 sqlite 验证 016 迁移可执行。
+
+执行注意（Task 2 实现时实测，已回写）：
+- **`DATABASE_URL` env 无效**：`backend/app/core/config.py` 中它是 property（pydantic-settings 忽略该 env），实际由 `backend/.env` 的 `DATABASE_TYPE` / `SQLITE_DB_PATH` 决定（相对 backend/ 解析）。指向临时库必须设 **`SQLITE_DB_PATH`**。
+- **空库跑完整迁移链会失败**（001 假定基础表已存在），仓库惯例为 create_all 建表 + 手工 stamp `alembic_version`（见 README）。故验证方案：临时库 create_all → drop 新列还原 pre-016 形态 → stamp 到 `eac60779d33a` → `upgrade head`（016 实际执行 ALTER）→ `downgrade -1`（对称删列）→ 再 upgrade 成功。
+- 若报 `alembic.ini` 缺失：该文件被 gitignore 且不随仓库提供，需先按标准模板重建一份（gitignored，不入库）。
+
+Run:
+```bash
+cd backend
+export SQLITE_DB_PATH=data/_migrate_check_016.db
+../.venv/Scripts/python - <<'EOF'
+import asyncio
+from sqlalchemy import text
+from app.core.database import engine, Base
+import app.models  # noqa: F401 确保模型注册
+
+async def main():
+    async with engine.begin() as conn:
+        await conn.execute(text('DROP TABLE IF EXISTS alembic_version'))
+        await conn.run_sync(Base.metadata.drop_all)
+        await conn.run_sync(Base.metadata.create_all)
+        # 还原 pre-016 形态（drop 新列；含存量数据行的回填语义可自行插入一行验证 region='cn'）
+        for col in ('region', 'province_id', 'city_id', 'district_id', 'road_name_id'):
+            await conn.execute(text(f'ALTER TABLE track_points DROP COLUMN {col}'))
+        for col in ('region',):
+            await conn.execute(text(f'ALTER TABLE tracks DROP COLUMN {col}'))
+            await conn.execute(text(f'ALTER TABLE road_sign_cache DROP COLUMN {col}'))
+asyncio.run(main())
+EOF
+# stamp 会自行创建 alembic_version 表并写入版本（空库直接 upgrade 全链会失败：
+# 001 假定基础表已由 create_all 建立，仓库惯例如此）
+../.venv/Scripts/python -m alembic stamp eac60779d33a
+../.venv/Scripts/python -m alembic upgrade head
+../.venv/Scripts/python -m alembic downgrade -1
+../.venv/Scripts/python -m alembic upgrade head
+rm -f data/_migrate_check_016.db
+```
+Expected: 三轮命令均无报错；迁移链从 016 前形态执行到 016 无错、降级删列成功、再升级成功（若报错多因 down_revision 写错，对照 Step 3 修正后重跑）。验证完删除临时 db，确认 `git status` 无 db 文件变更。
+
+- [ ] **Step 6: Commit**
+
+注意：`.sql.sqlite` 文件名被 `.gitignore` 的 `*.sqlite` 规则命中，`git add` 需带 `-f`（其余文件正常 add 即可）。
+
+```bash
+git add backend/app/models/track.py backend/app/models/road_sign.py \
+  backend/alembic/versions/016_add_multilanguage_region.py \
+  backend/alembic/versions/016_add_multilanguage_region.sql.mysql \
+  backend/alembic/versions/016_add_multilanguage_region.sql.postgresql
+git add -f backend/alembic/versions/016_add_multilanguage_region.sql.sqlite
+git commit -m "feat(db): tracks/track_points/road_sign_cache 增加 region 与多语言列（迁移016）
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 3: 资源拷贝（模板/字体）+ 配置默认值 + schemas 字段（config/track/road_sign）
+
+> **前置确认（执行协调者在执行本任务前向用户确认，得到答复后再动手）：**
+> spec §5 提示 ClearviewHwy1W/2W.ttf 为商业字体。若 gpxutil 中该字体许可无法确认，选项：(a) 照常拷贝使用（个人项目 + 同源项目，风险自担）；(b) 换开源字体（如 SourceSans3，视觉效果有差异）。默认推荐 (a)。用户答复后按答复执行，本任务 Step 1 含拷贝。
+
+**Files:**
+- Create(copy): `backend/data/templates/id_sheild.svg`（来自 `D:\code\gpxutil\asset\template\id_sheild.svg`）
+- Create(copy): `backend/data/fonts/ClearviewHwy1W.ttf`、`backend/data/fonts/ClearviewHwy2W.ttf`（来自 `D:\code\gpxutil\asset\font\`）
+- Modify: `backend/app/services/config_service.py`
+- Modify: `backend/app/schemas/config.py`
+- Modify: `backend/app/api/admin.py`（config 构造点）
+- Modify: `backend/app/schemas/track.py`
+- Modify: `backend/app/api/auth.py`（PublicConfigResponse 构造点——无新增键则不动，见 Step 4）
+- Test: 无（配置默认值与 schemas 由 Task 5 后集成测试覆盖）
+
+- [ ] **Step 1: 拷贝资源并检查**
+
+Run:
+```bash
+cp "D:/code/gpxutil/asset/template/id_sheild.svg" backend/data/templates/id_sheild.svg
+cp "D:/code/gpxutil/asset/font/ClearviewHwy1W.ttf" backend/data/fonts/ClearviewHwy1W.ttf
+cp "D:/code/gpxutil/asset/font/ClearviewHwy2W.ttf" backend/data/fonts/ClearviewHwy2W.ttf
+ls -la backend/data/templates/id_sheild.svg backend/data/fonts/ClearviewHwy*.ttf
+```
+Expected: 3 个文件存在且非空（id_sheild.svg 为含 `id="back"` 组的 SVG；两个 ttf 约数百 KB）。
+
+- [ ] **Step 2: `config_service.py` 增加默认配置与深度合并**
+
+在 `DEFAULT_CONFIGS` 的 `"allow_server_poster": True,` 行（L28）之后加：
+
+```python
+        "indonesia_road_sign": {
+            "template": "id_sheild.svg",      # backend/data/templates/ 下模板文件名
+            "tol_keywords": ["收费", "Tol"],   # TOL 判定：ASCII 词边界 + 中文子串（见 indonesia.py）
+            "font_upper": "ClearviewHwy1W.ttf",  # 色带小字（backend/data/fonts/ 下）
+            "font_lower": "ClearviewHwy2W.ttf",  # 白色区大字
+        },
+```
+
+在 `get_all_configs` 的 `elif config.key == 'geocoding_config' and isinstance(parsed_value, dict):` 分支之后（对应 else 分支之前），加第三个特判分支（与 map_layers 的深度合并模式相同，保证后端后续新增默认子键不会因 DB 旧值丢失）：
+
+```python
+                    elif config.key == 'indonesia_road_sign' and isinstance(parsed_value, dict):
+                        # 与默认配置深度合并，新增默认键不因 DB 旧值丢失
+                        for key, value in self.DEFAULT_CONFIGS['indonesia_road_sign'].items():
+                            if key not in parsed_value:
+                                parsed_value[key] = value
+                        configs[config.key] = parsed_value
+```
+
+- [ ] **Step 3: `schemas/config.py` 增加 schema 字段**
+
+在 `FontConfig` 定义后加：
+
+```python
+class IndonesiaRoadSignConfig(BaseModel):
+    """印尼道路盾牌配置 schema"""
+    template: Optional[str] = Field(None, description="盾牌模板文件名（data/templates/ 下）")
+    tol_keywords: Optional[List[str]] = Field(None, description="TOL 判定关键词（ASCII 词边界 + 中文子串）")
+    font_upper: Optional[str] = Field(None, description="色带小字字体文件名（data/fonts/ 下）")
+    font_lower: Optional[str] = Field(None, description="白色区大字字体文件名（data/fonts/ 下）")
+```
+
+`ConfigResponse` 加字段（font_config 行后）：
+
+```python
+    indonesia_road_sign: IndonesiaRoadSignConfig = Field(default_factory=IndonesiaRoadSignConfig)
+```
+
+`ConfigUpdate` 加字段：
+
+```python
+    indonesia_road_sign: Optional[IndonesiaRoadSignConfig] = None
+```
+
+PublicConfigResponse **不加**（道路盾牌生成在服务端，公开配置无需下发）。
+
+- [ ] **Step 4: `admin.py` 两处 config 构造点补键**
+
+`backend/app/api/admin.py` 的 GET /config 与 PUT /config 均手工构造 `ConfigResponse`。GET（约 L311-330 区域）在 `allow_server_poster=configs.get("allow_server_poster", True),` 后加：
+
+```python
+        indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign", {}))
+        if configs.get("indonesia_road_sign") else IndonesiaRoadSignConfig(),
+```
+
+同时把 import 改成：`from app.schemas.config import ConfigResponse, ConfigUpdate, FontConfig, IndonesiaRoadSignConfig`。
+
+PUT 分支（约 L334-362）同样在 `allow_server_poster=...` 后加相同两行（configs 为 update_config 返回值，已含默认合并，可直接 `configs.get("indonesia_road_sign", {})` 且必非空——两处可统一写为一行形式：
+
+```python
+        indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
+```
+
+（读文件后二选一，保持文件内两处一致即可。）
+
+- [ ] **Step 5: `schemas/track.py` 补字段**
+
+`TrackResponse`（share_token 前任意位置）加：
+
+```python
+    region: str = 'cn'  # 地区: cn=中国, id=印尼（新建点默认值）
+```
+
+`UnifiedTrackResponse` 同步加同字段同默认。
+
+`TrackUpdate` 加：
+
+```python
+    region: Optional[str] = Field(None, description="地区: cn/id")
+```
+
+`TrackPointResponse`（road_name_en 后）加：
+
+```python
+    province_id: Optional[str] = None
+    city_id: Optional[str] = None
+    district_id: Optional[str] = None
+    road_name_id: Optional[str] = None
+    region: str = 'cn'
+```
+
+`RegionNode` 加：
+
+```python
+    region: str = 'cn'  # 该组所属地区（同文本不同地区分组建树）
+    names: Optional[dict] = None  # 各语言代表文本 {zh, id, en}，非空才出现
+```
+
+- [ ] **Step 6: 语法检查**
+
+Run: `cd backend && ../.venv/Scripts/python -c "from app.schemas.config import ConfigResponse, ConfigUpdate, IndonesiaRoadSignConfig; from app.schemas.track import TrackResponse, TrackUpdate, TrackPointResponse, RegionNode; import app.api.admin; import app.services.config_service; print('ok')"`
+Expected: 打印 ok（无 ImportError/语法错误）。
+
+- [ ] **Step 7: Commit**
+
+字体**不入库**（Task 3 实测决策，已回写）：`.gitignore` 的 `backend/data/fonts/*`（注释 "Road sign fonts (user provided)"）是既有策略，现有 jtbz 系字体同样未跟踪；且 `.dockerignore` 含 `backend/data`，镜像不携带字体。故字体由使用者手工放置到 `backend/data/fonts/`（Step 1 的 cp 即为本地放置）。模板 svg 走 templates 目录正常入库。
+
+```bash
+git add backend/data/templates/id_sheild.svg
+git add backend/app/services/config_service.py backend/app/schemas/config.py backend/app/api/admin.py backend/app/schemas/track.py
+git commit -m "feat(config/schema): 拷贝印尼盾牌模板与Clearview字体，配置默认值与多语言schema字段
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4: svg_gen 印尼盾牌生成器 + 单元测试
+
+> `generate_road_sign` 的 region 参数与分派在 **Task 5** 完成（本任务只新增印尼盾牌生成器与 helper，cn 既有函数零改动）。
+
+**Files:**
+- Modify: `backend/app/gpxutil_wrapper/svg_gen.py`（735 行）
+- Create: `backend/tests/test_indonesia_shield.py`
+
+移植 `D:\code\gpxutil\src\gpxutil\utils\svg_gen.py` L411-616 的印尼盾牌生成（含居中排版 helper），对齐 vibe 风格：函数返回字符串（tostring 后清理 width/height）、错误消息中文、常量内置。
+
+- [ ] **Step 1: 创建测试文件（红）**
+
+`backend/tests/test_indonesia_shield.py`：
+
+```python
+# -*- coding: utf-8 -*-
+"""印尼六边形盾牌 SVG 生成单元测试（spec §8 用例 3）"""
+import os
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pytest
+
+from app.gpxutil_wrapper.indonesia import IndonesiaRoadLevel
+from app.gpxutil_wrapper.svg_gen import generate_indonesia_shield
+
+# 颜色/字号断言用 spec 字面值而非实现常量，避免自比对（改了实现常量测试仍须失败）
+BANNER_RED = '#B5273C'       # spec §5：对齐 gpxutil 印尼配置
+PROVINCE_BLUE = '#003E86'    # spec §5：PROVINSI 蓝
+BANNER_TEXT_HEIGHT = 45      # spec §5：色带小字
+NUMBER_TEXT_HEIGHT = 135     # spec §5：白色区大字
+
+TEMPLATE = 'data/templates/id_sheild.svg'   # pytest cwd = backend/（执行修正：相对 backend 运行目录）
+UPPER_FONT = 'data/fonts/ClearviewHwy1W.ttf'
+LOWER_FONT = 'data/fonts/ClearviewHwy2W.ttf'
+
+
+@pytest.fixture
+def workdir():
+    """临时目录（供合成模板/输出文件用）
+
+    不用 pytest 的 `tmp_path`：它依赖 basetemp 根目录 `%TEMP%/pytest-of-<user>`，
+    该目录一旦残留且当前令牌不可访问（实测本机 `%TEMP%/pytest-of-Administrator`
+    即如此，非提权无法接管/删除），所有 `tmp_path` 用例会在 fixture 阶段
+    PermissionError。`tempfile.TemporaryDirectory()` 直接建随机子目录，绕开该根目录。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        yield Path(d)
+
+
+@pytest.fixture(scope='module')
+def shield_config():
+    """模板与字体路径（相对 backend 运行目录）"""
+    base = Path(os.getcwd())
+    assert (base / TEMPLATE).exists(), '模板缺失，先执行 Task 3 资源拷贝'
+    assert (base / UPPER_FONT).exists(), '字体缺失，先执行 Task 3 资源拷贝'
+    assert (base / LOWER_FONT).exists(), '字体缺失，先执行 Task 3 资源拷贝'
+    return {
+        'template': str(base / TEMPLATE),
+        'upper': str(base / UPPER_FONT),
+        'lower': str(base / LOWER_FONT),
+    }
+
+
+def _parse(svg: str):
+    return ET.fromstring(svg)
+
+
+def _ns_free(elem):
+    return elem.tag.split('}')[-1]
+
+
+def _paths_with_fill(root, fill):
+    """返回所有 fill 属性等于 fill 的 path 元素"""
+    out = []
+    for elem in root.iter():
+        if _ns_free(elem) == 'path' and elem.attrib.get('fill', '').upper() == fill.upper():
+            out.append(elem)
+    return out
+
+
+def _bbox(d: str):
+    """用 svgpathtools 计算 path d 的 bbox"""
+    from svgpathtools import parse_path
+    xmin, xmax, ymin, ymax = parse_path(d).bbox()
+    return xmin, ymin, xmax, ymax
+
+
+def test_nasional_shield_structure(shield_config):
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', shield_config)
+    root = _parse(svg)
+    # 六边形（polygon）+ 色带（polygon）+ 黑色描边（path）
+    polygons = [e for e in root.iter() if _ns_free(e) == 'polygon']
+    assert len(polygons) == 2
+    # NASIONAL 色带红色（spec 值断言，非实现常量自比对）
+    head = [e for e in polygons if e.attrib.get('id') == 'head']
+    assert len(head) == 1 and head[0].attrib['fill'].upper() == BANNER_RED.upper()
+
+
+def test_tol_shield_red(shield_config):
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.TOL, None, shield_config)
+    root = _parse(svg)
+    head = [e for e in root.iter()
+            if _ns_free(e) == 'polygon' and e.attrib.get('id') == 'head']
+    assert head and head[0].attrib['fill'].upper() == BANNER_RED.upper()
+
+
+def test_provinsi_shield_blue(shield_config):
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    root = _parse(svg)
+    head = [e for e in root.iter()
+            if _ns_free(e) == 'polygon' and e.attrib.get('id') == 'head']
+    assert head and head[0].attrib['fill'].upper() == PROVINCE_BLUE.upper()
+
+
+def test_has_upper_and_lower_text_paths(shield_config):
+    # 色带白字（PROVINSI 35）与大字黑字（024）
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    root = _parse(svg)
+    white_paths = _paths_with_fill(root, '#FFFFFF')
+    black_paths = _paths_with_fill(root, '#000000')
+    assert white_paths, '色带文字缺失'
+    assert black_paths, '大号数字文字缺失'
+
+    # 大字为纯编号：024 → 3 个字符 path（空格无字形则以退化 path 占位）
+    # 描边 path 带 id='outline'（环形填充亦为 #000000），按身份排除而非下标
+    glyphs = [e for e in black_paths if e.attrib.get('id') != 'outline']
+    assert len(glyphs) == 3
+    # 空格占位 path 不绘制像素：'PROVINSI 35' 的空格 path bbox 四点重合（零宽度退化 path）
+    degenerate = [b for b in (_bbox(e.attrib['d']) for e in white_paths)
+                  if b[0] == b[2] and b[1] == b[3]]
+    assert len(degenerate) == 1
+
+
+def test_banner_text_level_and_province(shield_config):
+    """色带文字 = 等级词 [+ 空格 + 省码]：逐字符一个 path，空格为退化 path 占位（spec §8.3）"""
+    def _banner_len(code, level, province):
+        svg = generate_indonesia_shield(code, level, province, shield_config)
+        return len(_paths_with_fill(_parse(svg), '#FFFFFF'))
+
+    assert _banner_len('3', IndonesiaRoadLevel.NASIONAL, '35') == len('NASIONAL 35')
+    assert _banner_len('024', IndonesiaRoadLevel.PROVINSI, '35') == len('PROVINSI 35')
+    # 无省码降级：仅等级词，无多余空格占位
+    assert _banner_len('3', IndonesiaRoadLevel.TOL, None) == len('TOL')
+
+
+def test_text_heights(shield_config):
+    """字号：色带 45px、大字 135px（spec §5 排版制式）"""
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    root = _parse(svg)
+
+    def _height(elem):
+        x1, y1, x2, y2 = _bbox(elem.attrib['d'])
+        return y2 - y1
+
+    number_paths = [e for e in _paths_with_fill(root, '#000000')
+                    if e.attrib.get('id') != 'outline']
+    number_h = max(_height(e) for e in number_paths)
+    banner_h = max(_height(e) for e in _paths_with_fill(root, '#FFFFFF'))
+    assert abs(number_h - NUMBER_TEXT_HEIGHT) <= 1
+    assert abs(banner_h - BANNER_TEXT_HEIGHT) <= 1
+
+
+def test_upper_text_centered_on_head(shield_config):
+    """色带文字水平居中于六边形中心、垂直居中于 head bbox 中心（容差放宽到 ±8px）"""
+    from app.gpxutil_wrapper.svg_gen import _get_head_bbox, _get_template_size
+    template = shield_config['template']
+    w, h = _get_template_size(template)
+    hx1, hy1, hx2, hy2 = _get_head_bbox(template)
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', shield_config)
+    root = _parse(svg)
+    white_bboxes = [_bbox(e.attrib['d']) for e in _paths_with_fill(root, '#FFFFFF')]
+    assert white_bboxes
+    xs = [b[0] for b in white_bboxes] + [b[2] for b in white_bboxes]
+    ys = [b[1] for b in white_bboxes] + [b[3] for b in white_bboxes]
+    center_x = (min(xs) + max(xs)) / 2
+    center_y = (min(ys) + max(ys)) / 2
+    assert abs(center_x - w / 2) <= 8
+    assert abs(center_y - (hy1 + hy2) / 2) <= 8
+
+
+def test_no_width_height_attr(shield_config):
+    """输出保留 viewBox、移除固定 width/height（与 CN 生成器一致，前端可自适应）"""
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, None, shield_config)
+    assert 'width=' not in svg and 'height=' not in svg
+    assert 'viewBox' in svg
+
+
+def _write_synthetic_template(path, scale=1):
+    """合成最小模板：viewBox 与 head 坐标按 scale 缩放（验证布局由模板推导而非硬编码）"""
+    path.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {562 * scale} {451 * scale}">'
+        f'<g id="back">'
+        f'<g id="background">'
+        f'<polygon points="0,0 {562 * scale},0 {562 * scale},{451 * scale}"/>'
+        f'<path d="M 0,0 L {562 * scale},0"/>'
+        f'</g>'
+        f'<polygon id="head" points="0,{5 * scale} {562 * scale},{5 * scale} '
+        f'{562 * scale},{113 * scale} 0,{113 * scale}"/>'
+        f'</g></svg>',
+        encoding='utf-8',
+    )
+    return str(path)
+
+
+def test_layout_follows_template_scale(shield_config, workdir):
+    """换模板自适应：2× 模板下文字中心随 viewBox/head 缩放（spec §5 核心不变量）"""
+    from app.gpxutil_wrapper.svg_gen import _get_head_bbox, _get_template_size
+    template = _write_synthetic_template(workdir / 'scaled_2x.svg', scale=2)
+    w, h = _get_template_size(template)
+    assert (w, h) == (1124.0, 902.0)
+    cfg = dict(shield_config, template=template)
+    root = _parse(generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', cfg))
+    white_bboxes = [_bbox(e.attrib['d']) for e in _paths_with_fill(root, '#FFFFFF')]
+    assert white_bboxes
+    xs = [b[0] for b in white_bboxes] + [b[2] for b in white_bboxes]
+    ys = [b[1] for b in white_bboxes] + [b[3] for b in white_bboxes]
+    # 水平中心随 viewBox 宽度 → 562（硬编码 281 会失败）
+    assert abs((min(xs) + max(xs)) / 2 - 562) <= 8
+    # 垂直中心随 head bbox 中心 → (10 + 226) / 2 = 118（硬编码 59 会失败）
+    hx1, hy1, hx2, hy2 = _get_head_bbox(template)
+    assert abs((min(ys) + max(ys)) / 2 - (hy1 + hy2) / 2) <= 8
+    # 大字垂直中心随「head 下沿到模板底」的中点 → (226 + 902) / 2 = 564
+    # （硬编码 282 或整体偏移 30px 均会失败）
+    black = [e for e in _paths_with_fill(root, '#000000')
+             if e.attrib.get('id') != 'outline']
+    assert black
+    number_ys = [b for bb in (_bbox(e.attrib['d']) for e in black) for b in (bb[1], bb[3])]
+    assert abs((min(number_ys) + max(number_ys)) / 2 - (hy2 + h) / 2) <= 8
+
+
+def test_output_path_branch(shield_config, workdir):
+    """output_path 分支：写文件并返回该路径，内容与返回字符串同构"""
+    out = workdir / 'shield.svg'
+    ret = generate_indonesia_shield(
+        '3', IndonesiaRoadLevel.NASIONAL, None, shield_config, str(out))
+    assert ret == str(out)
+    content = out.read_text(encoding='utf-8')
+    assert '<svg' in content and 'viewBox' in content
+
+
+def test_errors(shield_config):
+    """错误分支：空编号 / 等级非枚举实例 / 配置缺失"""
+    with pytest.raises(ValueError):
+        generate_indonesia_shield('', IndonesiaRoadLevel.NASIONAL, None, shield_config)
+    # 非枚举实例（此处为 int 1）：Python ≥3.12 `in Enum` 按值比较不会报错，
+    # 故守卫须用 isinstance，否则后续 road_level.name 崩 AttributeError
+    with pytest.raises(ValueError):
+        generate_indonesia_shield('3', 1, None, shield_config)
+    with pytest.raises(ValueError):
+        generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, None, {})
+
+
+def test_missing_template_head_raises(shield_config, workdir):
+    """模板结构不符（缺 id=head）抛 ValueError 而非 TypeError/AttributeError"""
+    bad = workdir / 'no_head.svg'
+    bad.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 562 451">'
+        '<g id="back"><g id="background"><polygon points="0,0 10,0 10,10"/></g></g></svg>',
+        encoding='utf-8',
+    )
+    with pytest.raises(ValueError, match='id=head'):
+        generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, None,
+                                  dict(shield_config, template=str(bad)))
+```
+
+- [ ] **Step 2: 运行确认红**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_indonesia_shield.py -q`
+Expected: ImportError（`generate_indonesia_shield` 等不存在）。
+
+- [ ] **Step 3: 修改 `svg_gen.py`**
+
+在文件顶部 import 区（L14 之后）加：
+
+```python
+import xml.etree.ElementTree as ET
+```
+
+同一 import 区（`from app.core.config import settings` 之后）加：
+
+```python
+from app.gpxutil_wrapper.indonesia import IndonesiaRoadLevel
+```
+
+（`indonesia.py` 只依赖标准库、不反向 import 本模块，模块级导入不成环；后续函数内不再局部 import）
+
+颜色常量区（L29 GREEN 后）加：
+
+```python
+INDONESIA_PROVINCE_BLUE = '#003E86'  # 印尼省道（PROVINSI）色带蓝
+# 印尼色带红：对齐 gpxutil 印尼配置（spec §5「实现时对齐 gpxutil」），亦为模板 id_sheild.svg 的 st2 原色；
+# 不复用国标红 RED（#ED1724），避免与 CN 体系混淆
+INDONESIA_BANNER_RED = '#B5273C'
+```
+
+印尼文字排版常量（模块级，EXPWY_BANNER_TEXT_HEIGHT 后加）：
+
+```python
+# 印尼盾牌文字制式（模板 viewBox 坐标系，移植自 gpxutil 配置默认值）
+INDONESIA_BANNER_TEXT_HEIGHT = 45    # 色带小字（ClearviewHwy1W）
+INDONESIA_NUMBER_TEXT_HEIGHT = 135   # 白色区大字（ClearviewHwy2W）
+```
+
+文件末尾（generate_road_sign 之前或之后均可，放 `generate_road_sign` 之前）追加以下函数（整体移植自 gpxutil，错误消息中文化、输出对齐 vibe 的字符串清理）：
+
+```python
+# ============ 印尼六边形盾牌 ============
+# 移植自 gpxutil svg_gen.py 的 generate_indonesia_shield 家族
+# （模板 id_sheild.svg：白六边形 + 顶部色带 + 占位文字；布局由模板元素 bbox 推导）
+
+
+def _parse_polygon_points(points: str) -> list[tuple[float, float]]:
+    """解析 polygon 的 points 属性为坐标对列表（兼容逗号与空格分隔）"""
+    nums = [float(v) for v in points.replace(',', ' ').split()]
+    return list(zip(nums[0::2], nums[1::2]))
+
+
+def get_element_bbox_by_id(svg_path: str, element_id: str):
+    """解析 SVG 模板，取指定 id 元素的 bbox（支持 polygon）。
+
+    :return: (xmin, ymin, xmax, ymax)；找不到该 id 元素返回 None
+    """
+    tree = ET.parse(svg_path)
+    root = tree.getroot()
+    for elem in root.iter():
+        if elem.attrib.get('id') == element_id:
+            if elem.tag.split('}')[-1] == 'polygon':
+                points = _parse_polygon_points(elem.attrib.get('points', ''))
+                xs = [p[0] for p in points]
+                ys = [p[1] for p in points]
+                return min(xs), min(ys), max(xs), max(ys)
+            return None
+    return None
+
+
+def _get_back_group_elements(svg_path: str) -> list[tuple[str, dict]]:
+    """解析印尼盾牌模板，取 id='back' 组内绘制元素（跳过占位字形组）。
+
+    模板多边形不被 svg2paths 解析，这里用 XML 直接取出。
+    :return: 按文档顺序的 (标签名, 属性字典) 列表；head 多边形以 id='head' 标识
+    :raise ValueError: 模板中找不到 id='back' 的组
+    """
+    root = ET.parse(svg_path).getroot()
+    back_group = None
+    for elem in root.iter():
+        if elem.tag.split('}')[-1] == 'g' and elem.attrib.get('id') == 'back':
+            back_group = elem
+            break
+    if back_group is None:
+        raise ValueError(f'印尼盾牌模板 {svg_path} 中找不到 id=back 的元素')
+    result = []
+    for elem in back_group:
+        tag = elem.tag.split('}')[-1]
+        if tag == 'g' and elem.attrib.get('id') == 'background':
+            # 展开背景组：白色六边形 polygon + 黑色描边 path，保持模板内顺序
+            for child in elem:
+                result.append((child.tag.split('}')[-1], child.attrib))
+        else:
+            result.append((tag, elem.attrib))
+    return result
+
+
+def calculate_centered_scaled_char_info(
+    code: str, center_x: float, center_y: float,
+    height: float, font: str,
+) -> list:
+    """
+    按固定高度缩放一段文字，水平居中于 center_x、垂直居中于 center_y（无额外字距）。
+    空格无字形轮廓：按字体 ascent 比例换算其 advance 宽度占位排版，生成占位 path
+    保持与字符一一对应（不绘制像素），保证与字形 path 同样的绘制流程。
+
+    :param code: 文字（可为含空格文本，如 'NASIONAL 35'）
+    :param center_x: 文字水平中心 x
+    :param center_y: 文字垂直中心 y
+    :param height: 文字高度
+    :param font: 字体文件路径
+    :return: 各字符（含空格）path 列表（空格为 M 0,0h0 零长度退化 path）
+    :raise ValueError: 文字为空
+    """
+    if not code:
+        raise ValueError('文字为空，无法生成字形 path')
+    font_obj = None
+    space_scale = 0.0
+    space_advance = 0.0
+    scaled_char_path_list = []
+    scaled_char_width_list = []
+    for char in code:
+        if char == ' ':
+            if font_obj is None:
+                font_obj = TTFont(font)
+                # 字形按各自轮廓 bbox 高度缩放到 height，其纵向跨度约为基线到字帽高度；
+                # ascent 与该跨度同一量级，空格无轮廓，以 ascent 作统一纵向基准把
+                # advance（字面宽）换算到像素。近似值，勿按 bug 修改。
+                space_scale = height / font_obj['hhea'].ascent
+                space_glyph = font_obj.getBestCmap()[ord(' ')]
+                space_advance = font_obj['hmtx'][space_glyph][0]
+            scaled_char_width_list.append(space_advance * space_scale)
+            scaled_char_path_list.append(None)
+            continue
+        paths_char = char_to_svg_path(font, char)
+        char_minx, char_maxx, char_miny, char_maxy = paths_char.bbox()
+        char_height = char_maxy - char_miny
+        ratio = height / char_height
+        scaled_path_char = paths_char.scaled(ratio)
+        scaled_char_minx, scaled_char_maxx, scaled_char_miny, scaled_char_maxy = scaled_path_char.bbox()
+        scaled_char_width = scaled_char_maxx - scaled_char_minx
+        scaled_path_char = scaled_path_char.translated(complex(-scaled_char_minx, -scaled_char_miny))
+        scaled_char_width_list.append(scaled_char_width)
+        scaled_char_path_list.append(scaled_path_char)
+
+    total_width = reduce(lambda x, y: x + y, scaled_char_width_list)
+    start_x = center_x - total_width / 2
+    start_y = center_y - height / 2
+    char_x = start_x
+    result = []
+    for path, width in zip(scaled_char_path_list, scaled_char_width_list):
+        if path is None:
+            # 空格占位：零长度退化 path，只占排版位置、不绘制像素
+            path = parse_path('M 0,0h0')
+        result.append(path.translated(complex(char_x, start_y)))
+        char_x += width
+    return result
+
+
+def _get_template_size(svg_path: str) -> tuple[float, float]:
+    """读取 SVG 模板 viewBox 尺寸 (width, height)
+
+    注：调用处按「原点为 0 0」使用模板原生坐标（输出 `viewBox='0 0 w h'`），
+    非零原点模板会静默错位；现有模板均为零原点，换模板时须一并确认。
+    """
+    root = ET.parse(svg_path).getroot()
+    viewbox = [float(i) for i in root.get('viewBox').split()]
+    return viewbox[2] - viewbox[0], viewbox[3] - viewbox[1]
+
+
+def _get_head_bbox(svg_path: str):
+    """取模板中 id=head 色带多边形 bbox；找不到抛 ValueError"""
+    bbox = get_element_bbox_by_id(svg_path, 'head')
+    if bbox is None:
+        raise ValueError(f'印尼盾牌模板 {svg_path} 中找不到 id=head 的元素')
+    return bbox
+
+
+def generate_indonesia_shield(
+    code: str,
+    road_level,
+    province_code: str | None = None,
+    config: dict | None = None,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    生成印尼六边形道路盾牌 SVG（布局由模板元素 bbox 推导，模板 id='text'
+    组为占位字形不绘制，仅画背景与色带）。
+
+    :param code: 道路编号（盾牌大字），如 '3'、'024'
+    :param road_level: IndonesiaRoadLevel 枚举实例，决定色带颜色与等级词
+    :param province_code: 省份代码（色带小字部分），可为 None
+    :param config: dict {template: 模板绝对路径, upper: 色带字体路径, lower: 大字字体路径}
+        注：key 名为 upper/lower，由服务层从配置的 font_upper/font_lower 映射而来
+    :param output_path: 输出文件路径，None 则返回 SVG 内容
+    :return: SVG 内容（保留 viewBox，移除固定 width/height 便于自适应）
+    :raise ValueError: code 为空 / road_level 非 IndonesiaRoadLevel 实例 / config 缺 key
+        / 模板缺 id=back 或 id=head
+    :raise FileNotFoundError: 模板或字体文件不存在（透传）
+    """
+    if not code:
+        raise ValueError('道路编号不能为空')
+    # 须判实例而非 `road_level in IndonesiaRoadLevel`：Python ≥3.12 起 `in Enum`
+    # 按值比较（`1 in IndonesiaRoadLevel` 为真），int 会溜过校验并在 road_level.name 崩掉
+    if not isinstance(road_level, IndonesiaRoadLevel):
+        raise ValueError(f'未知的印尼道路等级: {road_level}')
+    if not config or not all(config.get(k) for k in ('template', 'upper', 'lower')):
+        raise ValueError('缺少印尼盾牌配置（template/upper/lower 路径）')
+
+    # 色带颜色：NASIONAL/TOL 红、PROVINSI 蓝
+    head_fill = INDONESIA_BANNER_RED
+    if road_level == IndonesiaRoadLevel.PROVINSI:
+        head_fill = INDONESIA_PROVINCE_BLUE
+
+    banner_text = road_level.name
+    if province_code:
+        banner_text += f' {province_code}'
+
+    width, height = _get_template_size(config['template'])
+    head_bbox = _get_head_bbox(config['template'])
+    center_x = width / 2
+    head_center_y = (head_bbox[1] + head_bbox[3]) / 2
+    lower_center_y = (head_bbox[3] + height) / 2
+
+    dwg = svgwrite.Drawing(
+        size=(f'{width}px', f'{height}px'),
+        viewBox=f'0 0 {width} {height}',
+        profile='full'
+    )
+
+    # 模板背景：白色六边形 → 黑色描边 → 色带（保持顺序，色带覆盖描边顶部）
+    for tag, attrib in _get_back_group_elements(config['template']):
+        if tag == 'polygon':
+            if attrib.get('id') == 'head':
+                fill = head_fill
+                polygon = dwg.polygon(
+                    points=_parse_polygon_points(attrib['points']),
+                    fill=fill, id='head'
+                )
+            else:
+                fill = WHITE
+                polygon = dwg.polygon(
+                    points=_parse_polygon_points(attrib['points']), fill=fill
+                )
+            dwg.add(polygon)
+        elif tag == 'path':
+            # svgwrite 不接受模板里紧凑的 path 语法，先解析再序列化
+            # 描边带 id='outline'：其 fill 亦为 BLACK，测试按身份排除而非下标
+            dwg.add(dwg.path(d=parse_path(attrib['d']).d(), fill=BLACK, id='outline'))
+        else:
+            # 模板结构变更（如描边改成 rect）时留痕，避免静默少画元素
+            logger.warning(f'印尼盾牌模板 {config["template"]} 中忽略未支持的 <{tag}> 元素')
+
+    # 色带小字（白）与大字（黑）
+    for path in calculate_centered_scaled_char_info(
+            banner_text, center_x, head_center_y,
+            INDONESIA_BANNER_TEXT_HEIGHT, config['upper']):
+        dwg.add(dwg.path(d=path.d(), fill=WHITE))
+    for path in calculate_centered_scaled_char_info(
+            code, center_x, lower_center_y,
+            INDONESIA_NUMBER_TEXT_HEIGHT, config['lower']):
+        dwg.add(dwg.path(d=path.d(), fill=BLACK))
+
+    if output_path:
+        dwg.saveas(output_path)
+        return output_path
+    svg_string = dwg.tostring()
+    # 移除固定 width/height，保留 viewBox 自适应
+    # 尺寸经 float() 解析后以 f'{width}px' 传入 svgwrite，输出带小数（width="562.0px"），
+    # 故用 [\d.]+ 兼容整数与小数
+    svg_string = re.sub(r' width="[\d.]+px"', '', svg_string)
+    svg_string = re.sub(r' height="[\d.]+px"', '', svg_string)
+    return svg_string
+```
+
+（test 引用的 `_get_head_bbox`/`_get_template_size` 即上述模块级函数，已提供。）
+
+- [ ] **Step 4: 运行测试确认通过**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_indonesia_shield.py -q`
+Expected: 12 passed（若居中断言因模板坐标偏差失败，先人工打开 `data/templates/id_sheild.svg` 确认 viewBox 与 head 结构后放宽容差至 12px 并注明原因）。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/gpxutil_wrapper/svg_gen.py backend/tests/test_indonesia_shield.py
+git commit -m "feat(svg): 移植印尼六边形盾牌生成器（居中排版+bbox推导+Clearview字体）
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 5: 道路标志服务与 API 支持 region（含印尼解析分派、缓存隔离）
+
+**Files:**
+- Modify: `backend/app/gpxutil_wrapper/svg_gen.py`（`generate_road_sign` 分派）
+- Modify: `backend/app/services/road_sign_service.py`
+- Modify: `backend/app/api/road_signs.py`
+- Create: `backend/tests/test_road_sign_region.py`（纯逻辑层测试，无 DB）
+
+设计（spec §5 API 与缓存）：
+- `generate_road_sign` 增 `region='cn'`；`id` 分支按「编号 + 路名文本序列 + 省名文本序列」调 `parse_indonesia_road_num`，结果交 `generate_indonesia_shield`。CN 分支完全不变。
+- service 缓存键含 region；`RoadSignCache.region` 落库；生成 id 图标时从 `configs['indonesia_road_sign']` 解析模板/字体文件名并拼 `data/templates`、`data/fonts` 绝对路径。
+- API `RoadSignRequest` 加 `region/name_id/province_id`（cn 行为不变，id 时跳过 CN 正则校验）；`RoadSignResponse` 回显 region。
+
+- [ ] **Step 1: 测试（红）**
+
+`backend/tests/test_road_sign_region.py`：
+
+```python
+# -*- coding: utf-8 -*-
+"""region 分派与缓存键测试（spec §8 用例 4、8）"""
+import pytest
+
+from app.gpxutil_wrapper.svg_gen import generate_road_sign
+from app.services.road_sign_service import RoadSignService
+
+ID_CONFIG = {
+    # pytest cwd = backend/，与 Task 4 测试同约定（服务层的绝对路径拼接见 RoadSignService 内 base_dir 逻辑）
+    'template': 'data/templates/id_sheild.svg',
+    'upper': 'data/fonts/ClearviewHwy1W.ttf',
+    'lower': 'data/fonts/ClearviewHwy2W.ttf',
+    'tol_keywords': ['收费', 'Tol'],
+}
+
+
+class TestGenerateRoadSignDispatch:
+    """generate_road_sign region 分派"""
+
+    def test_cn_default_unchanged(self):
+        # cn 路径无 region/indonesia 参数即可工作（way 模板存在时）
+        svg = generate_road_sign('way', 'G221')
+        assert 'viewBox' in svg
+
+    def test_id_nasional(self):
+        svg = generate_road_sign(
+            'way', '3', region='id', indonesia_config=ID_CONFIG)
+        assert 'viewBox' in svg and 'polygon' in svg
+
+    def test_id_tol_from_chinese_name(self):
+        svg = generate_road_sign(
+            'expwy', '8', name='雅加达收费高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Tol Jagorawi')
+        assert 'polygon' in svg
+
+    def test_id_tol_detected_from_name_id(self):
+        # name 无关键词、name_id 命中 tol → 仍判 TOL（红色 head）
+        svg = generate_road_sign(
+            'expwy', '8', name='雅加达高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Tol Jagorawi')
+        import xml.etree.ElementTree as ET
+        head = [e for e in ET.fromstring(svg).iter()
+                if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
+        # 色带红 = spec §5「实现时对齐 gpxutil」的 #B5273C（非国标红 #ED1724）
+        assert head and head[0].attrib['fill'].upper() == '#B5273C'
+
+    def test_id_unrecognizable_raises(self):
+        with pytest.raises(ValueError):
+            generate_road_sign('way', 'abc', region='id', indonesia_config=ID_CONFIG)
+
+    def test_id_without_config_raises(self):
+        with pytest.raises(ValueError):
+            generate_road_sign('way', '3', region='id', indonesia_config=None)
+
+
+class TestCacheKey:
+    """缓存键含 region 与多语字段（spec §8 用例 8）"""
+
+    def test_cache_key_differs_by_region(self):
+        svc = RoadSignService()
+        key_cn = svc._generate_cache_key('way', 'G221', None, None)
+        assert isinstance(key_cn, str) and len(key_cn) == 32
+
+    def test_region_part_of_key(self):
+        svc = RoadSignService()
+        # 同一 code 不同 region 键不同
+        k1 = svc._generate_cache_key('way', '3', None, None, region='cn')
+        k2 = svc._generate_cache_key('way', '3', None, None, region='id')
+        assert k1 != k2
+        # 多语路名参与键
+        k3 = svc._generate_cache_key(
+            'way', '8', None, None, region='id', name_id='Jalan Tol Jagorawi')
+        k4 = svc._generate_cache_key(
+            'way', '8', None, None, region='id', name_id='Jalan Tol Cipularang')
+        assert k3 != k4
+```
+
+- [ ] **Step 2: 运行确认红**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_road_sign_region.py -q`
+Expected: TypeError（`generate_road_sign` 无 region 参数）。
+
+- [ ] **Step 3: `svg_gen.py` 的 `generate_road_sign` 加 region 分派**
+
+先把 Task 4 已提到模块顶部的 import 行扩成：
+
+```python
+from app.gpxutil_wrapper.indonesia import (
+    REGION_CN, REGION_ID, IndonesiaRoadLevel, parse_indonesia_road_num,
+)
+```
+
+（`indonesia.py` 只依赖标准库，不成环；本文件其余依赖也全在顶部，勿用函数内 import）
+
+然后将 `generate_road_sign` 签名与主体（L708-735）替换为：
+
+```python
+def generate_road_sign(
+    sign_type: str,
+    code: str,
+    province: Optional[str] = None,
+    name: Optional[str] = None,
+    region: str = 'cn',
+    indonesia_config: Optional[dict] = None,
+    name_id: Optional[str] = None,
+    province_id: Optional[str] = None,
+    font_config: Optional[dict] = None,
+    output_path: Optional[str] = None,
+) -> str:
+    """
+    统一的道路标志生成入口（按 region 分派）。
+
+    Args:
+        sign_type: 标志类型 ('way' 或 'expwy')，region='id' 时忽略
+        code: 道路编号（cn: 如 G221/S21；id: 如 3、35-024）
+        province: 省份（cn: 简称仅高速用；id: 省名文本，查省码用，可选）
+        name: 道路名称（cn: 可选；id: 中文路名，TOL 关键词判定文本之一）
+        region: 地区 ('cn' | 'id')
+        indonesia_config: region='id' 时需要，dict {template, upper, lower, tol_keywords}
+        name_id: region='id' 时印尼语路名（TOL 关键词判定文本之二）
+        province_id: region='id' 时印尼语省名文本（查省码用，可选）
+        font_config: 字体配置字典（仅 cn 用）
+        output_path: 输出路径
+
+    Returns:
+        SVG 内容或文件路径
+
+    Raises:
+        ValueError: 未知 region / id 无法识别编号 / id 缺配置 / cn 缺模板字体等
+    """
+    if region == REGION_CN:
+        if sign_type == 'way':
+            return generate_way_num_sign(code, font_config, output_path)
+        elif sign_type == 'expwy':
+            return generate_expwy_sign(code, province, name, font_config, output_path)
+        raise ValueError(f"未知的标志类型: {sign_type}")
+    elif region == REGION_ID:
+        if not indonesia_config:
+            raise ValueError('缺少印尼盾牌配置（template/字体/关键词）')
+        # 编号 + 路名（zh 与 id 任一命中 TOL 关键词）+ 省名文本 → 等级解析
+        info = parse_indonesia_road_num(
+            code,
+            [name, name_id],
+            [province_id, province],
+            indonesia_config.get('tol_keywords') or ['收费', 'Tol'],
+        )
+        if not info:
+            raise ValueError(f"无法识别的印尼道路编号: {code or ''}")
+        return generate_indonesia_shield(
+            info.code, info.level, info.province_code,
+            {
+                'template': indonesia_config['template'],
+                'upper': indonesia_config['upper'],
+                'lower': indonesia_config['lower'],
+            },
+            output_path,
+        )
+    raise ValueError(f"未知的地区: {region}")
+```
+
+- [ ] **Step 4: `road_sign_service.py` 增加 region 支持**
+
+修改 `_generate_cache_key` 签名与实现：
+
+```python
+    def _generate_cache_key(
+        self,
+        sign_type: str,
+        code: str,
+        province: Optional[str] = None,
+        name: Optional[str] = None,
+        region: str = 'cn',
+        name_id: Optional[str] = None,
+        province_id: Optional[str] = None,
+    ) -> str:
+        """生成缓存键（含 region，不同地区的同编号不串样）"""
+        key_data = (f"{region}:{sign_type}:{code}:{province or ''}:{name or ''}:"
+                    f"{name_id or ''}:{province_id or ''}")
+        return hashlib.md5(key_data.encode()).hexdigest()
+```
+
+修改 `get_or_create_sign`：签名加 `region: str = 'cn', name_id: Optional[str] = None, province_id: Optional[str] = None`；docstring 同步；`cache_key` 调用改为 `self._generate_cache_key(sign_type, code, province, name, region, name_id, province_id)`。
+
+在 `configs = await config_service.get_all_configs(db)` 之后、现有 `font_config` 读取附近，将生成段替换为 region 分支：
+
+```python
+        # 获取配置
+        configs = await config_service.get_all_configs(db)
+        font_config = configs.get('font_config')
+
+        # 印尼配置：把文件名解析为 data/templates、data/fonts 下的绝对路径
+        indonesia_config = None
+        if region == 'id':
+            id_cfg = configs.get('indonesia_road_sign') or {}
+            base_dir = Path(settings.DATA_DIR)
+            template_file = base_dir / 'templates' / (id_cfg.get('template') or 'id_sheild.svg')
+            upper_file = base_dir / 'fonts' / (id_cfg.get('font_upper') or 'ClearviewHwy1W.ttf')
+            lower_file = base_dir / 'fonts' / (id_cfg.get('font_lower') or 'ClearviewHwy2W.ttf')
+            missing = [str(f) for f in (template_file, upper_file, lower_file) if not f.exists()]
+            if missing:
+                logger.error(f"Missing indonesia road sign assets: {missing}")
+                raise FileNotFoundError('印尼盾牌资源缺失（模板/字体），请检查 data 目录')
+            indonesia_config = {
+                'template': str(template_file),
+                'upper': str(upper_file),
+                'lower': str(lower_file),
+                'tol_keywords': id_cfg.get('tol_keywords') or ['收费', 'Tol'],
+            }
+
+        # 生成新的 SVG
+        try:
+            svg_content = generate_road_sign(
+                sign_type=sign_type,
+                code=code,
+                province=province,
+                name=name,
+                region=region,
+                indonesia_config=indonesia_config,
+                name_id=name_id,
+                province_id=province_id,
+                font_config=font_config,
+                output_path=svg_path
+            )
+```
+
+同时文件顶部补 `from pathlib import Path`（`data/` 下资源解析沿用本仓既有写法 `Path(settings.DATA_DIR) / ...`，见 `app/api/admin.py:906`）。
+
+缓存行构造 `RoadSignCache(...)` 加 `region=region`；`RoadSignCache(region=region, ...)`。在 `cached` 命中且文件存在时无需变动（缓存按 region 键隔离）。update 分支 `cached.svg_path = svg_path` 后加 `cached.region = region`（同键更新安全）。
+
+- [ ] **Step 5: `api/road_signs.py` 请求/响应模型**
+
+`RoadSignRequest` 改造（替换类体中相关部分）：
+
+```python
+class RoadSignRequest(BaseModel):
+    """道路标志生成请求"""
+    sign_type: str = Field(..., description="标志类型: way(普通道路) 或 expwy(高速)；region=id 时忽略")
+    code: str = Field(..., description="道路编号（cn: G221/S88 等；id: 3/35-024/023 等）")
+    province: Optional[str] = Field(None, description="省份（cn: 简称如 '豫'；id: 省名文本如 'Provinsi Jawa Timur'，查省码用）")
+    name: Optional[str] = Field(None, description="道路名称（id: 中文路名，TOL 判定文本）")
+    region: str = Field('cn', description="地区: cn(中国国标) 或 id(印尼六边形盾牌)")
+    name_id: Optional[str] = Field(None, description="印尼语道路名称（region=id 时 TOL 判定文本）")
+    province_id: Optional[str] = Field(None, description="印尼语省名文本（region=id 时查省码用）")
+
+    @field_validator('region')
+    @classmethod
+    def validate_region(cls, v: str) -> str:
+        if v not in ('cn', 'id'):
+            raise ValueError("无效的地区，可选值: cn, id")
+        return v
+
+    @field_validator('code')
+    @classmethod
+    def normalize_code(cls, v: str) -> str:
+        """规范化道路编号：转大写（仅 cn 有意义；id 数字不受影响）"""
+        return v.strip().upper()
+
+    @model_validator(mode='after')
+    def validate_road_sign(self) -> 'RoadSignRequest':
+        """校验道路编号（region=cn 时执行现有规则，region=id 时不套用国标正则）"""
+        code = self.code
+        sign_type = self.sign_type
+        province = self.province
+
+        if not code:
+            raise ValueError("道路编号不能为空")
+
+        if self.region == 'id':
+            # 印尼编号由后端按编号+路名+省名解析（parse_indonesia_road_num），不做格式猜测
+            return self
+
+        if sign_type == 'way':
+            # 普通道路：字母 + 三位数字
+            if not re.match(r'^[A-Z]\d{3}$', code):
+                raise ValueError("普通道路编号格式错误：应为字母 + 三位数字，如 G221、S221、X221")
+
+        elif sign_type == 'expwy':
+            # 高速公路：国家高速或省级高速
+            if code.startswith('G'):
+                if not re.match(r'^G\d{1,4}$', code):
+                    raise ValueError("国家高速编号格式错误：应为 G + 1-4位数字，如 G5、G45、G4511")
+            elif code.startswith('S'):
+                letter_format_match = re.match(r'^S([A-Z]\d{0,3})$', code)
+                if letter_format_match:
+                    if province != '川':
+                        raise ValueError("字母格式的省级高速编号（如 SA、SC、SA1）仅限四川省使用，请使用纯数字编号（如 S1、S11）或选择四川省")
+                elif not re.match(r'^S\d{1,4}$', code):
+                    raise ValueError("省级高速编号格式错误：应为 S + 1-4位数字（如 S1、S11、S1111），或仅限四川省使用 S + 字母 + 可选数字（如 SA、SC、SA1）")
+            else:
+                raise ValueError("高速公路编号应以 G（国家高速）或 S（省级高速）开头")
+
+        return self
+```
+
+原 `validate_province` field_validator 对所有 region 都会跑，`province` 字段在 `region='id'` 时承载的是印尼语省名（如 'Provinsi Jawa Timur'），会被中文简称白名单误拒。**按以下方式改造（不要用 `info.data.get('region')` 判分支——field_validator 的 `info.data` 只含"已校验过的字段"，依赖字段声明顺序且 `province` 声明在 `region` 之前时恒取不到，脆弱）**：
+
+把白名单检查整体移入 `validate_road_sign` 的 cn 分支，原 field_validator 只保留规范化职责，并把白名单提到模块级常量（原来每次调用重建 set）：
+
+```python
+# 中国省份简称白名单（仅 region='cn' 校验用）
+_VALID_PROVINCE_ABBR = frozenset({
+    '京', '津', '冀', '晋', '蒙', '辽', '吉', '黑',
+    '沪', '苏', '浙', '皖', '闽', '赣', '鲁', '豫',
+    '鄂', '湘', '粤', '桂', '琼', '渝', '川', '贵',
+    '云', '藏', '陕', '甘', '青', '宁', '新',
+})
+```
+
+```python
+    @field_validator('province')
+    @classmethod
+    def normalize_province(cls, v: Optional[str]) -> Optional[str]:
+        """规范化省份：去空白，空串归一为 None（简称白名单见 validate_road_sign，仅 cn 适用）"""
+        if v is None:
+            return None
+        return v.strip() or None
+```
+
+在 `validate_road_sign` 中 `if self.region == 'id': return self` **之后**（即 cn 路径上）加：
+
+```python
+        if province and province not in _VALID_PROVINCE_ABBR:
+            raise ValueError(f"无效的省份简称：{province}。应为标准省份简称，如'京'、'津'、'冀'等")
+```
+
+（cn 行为与改造前逐字等价：先 strip、空串转 None、再查白名单。测试补一条 id 请求带任意 province 文本通过的断言。）
+
+`RoadSignResponse` 加：
+
+```python
+    region: str = 'cn'
+```
+
+生成端点 body 传参加四个字段（request → service 调用与响应构造）：
+
+```python
+        svg_content, cached = await road_sign_service.get_or_create_sign(
+            db=db,
+            sign_type=request.sign_type,
+            code=request.code,
+            province=request.province,
+            name=request.name,
+            region=request.region,
+            name_id=request.name_id,
+            province_id=request.province_id,
+        )
+
+        return RoadSignResponse(
+            svg=svg_content,
+            cached=cached,
+            sign_type=request.sign_type,
+            code=request.code,
+            province=request.province,
+            name=request.name,
+            region=request.region,
+        )
+```
+
+- [ ] **Step 6: 运行测试**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/test_road_sign_region.py tests/test_indonesia_road.py tests/test_indonesia_shield.py -q`
+Expected: 全部通过。
+
+语法检查（api 层）：
+Run: `cd backend && ../.venv/Scripts/python -c "import app.api.road_signs; import app.services.road_sign_service; print('ok')"`
+Expected: ok。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/gpxutil_wrapper/svg_gen.py backend/app/services/road_sign_service.py backend/app/api/road_signs.py backend/tests/test_road_sign_region.py
+git commit -m "feat(road-sign): generate 接口与缓存按 region 分派，支持印尼六边形盾牌
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 6: Nominatim 多语言请求 + fill_geocoding_info 写 `*_id` 与 region + 中文省回填
+
+**Files:**
+- Modify: `backend/app/gpxutil_wrapper/geocoding.py`（NominatimGeocoding.get_point_info）
+- Modify: `backend/app/services/track_service.py`（fill_geocoding_info L503-672）
+- Modify: `backend/app/api/tracks.py`（fill-geocoding 端点 L492-531 加 region Query）
+
+设计：region='id' 时 Nominatim 发 **zh-CN / id / en 三请求**（cn 现状两请求不变），结果新增 `province_id/city_id/area_id/road_name_id` 键；`fill_geocoding_info` 增加 `region: Optional[str] = None`——缺省回读 `track.region`（live recording 调用点零改动），region 明确时：点写 `region`、4 个 `*_id` 字段、印尼省级中文尽力回填（38 省表，province 空或与 province_id 相同才回填），完成时 `track.region` 同步。S 前缀中国高速逻辑仅在 cn 生效。
+
+- [ ] **Step 1: 修改 `geocoding.py` 的 `NominatimGeocoding.get_point_info`**
+
+方法签名加 region，把固定 zh/en 双请求改成按 region 的语言集循环。整体替换 `get_point_info`（L59-152）与结果初始化：
+
+```python
+    async def get_point_info(self, lat: float, lon: float, region: str = 'cn') -> dict[str, Any]:
+        """获取点的地理信息
+
+        Args:
+            region: 地区（'cn' 现状逻辑；'id' 增加印尼语请求，写入 *_id 字段）
+        """
+        result = {
+            'province': '',
+            'city': '',
+            'area': '',
+            'town': '',
+            'road_name': '',
+            'road_num': '',
+            'province_en': '',
+            'city_en': '',
+            'area_en': '',
+            'town_en': '',
+            'road_name_en': '',
+            # 印尼语（region='id' 时填充）
+            'province_id': '',
+            'city_id': '',
+            'area_id': '',
+            'road_name_id': '',
+            'memo': ''
+        }
+
+        # 语言请求集：cn 维持现状（中文+英文），id 增加印尼语
+        languages = ['zh-CN', 'en'] if region == 'cn' else ['zh-CN', 'id', 'en']
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                params = {
+                    'lat': lat,
+                    'lon': lon,
+                    'format': 'geocodejson',
+                    'layer': 'address',
+                    'extratags': 1,
+                    'zoom': 17,
+                    'accept-language': 'zh-CN'
+                }
+
+                # 各语言依次请求（结果存 revs[语言]）
+                revs: dict[str, dict] = {}
+                for lang in languages:
+                    params['accept-language'] = lang
+                    response = await client.get(f"{self.url}/reverse", params=params)
+                    revs[lang] = response.json()
+
+                rev = revs['zh-CN']
+                if 'features' not in rev or not rev['features']:
+                    result['memo'] = 'No results found'
+                    return result
+
+                # 按语言取 admin 层级（zh-CN 无中译时多为本地名，后续尽力回填）
+                for lang in languages:
+                    feats = revs[lang].get('features') or []
+                    admin = feats[0]['properties']['geocoding']['admin'] if feats else {}
+                    suffix = '' if lang == 'zh-CN' else f'_{lang}'
+                    result[f'province{suffix}'] = admin.get('level4', '')
+                    result[f'city{suffix}'] = admin.get('level5', '')
+                    result[f'area{suffix}'] = admin.get('level6', '')
+                    result[f'town{suffix}'] = admin.get('level8', '')
+
+                # 获取道路信息（取各语言请求的道路名，id 时 *_id 用 id 请求名）
+                if rev['features'][0]['properties']['geocoding']['osm_type'] == 'way':
+                    for lang in languages:
+                        feats = revs[lang].get('features') or []
+                        if not feats:
+                            continue
+                        name = feats[0]['properties']['geocoding'].get('name', '')
+                        suffix = '' if lang == 'zh-CN' else f'_{lang}'
+                        result[f'road_name{suffix}'] = name
+                    # 现状：英文名与中文名相同时置空
+                    if result['road_name_en'] == result['road_name']:
+                        result['road_name_en'] = ''
+
+                    # 获取道路编号
+                    place_id = rev['features'][0]['properties']['geocoding']['place_id']
+                    details_response = await client.get(f"{self.url}/details", params={'place_id': place_id})
+                    details = details_response.json()
+                    if 'names' in details and 'ref' in details['names']:
+                        road_nums = details['names']['ref'].split(';')
+                        processed_nums = []
+                        for num in road_nums:
+                            num = num.strip().upper()
+                            # 为省级高速添加省份前缀为中国专属逻辑（仅 cn），印尼 raw ref 直接用
+                            if region == 'cn' and num.startswith('S') and len(num) >= 2 and num[1:].isdigit():
+                                has_province_prefix = any(
+                                    num.startswith(prefix)
+                                    for prefix in PROVINCE_NAME_TO_SHORT.values()
+                                )
+                                if not has_province_prefix:
+                                    province_short = None
+                                    if result['province']:
+                                        province_short = PROVINCE_NAME_TO_SHORT.get(result['province'])
+                                    elif result['province_en']:
+                                        province_short = PROVINCE_EN_TO_SHORT.get(result['province_en'])
+                                    if province_short:
+                                        num = f"{province_short}{num}"
+                            processed_nums.append(num)
+                        result['road_num'] = ','.join(processed_nums)
+
+        except Exception as e:
+            result['memo'] = str(e)
+
+        return result
+```
+
+- [ ] **Step 2: 修改 `track_service.py` 的 `fill_geocoding_info`**
+
+签名加 region（`incremental` 之后）：
+
+```python
+    async def fill_geocoding_info(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+        incremental: bool = False,
+        region: Optional[str] = None,
+    ):
+```
+
+docstring 补参数说明：`region: 填充的地区（'cn'/'id'）；None 时使用轨迹自身 region（默认 'cn'）`。
+
+在 L525 `async with async_session_maker() as db:`（函数自建新会话，因调用方会话可能已关闭）之后的 try 主逻辑内、L528 获取轨迹点之前（L527 处）插入 region 解析与轨迹读取；尾部（Step 4）对 Track 的重复查询（L650-653）改为复用这里的 `track_row`：
+
+```python
+                # 读取轨迹确定有效 region（region 缺省时回读轨迹自身 region；live recording 调用点零改动）
+                track_row = (await db.execute(select(Track).where(Track.id == track_id))).scalar_one_or_none()
+                region = region or (getattr(track_row, 'region', None) or 'cn')
+                if region not in ('cn', 'id'):
+                    logger.warning(f"Invalid fill region '{region}' for track {track_id}, fallback to 'cn'")
+                    region = 'cn'
+```
+
+- [ ] **Step 3: 填充循环写点（L590-624 区段改造）**
+
+把循环内「获取信息 + 写点」段（原 L591-624 的 try 开头到 `point.updated_by = user_id` 前）替换为：
+
+```python
+                    try:
+                        lat = point.latitude_wgs84
+                        lon = point.longitude_wgs84
+                        # 仅 Nominatim 支持印尼多语言；其他 provider 维持现状调用
+                        from app.gpxutil_wrapper.geocoding import NominatimGeocoding
+                        if region == 'id' and isinstance(geocoding_service, NominatimGeocoding):
+                            info = await geocoding_service.get_point_info(lat, lon, region='id')
+                        else:
+                            info = await geocoding_service.get_point_info(lat, lon)
+                        if region == 'id' and not isinstance(geocoding_service, NominatimGeocoding):
+                            logger.warning(
+                                f"Track {track_id} region=id but geocoding provider "
+                                f"{type(geocoding_service).__name__} has no Indonesian support"
+                            )
+
+                        # 检查是否获取到有效数据（至少有一个非空字段）
+                        has_valid_data = any([
+                            info.get('province'),
+                            info.get('city'),
+                            info.get('area'),
+                            info.get('road_name'),
+                            info.get('road_num'),
+                            info.get('province_en'),
+                            info.get('city_en'),
+                            info.get('area_en'),
+                            info.get('road_name_en'),
+                            info.get('province_id'),
+                            info.get('city_id'),
+                            info.get('area_id'),
+                            info.get('road_name_id'),
+                        ])
+
+                        if has_valid_data:
+                            # 同时填充行政区划和道路信息
+                            point.province = info.get('province', '')
+                            point.city = info.get('city', '')
+                            point.district = info.get('area', '')
+                            point.road_name = info.get('road_name', '')
+                            point.road_number = info.get('road_num', '')
+                            # 英文字段
+                            point.province_en = info.get('province_en', '')
+                            point.city_en = info.get('city_en', '')
+                            point.district_en = info.get('area_en', '')
+                            point.road_name_en = info.get('road_name_en', '')
+                            # 印尼语字段（非 nominatim provider 结果为缺省空串，不额外处理）
+                            point.province_id = info.get('province_id', '')
+                            point.city_id = info.get('city_id', '')
+                            point.district_id = info.get('area_id', '')
+                            point.road_name_id = info.get('road_name_id', '')
+                            # 点级 region（fill 后点归该地区，轨迹级同步见尾部）
+                            point.region = region
+
+                            # 印尼省级中文尽力回填：zh-CN 结果为空或与印尼语相同
+                            # （Nominatim 对无中译省份返回本地名）→ 用 38 省译名表
+                            if region == 'id':
+                                zh_province = info.get('province', '')
+                                id_province = info.get('province_id', '')
+                                if (not zh_province or zh_province == id_province) and id_province:
+                                    from app.gpxutil_wrapper.indonesia import get_indonesia_province_zh
+                                    zh = get_indonesia_province_zh(id_province)
+                                    if zh:
+                                        point.province = zh
+
+                            # 更新审计字段
+                            point.updated_by = user_id
+
+                            updated_count += 1
+```
+
+（注意：原 get_point_info 的 import 已在函数内完成，重复 import 无碍但建议放函数顶部一次——执行器在 Step 2 已把 Nominatim 判定 import 写在代码内时，可把本段的两行 import 删除只留判定。以**无重复 import 且可运行**为准，两处实现等价任选其一。）
+
+- [ ] **Step 4: 尾部轨道更新（L649-659 区段）**
+
+将原：
+
+```python
+                # 更新轨迹标记（只有成功填充了数据才标记为 True）
+                track_result = await db.execute(
+                    select(Track).where(Track.id == track_id)
+                )
+                track = track_result.scalar_one_or_none()
+                if track:
+                    # 只有成功填充了至少一个点，才设置标记
+                    if updated_count > 0:
+                        track.has_area_info = True
+                        track.has_road_info = True
+                    track.updated_by = user_id
+```
+
+替换为（复用 Step 2 开头取的 `track_row`，并同步轨迹 region 为本次填充地区）：
+
+```python
+                # 更新轨迹标记（只有成功填充了数据才标记为 True）
+                track = track_row
+                if track:
+                    # 只有成功填充了至少一个点，才设置标记
+                    if updated_count > 0:
+                        track.has_area_info = True
+                        track.has_road_info = True
+                        track.region = region  # 填充地区成为该轨迹的默认地区
+                    track.updated_by = user_id
+```
+
+- [ ] **Step 5: fill-geocoding API 加 region 参数（`backend/app/api/tracks.py` L492-531）**
+
+```python
+@router.post("/{track_id}/fill-geocoding")
+async def fill_track_geocoding(
+    track_id: int,
+    incremental: bool = Query(False, description="增量模式：仅填充行政区划为空的点，不覆盖已有数据"),
+    region: Optional[str] = Query(None, description="填充的地区 (cn/id)；缺省用轨迹自身 region"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+```
+
+内部 fill_task 调用改为：
+
+```python
+                await track_service.fill_geocoding_info(
+                    new_db, track_id, current_user.id,
+                    incremental=incremental, region=region)
+```
+
+- [ ] **Step 6: 语法检查**
+
+Run: `cd backend && ../.venv/Scripts/python -c "import app.gpxutil_wrapper.geocoding; import app.api.tracks; print('ok')"`
+Expected: ok
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/gpxutil_wrapper/geocoding.py backend/app/services/track_service.py backend/app/api/tracks.py
+git commit -m "feat(geocoding): Nominatim 印尼三语请求，填充写入 *_id 与点级 region，38省中文回填
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: 上传/创建/修改链路的 region 贯通（Form、create_* 签名、5 处批量插入、详情响应）
+
+**Files:**
+- Modify: `backend/app/api/tracks.py`（upload Form + 详情手工 dict + 点接口 dict + 各 create 调用传 region）
+- Modify: `backend/app/api/shared.py`（Step 5b：公开分享页 TrackPointResponse 构造补字段）
+- Modify: `backend/app/services/track_service.py`（create_from_gpx/csv/xlsx/kml 签名与 Track() 构造、5 处批量插入、merge_tracks、gpx/csv/kml 尾部 fill 调用）
+- 说明：PATCH `/tracks/{id}`（update）无需改动——`track_service.update` 是通用 `setattr`（L673-687），Task 3 已给 `TrackUpdate` 加 `region` 字段，前端传即生效。
+
+region 语义：`track.region` 是新建点默认；行级 CSV region（Task 9）会逐点覆盖。
+
+- [ ] **Step 1: `tracks.py` upload 端点加 region Form 并校验**
+
+签名区（L38-48）加 `region: str = Form("cn")`，文件类型校验后加：
+
+```python
+    if region not in ('cn', 'id'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无效的地区，可选值: cn, id",
+        )
+```
+
+四个 create 调用加 `region=region`：
+- `create_from_gpx(...)`（L110-120 调用块）末尾加 `region=region,`
+- `create_from_csv(...)`（L131-141 调用块）末尾加 `region=region,`
+- `create_from_xlsx(...)`（L144-151 调用块）末尾加 `region=region,`
+- `create_from_kml(...)` 两处（KMZ L175-185、KML L196-206）末尾各加 `region=region,`
+
+- [ ] **Step 2: `track_service.py` create_from_gpx / create_from_csv / create_from_kml 签名加 region**
+
+三个方法签名末尾加参数（`fill_geocoding: bool = False,` 后）：
+
+```python
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
+```
+
+`create_from_xlsx` 签名同样加 `region: str = 'cn'`。
+
+各方法内 Track() 构造（gpx L410 / csv L2771 / kml L3342 / xlsx 走 project 格式 L3061）加一行 `region=region,`。project 格式（`_create_from_csv_project_format`）签名加 `region: str = 'cn'` 并在 `create_from_xlsx` 与 `create_from_csv` 的 project 分支调用处透传：
+- `create_from_csv` L2618-2622 调用改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`；签名按位置序加 region 参数
+- `create_from_xlsx` L3488-3490 调用改为 `return await self._create_from_csv_project_format(db, user, filename, rows, name, description, region)`
+
+- [ ] **Step 3: gpx/csv/kml 尾部 fill_geocoding 调用加 region**
+
+gpx 尾部（L479）、csv 尾部（L2840）、kml 尾部（L3411）三处：
+
+```python
+            task = asyncio.create_task(
+                self.fill_geocoding_info(db, track_obj.id, user.id, region=region)
+            )
+```
+
+- [ ] **Step 4: 5 处批量插入的 insert_values 加键**
+
+每处 dict 在 `"road_name_en": ...` 后加一行（project 格式在 road_name_en 后、created_by 前；merge 在 road_name_en 后、memo 前）：
+
+**① create_from_gpx（L434-459）** —— point_data 无 region 键，全部用轨迹 region：
+
+```python
+                "region": region,
+```
+
+**② create_from_csv GPS Logger（L2795-2820）**：
+
+```python
+                "region": region,
+```
+
+**③ _create_from_csv_project_format（L3085-3110）** —— 行级 region 解析在 Task 9 实现；此处先加读取（Task 9 会精化别名与校验，本步先透传点级值或轨迹默认）：
+
+```python
+                "region": point_data.get("region") or region,
+```
+
+同时 point_data 构造（L3024-3045）在末尾加两个键（Task 9 才做别名解析时，本步先用简单读取占位，Task 9 会替换为别名版——若执行顺序保证 Task 7 在 Task 9 前完成，这里先用简单形式并保证与 Task 9 不冲突，Task 9 会再改一次）：
+
+```python
+                'region': row.get('region', '').strip() or None,
+            }
+            # region 值与 *_id 语言列由 Task 9 的别名解析统一处理；Task 7 只落 region 轨迹默认
+            point_data['region'] = point_data['region'] or region
+```
+
+> 执行顺序约定：Task 7 先提交「简单行级 region 读取」，Task 9 把 `province/city/area/road_name` 等全部字段升级为别名解析版并加 `*_id`。两步合并为一步在 Task 9 完成亦可——以不引入错误为准：**推荐执行器在 Task 7 直接不做 project 格式的 *_id 行级字段（维持现状无后缀列读取），只加 `"region": region` 轨迹默认注入**，行级字段/别名统一留到 Task 9 一次改完，避免两遍 diff。采用推荐路径时 ③ 与 point_data 的改动简化为：
+
+```python
+                "region": region,
+```
+
+**④ create_from_kml（L3366-3391）**：
+
+```python
+                "region": region,
+```
+
+**⑤ merge_tracks（L3905-3933）** —— 点级数据复制：
+
+```python
+                "province_id": point.province_id,
+                "city_id": point.city_id,
+                "district_id": point.district_id,
+                "road_name_id": point.road_name_id,
+                "region": point.region or 'cn',
+```
+
+merge 的 Track() 构造（L3880-3898）加 `region=plan['tracks'][0].region or 'cn' if hasattr(plan['tracks'][0], 'region') else 'cn',`——简化：首段轨迹 region 作为默认：
+
+```python
+            region=plan['tracks'][0].region or 'cn',
+```
+
+（plan['tracks'][0] 为第一个源轨迹对象，已在 _build_merge_plan 中加载。注意 merge 产物点级 region 已被逐点复制，track.region 仅作默认/回退值。）
+
+- [ ] **Step 5: 轨迹详情手工构造 dict 补 region（`tracks.py` L420-446）**
+
+`response_data` 在 `"original_crs": track.original_crs,` 后加：
+
+```python
+        "region": track.region or 'cn',
+```
+
+（live_recordings detail 走 `TrackResponse.model_validate(track)` 自动携带；列表页同。）
+
+- [ ] **Step 5b: 其余点序列化处补多语言/region 字段（Task 3 质量审查发现的「字段已宣告、生产者未填充」缺口）**
+
+新加的点级字段是本类中唯一带默认值的（其余地名/道路字段无默认），漏传不报错、被默认值静默掩盖 → 公开分享页与轨迹点接口对印尼轨迹会返回 `region='cn'` 并丢失印尼语名称。以下 4 处必须补：
+
+① `backend/app/api/shared.py`（L48-73，`TrackPointResponse(...)` 逐字段构造，公开分享页唯一构造点）——在 `road_name_en=p.road_name_en,` 后加：
+
+```python
+            province_id=p.province_id,
+            city_id=p.city_id,
+            district_id=p.district_id,
+            road_name_id=p.road_name_id,
+            region=p.region or 'cn',
+```
+
+② `backend/app/api/tracks.py`（`GET /tracks/{id}/points` 端点 L676-705 的点 dict，含全部地名/道路字段）——在 `"road_name_en": point.road_name_en,` 后加：
+
+```python
+            "province_id": point.province_id,
+            "city_id": point.city_id,
+            "district_id": point.district_id,
+            "road_name_id": point.road_name_id,
+            "region": point.region or 'cn',
+```
+
+③ `backend/app/services/track_service.py` unified 列表 item dict（L920-946）——在 `'original_crs': track.original_crs,` 后加：
+
+```python
+                'region': track.region or 'cn',
+```
+
+④ 同文件虚拟实时项 dict（L958 起，无关联轨迹的录制）——在 `'original_crs': 'wgs84',` 后加：
+
+```python
+                    'region': 'cn',
+```
+
+> 不加的处：`tracks.py` download 端点（约 L1104）的点 dict 不含任何地名/道路字段（只有坐标/索引/时间），与既有字段集一致，**不补**。
+
+- [ ] **Step 6: 语法检查 + grep 核对全部 create/fill 调用**
+
+Run: `cd backend && ../.venv/Scripts/python -c "import app.api.tracks; import app.services.track_service; print('ok')"`
+然后 grep：`fill_geocoding_info(` 应只剩 service 内部定义、live_recording_service 的调用（live recording 走增量 fill：Region 默认 cn，其调用 `fill_geocoding_info(db, ..., incremental=...)` 不带 region → None → 轨迹 region，正确）。
+Expected: ok
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/api/tracks.py backend/app/api/shared.py backend/app/services/track_service.py
+git commit -m "feat(upload): 上传/创建/合并链路贯通 region（Form 参数、批量插入注入点级region）
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 8: CSV/XLSX 导出使用新列名（region + `*_zh/_id/_en`）
+
+**Files:**
+- Modify: `backend/app/services/track_service.py`（export_points_to_csv L1806-1886、export_points_to_xlsx L1937-2013）
+- Test: 无（表格结构变更由 Task 13 冒烟 + 导入闭环验证；后端当前无导出单测基建）
+
+导出表头新格式（spec §3，坐标等既有列不重排，region 在 speed 之后）：
+
+```
+index, time_date, time_time, time_microsecond, elapsed_time,
+longitude_wgs84, latitude_wgs84, longitude_gcj02, latitude_gcj02, longitude_bd09, latitude_bd09,
+elevation, distance, course, speed,
+region,
+province_zh, province_id, province_en,
+city_zh, city_id, city_en,
+area_zh, area_id, area_en,
+road_num, road_name_zh, road_name_id, road_name_en, memo
+```
+
+- [ ] **Step 1: CSV 表头与行值（export_points_to_csv）**
+
+表头（L1806-1815）替换：
+
+```python
+        headers = [
+            "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
+            "longitude_wgs84", "latitude_wgs84",
+            "longitude_gcj02", "latitude_gcj02",
+            "longitude_bd09", "latitude_bd09",
+            "elevation", "distance", "course", "speed",
+            "region",
+            "province_zh", "province_id", "province_en",
+            "city_zh", "city_id", "city_en",
+            "area_zh", "area_id", "area_en",
+            "road_num", "road_name_zh", "road_name_id", "road_name_en", "memo"
+        ]
+```
+
+行值（L1866-1875）替换：
+
+```python
+                point.region or "",
+                point.province or "",
+                point.province_id or "",
+                point.province_en or "",
+                point.city or "",
+                point.city_id or "",
+                point.city_en or "",
+                point.district or "",
+                point.district_id or "",
+                point.district_en or "",
+                point.road_number or "",
+                point.road_name or "",
+                point.road_name_id or "",
+                point.road_name_en or "",
+                getattr(point, 'memo', None) or "",
+```
+
+- [ ] **Step 2: XLSX 表头与行值（export_points_to_xlsx）**
+
+表头（L1937-1946）与 CSV 相同的 30 列列表。行值（L2003-2012）替换为与 CSV 相同的字段序（xlsx 用 `point.region` 原值即 `point.region or 'cn'` 视 ORM 属性是否有值——SQLAlchemy 列 default 在查询返回后为 None 直至 Python 侧……注意：`server_default='cn'` 且 DB 侧填充 → 新库查询返回 'cn'；旧行迁移后亦为 'cn'。故写 `point.region` 即可，无需 or 兜底；为稳妥与 CSV 一致用 `point.region or 'cn'`）：
+
+```python
+                point.region or 'cn',
+                point.province,
+                point.province_id,
+                point.province_en,
+                point.city,
+                point.city_id,
+                point.city_en,
+                point.district,
+                point.district_id,
+                point.district_en,
+                point.road_number,
+                point.road_name,
+                point.road_name_id,
+                point.road_name_en,
+                getattr(point, 'memo', None),
+```
+
+- [ ] **Step 3: 语法检查**
+
+Run: `cd backend && ../.venv/Scripts/python -c "import app.services.track_service; print('ok')"`
+Expected: ok
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add backend/app/services/track_service.py
+git commit -m "feat(export): CSV/XLSX 导出新列名（region + province/city/area/road_name 三语言列）
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 9: 导入器：列名别名表 + 行级 region（import_points_from_file 与 create 路径）
+
+**Files:**
+- Modify: `backend/app/services/track_service.py`（update_point_fields L2377-2430、has_area/has_road 重算 L2520-2535、_create_from_csv_project_format 地理解析 L2959-2974 与 point_data L3024-3045、insert L3085-3110、GPS Logger 检测后 project 分支）
+
+别名表（模块级常量，放 track_service.py 靠近 MERGE_GAP_THRESHOLD_SECONDS 的模块常量区即可；也可以就近放方法内——**推荐模块常量**，两处使用）：
+
+```python
+# ========== CSV/XLSX 导入列名别名 ==========
+# 新格式带语言后缀（province_zh/province_id/province_en）；样例与旧版 vibe 导出
+# 无后缀列表示中文（province/city/area/road_name/road_name_en 等历史格式）。
+# 解析顺序即优先级：语言后缀全显式的新列优先，其次旧列名。
+_IMPORT_FIELD_ALIASES = {
+    'province': ['province_zh', 'province'],
+    'city': ['city_zh', 'city'],
+    'district': ['area_zh', 'area'],
+    'province_en': ['province_en'],
+    'city_en': ['city_en'],
+    'district_en': ['area_en'],
+    'province_id': ['province_id'],
+    'city_id': ['city_id'],
+    'district_id': ['area_id'],
+    'road_name': ['road_name_zh', 'road_name'],
+    'road_name_en': ['road_name_en'],
+    'road_name_id': ['road_name_id'],
+    'road_num': ['road_num'],
+    'memo': ['memo'],
+    'region': ['region'],
+}
+```
+
+- [ ] **Step 1: `update_point_fields` 改别名驱动（L2377-2430 整体替换函数体）**
+
+```python
+        def update_point_fields(point: TrackPoint, row: dict, headers: set | list | None = None):
+            """更新点的可编辑字段（多语言别名列名 + 行级 region）
+
+            只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
+            所有别名列都不存在时，才保留数据库中的原值。
+            region 特殊：值为空时按『无 region 列』处理（不动该点 region）。
+            """
+            def has_key(field: str) -> bool:
+                """字段是否有任一别名列存在于文件中"""
+                for alias in _IMPORT_FIELD_ALIASES.get(field, []):
+                    if isinstance(row, dict):
+                        if alias in row:
+                            return True
+                    else:
+                        if headers and alias in headers:
+                            return True
+                return False
+
+            def get_val(field: str) -> str | None:
+                """取字段值：按别名优先级取第一个存在的列；无则 None"""
+                for alias in _IMPORT_FIELD_ALIASES.get(field, []):
+                    if isinstance(row, dict):
+                        if alias in row:
+                            val = row.get(alias)
+                            return val.strip() if val else None
+                    else:
+                        if headers and alias in headers:
+                            idx = headers.index(alias)
+                            if idx < len(row):
+                                val = row[idx]
+                                return str(val).strip() if val else None
+                return None
+
+            # 行政区划信息：只要列存在就更新（含 *_id 印尼语列）
+            if has_key('province'):
+                point.province = get_val('province')
+            if has_key('city'):
+                point.city = get_val('city')
+            if has_key('district'):
+                point.district = get_val('district')
+            if has_key('province_en'):
+                point.province_en = get_val('province_en')
+            if has_key('city_en'):
+                point.city_en = get_val('city_en')
+            if has_key('district_en'):
+                point.district_en = get_val('district_en')
+            if has_key('province_id'):
+                point.province_id = get_val('province_id')
+            if has_key('city_id'):
+                point.city_id = get_val('city_id')
+            if has_key('district_id'):
+                point.district_id = get_val('district_id')
+
+            # 道路信息：只要列存在就更新
+            if has_key('road_num'):
+                point.road_number = get_val('road_num')
+            if has_key('road_name'):
+                point.road_name = get_val('road_name')
+            if has_key('road_name_en'):
+                point.road_name_en = get_val('road_name_en')
+            if has_key('road_name_id'):
+                point.road_name_id = get_val('road_name_id')
+
+            # 备注：只要列存在就更新
+            if has_key('memo'):
+                point.memo = get_val('memo')
+
+            # region：行级地区（跨地区文件主通道）。列存在且值为空 → 用轨迹默认；
+            # 值非法抛错终止导入（防误输入整段错区）。
+            if has_key('region'):
+                region_val = get_val('region')
+                if region_val is None or region_val == '':
+                    point.region = track.region or 'cn'
+                elif region_val in ('cn', 'id'):
+                    point.region = region_val
+                else:
+                    raise ValueError(
+                        f"无效的地区值 '{region_val}'，可选值: cn, id")
+
+            point.updated_by = user_id
+```
+
+注意：`track` 在 `update_point_fields` 闭包可见（函数定义在 import_points_from_file 方法体内，track 已在上文获取）。CSV 的 row 是 DictReader 行（dict）；XLSX 走 `row, headers` 列表分支——现有调用 `update_point_fields(point, row)`（CSV）与 `update_point_fields(point, row, headers)`（XLSX），签名已兼容。
+
+- [ ] **Step 2: has_area/has_road 重算加 *_id 列（L2520-2535）**
+
+```python
+        has_area = any(
+            p.province or p.city or p.district or
+            p.province_en or p.city_en or p.district_en or
+            p.province_id or p.city_id or p.district_id
+            for p in points
+        )
+        has_road = any(
+            p.road_number or p.road_name or p.road_name_en or p.road_name_id
+            for p in points
+        )
+```
+
+- [ ] **Step 3: `_create_from_csv_project_format` 地理字段别名解析（L2959-2968）**
+
+将硬编码无后缀读取替换为别名 helper（模块级或方法级，与 Task 9 Step 1 复用同一函数不便——CSV dict 行读取逻辑不同（create 是整行解析为字段而非列存在语义）。create 路径按行全量建点，语义：列存在 → 值；不存在 → None。添加方法级小工具 `_row_aliased(row, field, default=None)`——直接按别名表顺序取第一个非空值（create 语义无需区分「列存在但空」与「无列」，最终值都是 None 或空）：
+
+```python
+            # 解析地理信息（别名：新格式 *_zh / *_id / *_en；旧格式无后缀=中文）
+            province = (row.get('province_zh') or row.get('province') or '').strip() or None
+            city = (row.get('city_zh') or row.get('city') or '').strip() or None
+            district = (row.get('area_zh') or row.get('area') or '').strip() or None
+            province_en = (row.get('province_en') or '').strip() or None
+            city_en = (row.get('city_en') or '').strip() or None
+            district_en = (row.get('area_en') or '').strip() or None
+            province_id = (row.get('province_id') or '').strip() or None
+            city_id = (row.get('city_id') or '').strip() or None
+            district_id = (row.get('area_id') or '').strip() or None
+            road_number = (row.get('road_num') or '').strip() or None
+            road_name = (row.get('road_name_zh') or row.get('road_name') or '').strip() or None
+            road_name_en = (row.get('road_name_en') or '').strip() or None
+            road_name_id = (row.get('road_name_id') or '').strip() or None
+            # 行级 region（可选）：非空须为 cn/id，空则用轨迹默认
+            row_region = (row.get('region') or '').strip()
+            if row_region and row_region not in ('cn', 'id'):
+                raise ValueError(f"无效的地区值 '{row_region}'，可选值: cn, id")
+            point_region = row_region or region
+```
+
+（`region` 为方法参数，Task 7 已加。）
+
+- [ ] **Step 4: has_area/has_road 检测与 point_data/insert（project 格式内）**
+
+检测段（L2970-2974）替换：
+
+```python
+            if (province or city or district or province_en or city_en or district_en
+                    or province_id or city_id or district_id):
+                has_area_info = True
+            if road_number or road_name or road_name_en or road_name_id:
+                has_road_info = True
+```
+
+point_data dict（L3036-3044）改为：
+
+```python
+                'province': province,
+                'city': city,
+                'district': district,
+                'province_en': province_en,
+                'city_en': city_en,
+                'district_en': district_en,
+                'province_id': province_id,
+                'city_id': city_id,
+                'district_id': district_id,
+                'road_number': road_number,
+                'road_name': road_name,
+                'road_name_en': road_name_en,
+                'road_name_id': road_name_id,
+                'region': point_region,
+```
+
+insert_values（L3098-3106）替换为：
+
+```python
+                "province": point_data.get("province"),
+                "city": point_data.get("city"),
+                "district": point_data.get("district"),
+                "province_en": point_data.get("province_en"),
+                "city_en": point_data.get("city_en"),
+                "district_en": point_data.get("district_en"),
+                "province_id": point_data.get("province_id"),
+                "city_id": point_data.get("city_id"),
+                "district_id": point_data.get("district_id"),
+                "road_name": point_data.get("road_name"),
+                "road_number": point_data.get("road_number"),
+                "road_name_en": point_data.get("road_name_en"),
+                "road_name_id": point_data.get("road_name_id"),
+                "region": point_data.get("region") or region,
+```
+
+- [ ] **Step 5: 语法检查 + GPS Logger 分支确认**
+
+Run: `cd backend && ../.venv/Scripts/python -c "import app.services.track_service; print('ok')"`
+Expected: ok
+
+同步确认：GPS Logger 格式（无 project 列）不读地理列 → 无需改动（Track() 与插入已由 Task 7 注入 region）。`create_from_xlsx` 走 `_create_from_csv_project_format` 自动获得别名/行级 region 能力（xlsx 表头与 CSV 一致的假定不变）。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add backend/app/services/track_service.py
+git commit -m "feat(import): CSV/XLSX 导入列名别名表（兼容三类格式）与行级 region 写入
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 10: 区域树：共享聚合重构 + region 分组 + names + 显示回退链
+
+**Files:**
+- Modify: `backend/app/services/track_service.py`（get_region_tree L1316-1557、get_region_tree_no_auth L1559-1766 → 提取共享 `_build_region_tree`）
+- Modify: `backend/app/schemas/track.py`（RegionNode——Task 3 已加字段；无需再动）
+
+行为（spec §6）：
+- 分组键 = (region, 各级显示文本)；同文本不同 region 的分开成组（深港：cn/香港节点分开——注意香港点 region 会是什么？跨地区文件行级 region 显式 'cn'/'id'。香港本身不在值域内（cn|id）——深港示例中港段实际由用户选 region（cn）→ 同 province '未知区域'?? 不深究：**region 并入键 + names 记录语言** 即 spec 要求，示例是解释性的）
+- 显示文本：每级文本在组内取回退链 zh → id → en → 哨兵（名称文本与 原 point.xxx 非空检测一致）。实际上层是「取各级原始字段并组成 key」：省文本 = point.province or point.province_id or point.province_en or '未知区域'——但显示 prefer zh。回退链 zh→id→en 与现状「province 为空视为未知」兼容：cn 点只有 province 非空 → 原样。id 点 province 可能空（未回填）而 province_id 有 → 新行为显示 province_id。OK
+- 节点 names = 组内**创建时首见**的三个语言非空代表（zh/id/en）；组内语言中途变化不拆组（决策 5）
+- stats 去重键 = (region, name)
+
+实现：因两函数（1316/1559）除权限检查与 create_node 微小差异外全同（no_auth 每点额外 own point_count++ 后又被 _aggregate_node_stats 覆盖 → 与 auth 等价），提取单一共享方法。Task 步骤：
+
+- [ ] **Step 1: 读 L1269-1315（_aggregate_node_stats 开头）确认后开始**
+
+先 Read `backend/app/services/track_service.py` 的 L1269-1316（_aggregate_node_stats）确认行为（已核：聚合基于 own_* 字段并写回 distance/point_count）。
+
+- [ ] **Step 2: 新增共享方法 `_build_region_tree(self, points)`（放 get_region_tree 之前）**
+
+整体（提取 auth 版逻辑 + region/names/回退链；供两个公共方法共用）：
+
+```python
+    def _build_region_tree(self, points: list[TrackPoint]) -> tuple[list[dict], dict]:
+        """按时间顺序构建区域树（两个公共入口共用）
+
+        分组键含 (region, 文本)：同文本不同地区分开成组；节点显示文本按
+        回退链 zh → id → en → 哨兵；names 记录组内首见的各语言非空值。
+        返回 (root_nodes, stats)。
+        """
+        root_nodes = []
+        node_counter = [0]
+
+        # 统计各级区域数量（去重键 = (region, 显示文本)）
+        province_set = set()
+        city_set = set()
+        district_set = set()
+        road_set = set()
+
+        def fallback_text(*values) -> str:
+            """回退链 zh → id → en → 哨兵：取第一个非空（哨兵在值空时兜底）"""
+            for v in values:
+                if v:
+                    return v
+            return '未知区域'
+
+        def create_node(name: str, node_type: str, road_number: str = None,
+                        names: Optional[dict] = None, region: str = 'cn') -> dict:
+            """创建一个新节点（names 为各语言代表文本，非空才出现）"""
+            node_counter[0] += 1
+            return {
+                'id': f"node_{node_counter[0]}",
+                'name': name,
+                'type': node_type,
+                'road_number': road_number,
+                'names': names or {},
+                'region': region,
+                'own_distance': 0.0,
+                'distance': 0.0,
+                'own_point_count': 0,
+                'point_count': 0,
+                'start_time': None,
+                'end_time': None,
+                'start_index': -1,
+                'end_index': -1,
+                'children': [],
+            }
+
+        def collect_names(point: TrackPoint, is_road: bool) -> dict:
+            """取点在本级展示的语言代表值（非空才入 names）"""
+            names = {}
+            if is_road:
+                zh, id_, en = point.road_name, point.road_name_id, point.road_name_en
+            else:
+                zh, id_, en = point.province, point.province_id, point.province_en
+            if zh:
+                names['zh'] = zh
+            if id_:
+                names['id'] = id_
+            if en:
+                names['en'] = en
+            return names
+
+        # 当前活跃的节点路径（(region, 显示文本, 节点)）
+        current_province = None
+        current_city = None
+        current_district = None
+        current_road = None
+        prev_point = None
+
+        for time_idx, point in enumerate(points):
+            region = point.region or 'cn'
+            province = fallback_text(point.province, point.province_id, point.province_en)
+            city = point.city or point.city_id or point.city_en  # 可为空
+            district = point.district or point.district_id or point.district_en  # 可为空
+            road_name = point.road_name or point.road_name_id or point.road_name_en
+            road_number = point.road_number
+
+            # 统计各级区域（排除"未知区域"和重复名称；键含 region 防跨地区串并）
+            if province != '未知区域': province_set.add((region, province))
+            if city and city != province and city != '未知区域': city_set.add((region, city))
+            if district and district != city and district != '未知区域': district_set.add((region, district))
+            if road_name and road_name != '未知区域': road_set.add((region, road_name))
+
+            # 检查是否需要创建新的省级节点（键 = (region, 文本)）
+            if current_province is None or current_province[0] != (region, province):
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                # 结束旧省级节点的索引范围
+                if current_province is not None and prev_point is not None:
+                    current_province[1]['end_index'] = time_idx - 1
+                # 创建新省级节点并设置起始索引
+                new_province = create_node(
+                    province, 'province',
+                    names=collect_names(point, False), region=region)
+                new_province['start_index'] = time_idx
+                root_nodes.append(new_province)
+                current_province = ((region, province), new_province)
+                current_city = None
+                current_district = None
+                current_road = None
+
+            province_node = current_province[1]
+
+            # 检查是否需要创建新的市级节点
+            city_key = city if city and city != province else None
+            if city_key and (current_city is None or current_city[0] != ((region, city_key))):
+                # 先结束所有下层节点的索引范围
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                # 结束旧市级节点的索引范围
+                if current_city is not None and prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                # 创建新市级节点并设置起始索引
+                new_city = create_node(
+                    city_key, 'city',
+                    names=collect_names(point, False), region=region)
+                new_city['start_index'] = time_idx
+                province_node['children'].append(new_city)
+                current_city = ((region, city_key), new_city)
+                current_district = None
+                current_road = None
+            elif not city_key and current_city is not None:
+                # city 为空但之前有市级节点，需要重置
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                if prev_point is not None:
+                    current_city[1]['end_index'] = time_idx - 1
+                current_city = None
+                current_district = None
+                current_road = None
+
+            city_node = current_city[1] if current_city else province_node
+
+            # 检查是否需要创建新的区级节点
+            district_key = district if district and district != city_key else None
+            if district_key and (current_district is None or current_district[0] != ((region, district_key))):
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                if current_district is not None and prev_point is not None:
+                    current_district[1]['end_index'] = time_idx - 1
+                new_district = create_node(
+                    district_key, 'district',
+                    names=collect_names(point, False), region=region)
+                new_district['start_index'] = time_idx
+                city_node['children'].append(new_district)
+                current_district = ((region, district_key), new_district)
+                current_road = None
+
+            district_node = current_district[1] if current_district else city_node
+
+            # 道路节点键 = (region, 名称, 编号)
+            if road_name:
+                road_key = ((region, road_name), road_number or '')
+            else:
+                road_name = '（无名）'
+                road_key = ((region, road_name), road_number or '')
+
+            if current_road is None or current_road[0] != road_key:
+                if current_road is not None and prev_point is not None:
+                    current_road[1]['end_index'] = time_idx - 1
+                new_road = create_node(
+                    road_name, 'road', road_number,
+                    names=collect_names(point, True), region=region)
+                new_road['start_index'] = time_idx
+                district_node['children'].append(new_road)
+                current_road = (road_key, new_road)
+
+            # 确定当前最低层级的活跃节点
+            if current_road:
+                active_node = current_road[1]
+            elif current_district:
+                active_node = current_district[1]
+            elif current_city:
+                active_node = current_city[1]
+            else:
+                active_node = province_node
+
+            # 累加点数
+            active_node['own_point_count'] += 1
+
+            # 更新时间范围
+            if point.time:
+                if active_node['start_time'] is None or point.time < active_node['start_time']:
+                    active_node['start_time'] = point.time
+                if active_node['end_time'] is None or point.time > active_node['end_time']:
+                    active_node['end_time'] = point.time
+
+            # 距离由外层循环计算（原实现逐点 await distance，见 Step 3 说明）
+            prev_point = point
+
+        # 设置所有活跃节点的结束索引（使用最后的时间索引）
+        last_time_idx = len(points) - 1
+        if current_road is not None:
+            current_road[1]['end_index'] = last_time_idx
+        if current_district is not None:
+            current_district[1]['end_index'] = last_time_idx
+        if current_city is not None:
+            current_city[1]['end_index'] = last_time_idx
+        if current_province is not None:
+            current_province[1]['end_index'] = last_time_idx
+
+        # 后处理：聚合统计信息，让上级包含下级
+        for node in root_nodes:
+            self._aggregate_node_stats(node)
+
+        return root_nodes, {
+            'province': len(province_set),
+            'city': len(city_set),
+            'district': len(district_set),
+            'road': len(road_set),
+        }
+```
+
+> 距离计算：原实现在点循环内 `await self.spatial_service.distance(...)`（异步）。把共享构建做成同步方法会把 await 留在循环外。**执行器注意**：`_build_region_tree` 需要是 **async**（距离计算需 await），循环内 active_node['own_distance'] += distance 保留在循环内 await 计算（与现状一致）。即本方法改为 `async def _build_region_tree(self, points)`，循环内距离段原样保留：
+
+```python
+            # 计算距离
+            if prev_point:
+                distance = await self.spatial_service.distance(
+                    prev_point.latitude_wgs84, prev_point.longitude_wgs84,
+                    point.latitude_wgs84, point.longitude_wgs84
+                )
+                active_node['own_distance'] += distance
+```
+
+（上面 Step 2 代码中的「距离由外层循环计算」注释改为保留该 await 段。以**最终文件行为与现状一致**为准：构建函数 async，内部含原距离计算段。）
+
+- [ ] **Step 3: 两公共方法改薄壳**
+
+`get_region_tree`（L1316-1557）保留权限检查（L1338-1341 不变），其后主体替换为：
+
+```python
+        # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.time, TrackPoint.created_at)
+        )
+        points = list(result.scalars().all())
+
+        if not points:
+            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
+
+        root_nodes, stats = await self._build_region_tree(points)
+        return {'regions': root_nodes, 'stats': stats}
+```
+
+`get_region_tree_no_auth`（L1559-1766）同样替换为薄壳（无权限检查）。删除原两函数内的重复构建体。
+
+- [ ] **Step 4: 冒烟验证等价性（临时脚本，不入库）**
+
+Run:
+```bash
+cd backend
+../.venv/Scripts/python - <<'EOF'
+import asyncio
+from app.core.database import async_session_maker
+from sqlalchemy import select
+from app.models.track import Track
+from app.services.track_service import track_service
+
+async def main():
+    async with async_session_maker() as db:
+        t = (await db.execute(select(Track.id).where(Track.is_valid == True).limit(1))).scalar_one_or_none()
+        if not t:
+            print("no track"); return
+        r1 = await track_service.get_region_tree(db, t.id, 1)
+        r2 = await track_service.get_region_tree_no_auth(db, t.id)
+        print("auth nodes:", len(r1["regions"]), "no_auth nodes:", len(r2["regions"]))
+        print("auth stats:", r1["stats"], "no_auth stats:", r2["stats"])
+        # 节点结构一致性：auth 首节点含 names/region 键
+        if r1["regions"]:
+            n = r1["regions"][0]
+            print("first node keys ok:", all(k in n for k in ("name", "region", "names")))
+asyncio.run(main())
+EOF
+```
+Expected: 两入口节点数与 stats 一致（同轨迹）；首节点含 region/names 键。（若 get_region_tree 因 user_id 非 1 找不到轨迹返回空 → 用数据库实际第一个轨迹的 owner 替换 user_id，或选择共享轨迹 id。执行器以实际数据为准调整查询；若开发库为空则跳过本验证并注明。）
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/app/services/track_service.py
+git commit -m "feat(region-tree): 区域树按(region,文本)分组、节点携带 names/region，抽取共享构建
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 11: 前端 API 层：类型加 region/多语言字段，upload/update 透传 region
+
+**Files:**
+- Modify: `frontend/src/api/track.ts`（Track/UnifiedTrack/TrackPoint/RegionNode 类型、upload、update）
+- Modify: `frontend/src/api/roadSign.ts`（RoadSignRequest/RoadSignResponse）
+- **不改** `frontend/src/utils/roadSignParser.ts`——实现级裁定（记入决策）：`parseRoadNumber` 的全部活动调用点中，cn 分支走现状解析、id 分支在 `renderNodeLabel` 直接绕开 parse 改走后端判级（见 Task 12），无任何调用点需要 region 参数 → 公共函数不加死参数。地图组件 5 处调用不改（id 编号 parse 失败 → 现有文本回退分支自然兜底）。
+- **不改** `fillGeocoding` 前端方法——后端 `region` Query 缺省时回读轨迹自身 region（Task 6），行为等价且轨迹 region 为权威，前端无需显式传（见 Task 12 注）。
+
+- [ ] **Step 1: `track.ts` 三个接口类型加字段**
+
+`Track`（original_crs 后）与 `UnifiedTrack` 各加一行：
+
+```ts
+  region: string  // 地区: cn=中国, id=印尼（新建点的默认 region，点级权威见 TrackPoint.region）
+```
+
+`TrackPoint`（road_name_en 之后、memo 之前）加：
+
+```ts
+  province_id: string | null  // 印尼语省级名
+  city_id: string | null  // 印尼语市级名
+  district_id: string | null  // 印尼语区级名
+  road_name_id: string | null  // 印尼语路名
+  region: string  // 点级地区（图标与显示回退的权威来源）
+```
+
+`RegionNode`（name 之后）加：
+
+```ts
+  region?: string  // 节点地区（后端恒返回；可选以便兼容旧数据）
+  names?: Record<string, string>  // 组内各语言代表文本，如 { zh, id, en }（非空语言才出现）
+```
+
+- [ ] **Step 2: `track.ts` 的 upload/update 方法**
+
+upload 的 data 类型（`fill_geocoding?` 后）加 `region?: string`，方法内 `fill_geocoding` append 之后加：
+
+```ts
+    if (data.region !== undefined) formData.append('region', data.region)
+```
+
+update 的 data 类型 `{ name?: string; description?: string }` 改为 `{ name?: string; description?: string; region?: string }`（正文不变——region 直接随 JSON PATCH 发送，后端 exclude_unset 语义：不传即不更新）。
+
+- [ ] **Step 3: `roadSign.ts` 请求/响应加印尼字段**
+
+```ts
+export interface RoadSignRequest {
+  sign_type: 'way' | 'expwy'
+  code: string
+  province?: string
+  name?: string
+  region?: string      // 地区: cn(缺省)/id。id 时 sign_type 被忽略，按编号+路名判级生成六边形盾牌
+  name_id?: string     // 印尼语路名（TOL 关键词判定文本之一）
+}
+
+export interface RoadSignResponse {
+  svg: string
+  cached: boolean
+  sign_type: string
+  code: string
+  province?: string
+  name?: string
+  region?: string      // 回显请求地区（缺省 'cn'）
+}
+```
+
+- [ ] **Step 4: 类型检查**
+
+Run: `cd frontend && npx vue-tsc --noEmit`
+Expected: 无错误（若有与本任务无关的存量错误先记录、不修）。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add frontend/src/api/track.ts frontend/src/api/roadSign.ts
+git commit -m "feat(api): 前端 API 类型与上传/更新请求支持 region 与多语言字段
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 12: 前端视图：上传地区选择、编辑对话框地区、区域树印尼盾牌与多语 tooltip
+
+**Files:**
+- Modify: `frontend/src/views/TrackUpload.vue`（表单加地区）
+- Modify: `frontend/src/views/TrackDetail.vue`（编辑对话框加地区、区域树渲染三函数、saveEdit）
+- Modify: `frontend/src/views/SharedTrack.vue`（区域树渲染三函数——与 TrackDetail 完全同构、无编辑/填充逻辑）
+
+本节先给出 TrackDetail 的目标代码；SharedTrack 的 getRoadSignSvg/loadRoadSignSvg/renderNodeLabel 三函数**逐字相同**（仅文件内行号不同，SharedTrack 位于 L778-876），执行器在 SharedTrack 重复应用同样的函数体替换。
+
+> 实况前提（Task 5 质量审查实测）：后端 `get_or_create_sign` 走 `output_path` 分支再回读文件，**返回的 SVG 带固定 `width="562.0px" height="451px"`**（仅字符串分支剥 width/height；CN 盾牌同形，前端既有渲染已兼容）。故此处沿用现有内联/尺寸处理即可，**不要**指望靠 viewBox 自适应撑满容器；如需缩放由外层 CSS 定尺寸。
+
+两个文件模板中两处 el-tree slot 均以 `<component :is="() => renderNodeLabel(data)" />` 输出标签 → **模板零改动**（tooltip 用原生 title 属性在 renderNodeLabel 内实现，不侵入 el-tree）。
+
+- [ ] **Step 1: TrackDetail.vue —— 替换三个 SVG 函数与 renderNodeLabel（L1780-1885 区段整体替换）**
+
+将 `getRoadSignSvg`（L1787-1808）、`loadRoadSignSvg`（L1814-1836）、`renderNodeLabel`（L1842-1885）三函数整体替换为（中间注释行保留原样）：
+
+```ts
+/**
+ * 道路标志获取/加载的参数与缓存键
+ * region 缺省 'cn'；id 时 sign_type 恒 'way'（后端判级），name/name_id 供 TOL 判定
+ */
+interface RoadSignFetchOptions {
+  code: string
+  signType: 'way' | 'expwy'
+  province?: string
+  region?: string
+  name?: string
+  nameId?: string
+}
+
+function buildSignCacheKey(opts: RoadSignFetchOptions): string {
+  const region = opts.region || 'cn'
+  // cn: 维持现状键（signType:code[:province]）；id: 键含地区与路名
+  // （路名决定 TOL/NASIONAL 判定，必须参与键，防同名编号不同路串样）
+  if (region !== 'cn') {
+    return [region, opts.signType, opts.code, opts.name || ''].filter(Boolean).join(':')
+  }
+  return opts.province ? `${opts.signType}:${opts.code}:${opts.province}` : `${opts.signType}:${opts.code}`
+}
+
+/**
+ * 异步获取道路标志 SVG
+ * @param opts 编号、类型与地区参数（见 RoadSignFetchOptions）
+ * @returns SVG 字符串，失败返回 null
+ */
+async function getRoadSignSvg(opts: RoadSignFetchOptions): Promise<string | null> {
+  const cacheKey = buildSignCacheKey(opts)
+
+  // 检查缓存
+  const cached = roadSignSvgCache.value.get(cacheKey)
+  if (cached) return cached
+
+  try {
+    const isId = (opts.region || 'cn') !== 'cn'
+    const response = await roadSignApi.generate({
+      sign_type: isId ? 'way' : opts.signType,  // id: sign_type 无意义，后端忽略
+      code: opts.code,
+      ...(opts.province && { province: opts.province }),
+      ...(opts.name && { name: opts.name }),
+      ...(isId && { region: opts.region }),
+      ...(isId && opts.nameId && { name_id: opts.nameId }),
+    })
+    const svg = response.svg
+    roadSignSvgCache.value.set(cacheKey, svg)
+    return svg
+  } catch {
+    // 生成失败，返回 null 使用文本回退
+    return null
+  }
+}
+
+/**
+ * 异步加载单个道路编号的 SVG（不阻塞渲染）
+ * @param opts 与 getRoadSignSvg 相同的参数
+ */
+async function loadRoadSignSvg(opts: RoadSignFetchOptions) {
+  // 缓存 key 与 getRoadSignSvg 一致
+  const key = buildSignCacheKey(opts)
+
+  // 防止重复加载
+  if (loadingSigns.value.has(key)) {
+    return
+  }
+
+  loadingSigns.value.add(key)
+
+  try {
+    const svg = await getRoadSignSvg(opts)
+    if (svg) {
+      // 触发树组件重新渲染
+      treeForceUpdateKey.value++
+    }
+  } catch {
+    // 生成失败，忽略错误
+  } finally {
+    loadingSigns.value.delete(key)
+  }
+}
+
+/**
+ * 渲染节点标签（支持 SVG 标牌）
+ * 节点按自身 region 分派：cn 走国标前端解析；id 编号不经前端解析，
+ * 直接交后端（按编号+路名判定等级并生成六边形盾牌）。失败回退纯文本。
+ * 多语言节点（names >= 2 种语言）附原生 title 展示全部语言。
+ * 返回 VNode
+ */
+function renderNodeLabel(node: RegionNode) {
+  const config = configStore.config
+  const showSigns = config?.show_road_sign_in_region_tree ?? true
+  const region = node.region || 'cn'
+
+  // 多语言提示：组内非空语言数 >= 2 才有（zh: 中文 / id: 印尼语 / en: 英语）
+  const nodeNames = node.names || {}
+  const multiLangNames = Object.keys(nodeNames).filter(k => nodeNames[k]).length >= 2
+  const titleAttr = multiLangNames ? { title: Object.values(nodeNames).join(' / ') } : {}
+
+  // 处理道路节点且有道路编号
+  if (node.type === 'road' && node.road_number) {
+    const roadNumbers = node.road_number.split(',').map(s => s.trim())
+    const contents: (string | ReturnType<typeof h>)[] = []
+
+    if (showSigns) {
+      // 开启标牌模式：尝试渲染 SVG
+      roadNumbers.forEach((num, index) => {
+        let opts: RoadSignFetchOptions | null = null
+        if (region !== 'cn') {
+          // 印尼：编号原样交后端（含路名用于 TOL 判定）
+          const roadName = node.name && node.name !== '（无名）'
+            ? node.name
+            : (nodeNames.id || nodeNames.en || '')
+          opts = {
+            code: num,
+            signType: 'way',
+            region,
+            ...(roadName && { name: roadName }),
+            ...(nodeNames.id && { nameId: nodeNames.id }),
+          }
+        } else {
+          const parsed = parseRoadNumber(num)
+          if (parsed) {
+            opts = { code: parsed.code, signType: parsed.sign_type, ...(parsed.province && { province: parsed.province }) }
+          }
+        }
+        if (opts) {
+          const svg = roadSignSvgCache.value.get(buildSignCacheKey(opts))
+          if (svg) {
+            contents.push(h('span', { innerHTML: svg, class: 'road-sign-inline' }))
+          } else {
+            contents.push(num)
+            loadRoadSignSvg(opts)
+          }
+        } else {
+          contents.push(num)
+        }
+        if (index < roadNumbers.length - 1) contents.push(' ')
+      })
+    } else {
+      // 关闭标牌模式：显示纯文本编号
+      contents.push(roadNumbers.join(' / '))
+    }
+
+    // 添加道路名称
+    if (node.name && node.name !== '（无名）') {
+      contents.push(' ')
+      contents.push(node.name)
+    }
+
+    return h('span', titleAttr, contents)
+  }
+
+  // 非道路节点，使用原文本
+  return h('span', titleAttr, node.name)
+}
+```
+
+> 说明：`titleAttr` 为空对象 `{}` 时 `h('span', {}, children)` 等价于原无属性渲染（Vue 合法），多语言时原生 `title` 属性由浏览器 tooltip 显示——不依赖 el-tree 的插槽透传。节点 `names` 顺序即后端字典序 zh → id → en，tooltip 呈现「东爪哇省 / Provinsi Jawa Timur / Province of East Java」样式。
+
+- [ ] **Step 2: SharedTrack.vue —— 应用同一组替换（L778-876）**
+
+同一份 `RoadSignFetchOptions`/`buildSignCacheKey`/`getRoadSignSvg`/`loadRoadSignSvg`/`renderNodeLabel` 代码应用到 SharedTrack.vue（当前 L771-876，行号以文件实际为准）。SharedTrack 无编辑/填充逻辑，其余零改动。
+
+- [ ] **Step 3: TrackUpload.vue —— 表单加「地区」选择**
+
+模板「原始坐标系」form-item（L86-96，`.form-tip` 提示段之后、`</el-form-item>` 后）插入：
+
+```html
+          <!-- 地区 -->
+          <el-form-item label="地区">
+            <el-radio-group v-model="form.region">
+              <el-radio value="cn">中国</el-radio>
+              <el-radio value="id">印尼</el-radio>
+            </el-radio-group>
+            <div class="form-tip">
+              轨迹的默认地区，决定道路图标样式与地理信息填充语言集；多语言列可随 CSV 逐行覆盖
+            </div>
+          </el-form-item>
+```
+
+script：`form` reactive（L170-176）加 `region: 'cn',`；`handleSubmit` 的 `trackApi.upload({...})`（L216-222）加 `region: form.region,`。
+
+- [ ] **Step 4: TrackDetail.vue —— 编辑对话框加「地区」并保存**
+
+**4a. editForm**（L1306-1310）加字段：
+
+```ts
+const editForm = ref({
+  name: '',
+  description: '',
+  original_crs: 'wgs84',
+  region: 'cn'
+})
+```
+
+**4b. showEditDialog**（L2496-2503）赋值区加：
+
+```ts
+    editForm.value.region = track.value.region || 'cn'
+```
+
+**4c. 模板**（「原坐标系」form-item L761-768 的 `</el-form-item>` 后）插入：
+
+```html
+        <el-form-item label="地区">
+          <el-radio-group v-model="editForm.region">
+            <el-radio value="cn">中国</el-radio>
+            <el-radio value="id">印尼</el-radio>
+          </el-radio-group>
+          <div class="form-hint">轨迹的默认地区（新填充/新导入点的默认值；已有轨迹点不受影响）</div>
+        </el-form-item>
+```
+
+**4d. saveEdit**（L2506-2568 整体）——原逻辑：换坐标系（if 分支）与名称/描述（else 分支）互斥，导致同时改 region+坐标系时 region 丢失；重写为「坐标系变更独立处理 + 名称/描述/地区恒 PATCH」，顺带修复换坐标系时名称/描述改动不保存的存量行为：
+
+```ts
+// 保存编辑
+async function saveEdit() {
+  if (!track.value) return
+
+  if (!editForm.value.name.trim()) {
+    ElMessage.warning('轨迹名称不能为空')
+    return
+  }
+
+  saving.value = true
+  try {
+    // 检查是否需要更改坐标系
+    const needsCrsChange = editForm.value.original_crs !== track.value.original_crs
+
+    if (needsCrsChange) {
+      // 需要更改坐标系
+      try {
+        await ElMessageBox.confirm(
+          '更改坐标系会重新计算所有坐标并保存，此操作不可撤销。如果此前填充了轨迹，可能需要重新填充。是否继续？',
+          '确认更改坐标系',
+          {
+            confirmButtonText: '继续',
+            cancelButtonText: '取消',
+            type: 'warning',
+          }
+        )
+      } catch {
+        // 用户取消
+        saving.value = false
+        return
+      }
+
+      changingCrs.value = true
+      const updated = await trackApi.changeCrs(track.value.id, editForm.value.original_crs)
+      track.value = updated
+      // 重新加载轨迹点数据
+      await fetchTrackPoints()
+      // 强制刷新地图
+      await nextTick()
+      if (mapRef.value?.resize) {
+        mapRef.value.resize()
+      }
+      if (mapRef.value?.fitBounds) {
+        mapRef.value.fitBounds()
+      }
+      ElMessage.success('坐标系更改成功')
+    }
+
+    // 更新名称、描述与地区（无论是否换坐标系都保存）
+    const updated = await trackApi.update(track.value.id, {
+      name: editForm.value.name.trim(),
+      description: editForm.value.description.trim() || undefined,
+      region: editForm.value.region,
+    })
+    track.value = updated
+
+    if (!needsCrsChange) {
+      ElMessage.success('保存成功')
+    }
+
+    editDialogVisible.value = false
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    saving.value = false
+    changingCrs.value = false
+  }
+}
+```
+
+> handleFillGeocoding **不改**：后端 region 缺省回读轨迹自身 region（Task 6），用户把轨迹改为印尼后填充即自动三语请求。
+> 地图 5 组件 **不改**：印尼编号前端 parse 失败 → 现有文本回退兜底（标牌只在区域树渲染，spec 范围外项目如地图标牌另行评估）。
+
+- [ ] **Step 5: 类型检查与构建**
+
+Run: `cd frontend && npm run build:check`
+Expected: vue-tsc 无错误 + vite build 成功。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add frontend/src/views/TrackUpload.vue frontend/src/views/TrackDetail.vue frontend/src/views/SharedTrack.vue
+git commit -m "feat(views): 上传/编辑对话框地区选择；区域树按节点 region 渲染印尼盾牌与多语 tooltip
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+### Task 13: 数据库迁移（需授权）+ 后端全量测试 + 端到端冒烟
+
+**Files:**
+- 无新增（验证与冒烟任务；需要开发者配合：① 数据库迁移授权 ② 浏览器人工冒烟确认）
+- 冒烟样例文件（临时，不入库）：`backend/data/smoke_indonesia.csv`
+
+> ⚠️ **授权点 1（数据库）**：Task 2 的迁移文件与 SQL 脚本已就位但未执行。CLAUDE.md 规定开发期间不自行修改数据库——本任务第 1 步需向开发者申请执行迁移（或请开发者手动执行 alembic/SQL 后继续）。**授权前**：Task 1-12 与 pytest（纯函数）不触库可安全执行；Task 10 Step 4 的 DB 冒烟若缺列失败属预期，迁移完成后回跑即可。
+>
+> ⚠️ **授权点 2（浏览器）**：前端手动冒烟在已打开的 localhost:5173 页面用 Edge devtools MCP 执行，需开发者配合在 UI 上操作/确认（上传对话框、区域树视觉、tooltip）。
+
+- [ ] **Step 1: 申请授权并执行数据库迁移**
+
+向开发者说明：`016_add_multilanguage_region` 迁移新增 Track/TrackPoint 各 1 列 region + TrackPoint 4 个 `*_id` 列 + RoadSignCache.region，请求执行：
+
+Run: `cd backend && ../.venv/Scripts/python -m alembic upgrade head`
+Expected: 迁移成功（输出 upgrade 行）。验证列存在：
+
+Run:
+```bash
+cd backend && ../.venv/Scripts/python - <<'EOF'
+import sqlite3, os
+from app.core.config import settings  # 或直接按 backend/.env 的 DATABASE_URL
+db = settings.DATABASE_URL
+print("db:", db)
+# SQLite 场景: 直接查询
+path = db.replace('sqlite:///', '')
+con = sqlite3.connect(path)
+cols = [r[1] for r in con.execute("PRAGMA table_info(track_points)")]
+print("region in track_points:", 'region' in cols, "| *_id cols:", [c for c in cols if c.endswith('_id')])
+EOF
+```
+Expected: region in track_points: True（_id 列随 Task 2 的完整列表核对）。
+若开发者选择手动执行，按其方式执行后跳过本步命令。
+
+- [ ] **Step 2: 后端全量 pytest**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/ -q`
+Expected: 全绿（Task 1 的印尼解析/盾牌/缓存键/分派用例 + 无失败）。
+
+> 环境备注（本机实测）：`%TEMP%/pytest-of-Administrator` 是 2026-08-23 遗留的不可访问目录，
+> 当前令牌非提权、无法接管或删除，会让任何用 pytest `tmp_path` 的用例在 fixture 阶段
+> `PermissionError: [WinError 5]`。故本计划新增测试一律用 `tests/test_indonesia_shield.py`
+> 里的 `workdir` fixture（`tempfile.TemporaryDirectory()`）而非 `tmp_path`；后续新增用例照此。
+> 根治需开发者以管理员身份删除该遗留目录（`rd /s /q`），届时可改回 `tmp_path`。
+
+- [ ] **Step 3: 写冒烟样例（新格式印尼 CSV，含 region 列）**
+
+写 `backend/data/smoke_indonesia.csv`（冒烟后删除，不入 git）。四段覆盖：① `35-024` 省道且**中文列留空**（测回退链 zh→id→en，区域树节点显示印尼语、tooltip 两语）② `3` + 中文「收费」→ TOL ③ `3` 无关键词 → NASIONAL（同编号不同名不同等级、缓存键不串）④ 行级 `region=cn` 中国小段（跨地区轨迹分组）：
+
+```csv
+index,time_date,time_time,time_microsecond,elapsed_time,longitude_wgs84,latitude_wgs84,elevation,distance,course,speed,region,province_zh,province_id,province_en,city_zh,city_id,city_en,area_zh,area_id,area_en,road_num,road_name_zh,road_name_id,road_name_en,memo
+0,2026-09-01,08:00:00,0,0,112.7350,-7.2800,10,0,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+1,2026-09-01,08:00:10,0,10,112.7360,-7.2809,10,120,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+2,2026-09-01,08:00:20,0,20,112.7370,-7.2818,11,240,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+3,2026-09-01,08:00:30,0,30,112.7380,-7.2827,11,360,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,入口匝道段
+4,2026-09-01,08:00:40,0,40,112.7390,-7.2836,12,480,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+5,2026-09-01,08:00:50,0,50,112.7400,-7.2845,12,600,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+6,2026-09-01,08:01:00,0,60,112.7410,-7.2854,13,720,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+7,2026-09-01,08:01:10,0,70,112.7420,-7.2863,13,840,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+8,2026-09-01,08:01:20,0,80,112.7430,-7.2872,14,960,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+9,2026-09-01,08:01:30,0,90,112.7440,-7.2881,14,1080,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+10,2026-09-01,08:01:40,0,100,114.0600,22.5400,5,1200,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,,深港跨界冒烟段
+11,2026-09-01,08:01:50,0,110,114.0610,22.5410,5,1320,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,,
+```
+
+预期语义核对（冒烟断言用）：
+- 树结构：根「东爪哇省」→「泗水市」→「杜库帕基斯区」一个分支，区下并列 3 条道路节点（`35-024` + `Jl. Raya Mayjen Sungkono`、`3` + 泗水朱安达收费高速、`3` + 艾哈迈德·雅尼路）
+- 点 0-2 道路节点：PROVINSI 蓝盾牌（35-024 → 大字 `024`，色带 `PROVINSI 35`）；**回退链验证**——该段中文路名留空，节点名显示回退结果 `Jl. Raya Mayjen Sungkono`
+- 点 3-6 道路节点：TOL 红盾牌（`3` + 中文「收费」命中；`Jalan Tol Juanda` 中 `\btol\b` 亦命中）
+- 点 7-9 道路节点：NASIONAL 红盾牌（`3` 无关键词——验证同编号缓存键含路名不串样：`3`+收费 与 `3`+雅尼路 是两张不同的图）
+- 省/市/区组 tooltip 三语（东爪哇省 / Provinsi Jawa Timur / Province of East Java）；`35-024` 路节点 tooltip 两语（id+en）；cn 段节点单语言 → 无 tooltip（spec「单语言则无 tooltip」断言）
+- 点 10-11：与印尼段分开成组（区域树出现独立「广东省」根节点，region=cn，仅中文列）
+
+- [ ] **Step 4: 启动后端并用样例导入（API 层冒烟）**
+
+Run（若 8000 未占用）: 用仓库现有启动方式起后端（见 cc/quick-commands.md），然后：
+
+```bash
+curl -s -F "file=@backend/data/smoke_indonesia.csv" -F "name=smoke_indonesia" -F "region=id" -b <会话cookie> http://localhost:8000/api/tracks/upload
+```
+Expected: 返回轨迹对象，region=id。再查详情：
+```bash
+curl -s -b <cookie> http://localhost:8000/api/tracks/<id> | python -c "import json,sys; d=json.load(sys.stdin); print(d['region'], d['id'])"
+curl -s -b <cookie> http://localhost:8000/api/tracks/<id>/regions | python -c "import json,sys; d=json.load(sys.stdin); print(json.dumps(d['regions'][:1], ensure_ascii=False, indent=1))"
+```
+Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）、道路节点 road_number 含 35-024 等、stats 正确。
+（若本机无可用登录会话，改用浏览器 UI 冒烟覆盖此步，见 Step 5。）
+
+- [ ] **Step 5: 浏览器端到端冒烟（需开发者配合确认）**
+
+在已开的 localhost:5173 页面（Edge devtools MCP）：
+1. 上传冒烟 CSV（选地区：印尼）→ 详情页
+2. 区域树：印尼道路节点显示六边形盾牌（省道蓝色、TOL/收费红、NASIONAL 红），悬停节点出现三语 tooltip（东爪哇省 / Provinsi Jawa Timur / Province of East Java）
+3. 编辑轨迹对话框：地区可切中国/印尼并保存
+4. 导出 CSV 下载，核对新表头（region、province_zh/id/en…）；用导出的文件再导入一次（闭环），区域树结果一致
+5. cn 轨迹回归：打开任一旧中国轨迹，区域树国标盾牌渲染与改动前一致（地区默认中国）
+
+出现视觉异常时用 Edge devtools 截图回传分析。
+
+- [ ] **Step 6: 记录冒烟结果与 Commit（如有样例产物需清理）**
+
+冒烟中发现的问题按 debugging 流程处理（若问题小而明确可直接修并 commit）；全部通过后无代码改动则本任务无 commit（结果记入 Task 14 的 changelog）。
+
+---
+
+### Task 14: 要点记录到 cc/ 文档
+
+**Files:**
+- Modify: `cc/changelog.md`（追加本次变更条目）
+- Modify: `cc/features.md`（地理编码/道路图标/区域树/配置相关段落补充 region 概念，按需）
+- Modify: `cc/architecture.md`（如模型/字段权威语义属架构核心——补充 region 三层存储与语言后缀列模型）
+
+先 Read `cc/changelog.md` 与相关模块看现有格式，按仓库惯例追加，要点（简洁、按模块落位）：
+
+1. **数据模型**：`tracks.region`、`track_points.region`（点级权威）+ 4 个 `*_id` 印尼语列；`road_sign_cache.region`；迁移 `016_add_multilanguage_region` + 三份 SQL（含 sqlite 版新增）
+2. **region 贯通**：上传 Form、编辑 PATCH、fill-geocoding Query（缺省读轨迹自身）、CSV 行级 region（跨地区文件主通道）、merge 复制点级
+3. **Nominatim 多语**：region=id 三请求（zh-CN/id/en），38 省中文回填表（gpxutil 移植 + 前缀容错），中文缺失留空 + 前端回退链 zh→id→en
+4. **印尼图标**：编号解析（NASIONAL/TOL 词边界/PROVINSI，省码三级来源）、六边形盾牌生成（Clearview 字体、模板 bbox 锚点）、config `indonesia_road_sign`、缓存键含 region；字体许可为商业字体（记录在案）
+5. **导出新列名 + 导入别名表**（兼容新/样例/旧三格式）、区域树按 (region,文本) 分组 + 节点 names
+6. **前端**：上传/编辑对话框地区选择；区域树按节点 region 分派渲染（cn 前端解析 / id 后端判级）；多语 tooltip；地图组件不改（文本回退）
+7. **测试**：backend pytest（tests/test_indonesia_road.py、test_indonesia_shield.py）；前端 build:check
+8. 冒烟结论（含开发者确认过的 UI 表现）
+
+- [ ] **Step 1: 读 cc 现状 → 追加 → Commit**
+
+```bash
+git add cc/changelog.md cc/features.md cc/architecture.md
+git commit -m "docs(cc): 记录印尼多语言轨迹与道路图标适配要点
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
+## 计划自审记录
+
+- **Spec 覆盖核对**：spec §2 模型/迁移 → Task 2；§3 导入导出 → Task 8/9；§4 geocoding → Task 6；§5 图标/API/缓存 → Task 1/4/5；§6 区域树 → Task 10/11/12；§7 配置 → Task 3；§8 测试 → Task 1/4/5 + Task 13；§9 兼容 → 各任务 cn 分支保持；§10 顺序 → 任务序一致。
+- **实现级裁定（相对 spec 的显式偏离，均已就地注明）**：
+  1. `parseRoadNumber` 不加 region 参数（无调用点需要 → 不加死参数）；id 分派在 `renderNodeLabel` 直接绕开 parse
+  2. fill-geocoding 前端不显式传 region（后端缺省回读轨迹自身 region，行为等价且更稳）
+  3. 色带省码在 API 请求链不可得（区域树道路节点无父级省文本）→ 色带仅等级词（35-024 内嵌省码除外）——spec 已含此降级分支
+  4. 字体许可（Clearview 商业字体照拷）于 Task 3 前置确认
+- **类型一致性**：后端 `fill_geocoding_info(...region=)`、`create_from_*(..., region='cn')`、`get_or_create_sign(..., region)`、前端 `upload({region})`、`update({region})`、`generate({region, name_id})` 与 `RoadSignFetchOptions` 各任务间签名互相对齐（Task 6↔7↔11↔12）。
+
+**执行须知汇总**：全部任务在 master 分支线性执行；每个任务独立 commit 并含归属行；Task 13 的两个授权点（数据库迁移、浏览器冒烟）需要主会话向开发者申请后再推进；Task 10 的 DB 冒烟在迁移前失败属预期，可跳过并注明、迁移后回跑。
+
+<!--PLAN-END-->
