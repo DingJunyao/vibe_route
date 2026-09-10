@@ -4617,20 +4617,50 @@ curl -s -b <cookie> http://localhost:8000/api/tracks/<id>/regions | python -c "i
 Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）、道路节点 road_number 含 35-024 等、stats 正确。
 （若本机无可用登录会话，改用浏览器 UI 冒烟覆盖此步，见 Step 5。）
 
-- [ ] **Step 5: 浏览器端到端冒烟（需开发者配合确认）**
+- [x] **Step 5: 浏览器端到端冒烟（✅ 2026-09-10 执行，开发者已授权「写库 + UI 冒烟」）**
 
-在已开的 localhost:5173 页面（Edge devtools MCP）：
-1. 上传冒烟 CSV（选地区：印尼）→ 详情页
-2. 区域树：印尼道路节点显示六边形盾牌（省道蓝色、TOL/收费红、NASIONAL 红），悬停节点出现三语 tooltip（东爪哇省 / Provinsi Jawa Timur / Province of East Java）
-3. 编辑轨迹对话框：地区可切中国/印尼并保存
-4. 导出 CSV 下载，核对新表头（region、province_zh/id/en…）；用导出的文件再导入一次（闭环），区域树结果一致
-5. cn 轨迹回归：打开任一旧中国轨迹，区域树国标盾牌渲染与改动前一致（地区默认中国）
+环境：后端 8000 在跑、Edge 打开 localhost:5173、`backend/data/smoke_indonesia.csv`（12 点 / 26 列）。
 
-出现视觉异常时用 Edge devtools 截图回传分析。
+**① 上传（地区选印尼）**：✅ 文件注入 el-upload 的 `input[type=file]` → 点「开始上传」→ 自动跳 `/tracks/99`。
+时间轴显示 `16:00:00 → 2026-09-01 → 16:01:50`，**证明斜杠日期被正确解析**（对照上方「修正记录 2」）。
 
-- [ ] **Step 6: 记录冒烟结果与 Commit（如有样例产物需清理）**
+**② 区域树 / 六边形盾牌 / 三语 tooltip**：✅ 全部吻合。
+树为 **`2 省级 / 2 地级 / 2 县级`**，结构 `东爪哇省 → 泗水市 → 杜库帕基斯区 → {3 条道路}` 与 `广东省 → 深圳市 → 南山区 → 滨海大道` **并列成两个根**，与临时库预验证逐条一致。
+3 个印尼六边形盾牌（`viewBox="0 0 562.0 451.0"`，其余 svg 均为 Element Plus 的 `0 0 1024 1024` 图标）经放大渲染后**逐字核对**：
+`PROVINSI 35` 蓝横幅 + `024`（省道，蓝 `#003E86`）、`TOL` 红横幅 + `3`（收费）、`NASIONAL` 红横幅 + `3`（雅尼路），红为 `#B5273C`。
+盾牌 ↔ 道路的绑定**用祖先链回溯逐一核对**（不靠肉眼）：三者分别归属 `Jl. Raya Mayjen Sungkono` / `泗水朱安达收费高速` / `艾哈迈德·雅尼路`，无错挂。
+tooltip 是**原生 `title` 属性**（非 el-tooltip，无需悬停即可验证）。全树 10 个节点实测：
 
-冒烟中发现的问题按 debugging 流程处理（若问题小而明确可直接修并 commit）；全部通过后无代码改动则本任务无 commit（结果记入 Task 14 的 changelog）。
+| 节点 | 盾牌 | `title` |
+|---|---|---|
+| 东爪哇省 / 泗水市 / 杜库帕基斯区 | — | 三语 `zh / id / en` |
+| Jl. Raya Mayjen Sungkono | ✓ 蓝 | **`id / en` 双语**——`road_name_zh` 为空时正确跳过，**不出现空段** |
+| 泗水朱安达收费高速 / 艾哈迈德·雅尼路 | ✓ 红 | 三语 |
+| 广东省 / 深圳市 / 南山区 / 滨海大道 | — | 无 `title`（cn 单语，符合设计） |
+
+**③ 编辑对话框切地区**：✅ 打开时**回显「印尼」**（创建时的选择被正确持久化）；切「中国」→ 保存 → 「保存成功」。
+落库**三重核对**：`tracks.region` `id → cn`；**`track_points.region` 未变**（`id`×10 + `cn`×2）——与对话框文案「已有轨迹点不受影响」一致，**点级权威未被覆盖**；`road_sign_cache` 为 `cn` 88 条 + **`id` 3 条**，正是那 3 个印尼盾牌——**缓存键含 region 的实证**。
+
+**④ 导出 → 再导入闭环**：✅
+导出（hook `URL.createObjectURL` 捕获**真实 blob**，不走 API 旁路）：`text/csv`、4016 B、13 行（1 表头 + 12 数据）。
+表头 **30 列**，含 `region` 与 `province/city/area/road_name` 的 `_zh/_id/_en` 三语组；**首行即表头、无 BOM 空行**（Task 9 修的既有缺陷生效）；`time_date=2026/09/01`，与导入路径格式一致。
+再导入：**「导入成功！更新了 12 个点，共 12 个点（通过索引匹配）」**——12/12 全匹配。
+**闭环判据用结构化比对而非肉眼**：导出前存 `/tracks/99/regions` 响应，导入后重取，`JSON.stringify` **逐字节相同（3116 字符）**。覆盖 `region` 行级传播、三语列往返、`road_name_zh` 为空的回退链（该节点 names 仍无 `zh` 键）。
+
+**⑤ cn 回归**：✅ 轨迹 83「G3611」（11627 点、11482 个有路名、`region` 全 `cn`）：`3 省级 / 9 地级 / 16 县级`，树 `江苏省 → 南京市 → 六合区 → …`；**23 个国标盾牌**（`viewBox="0 0 1250 1000"`）配色为 `#ED1724`（国家高速）/ `#FFCD00`（省级高速），同一节点多编号并列（`G36`+`S12`）正常；时间轴 `2026-05-03` 正常。cn 路径本次未改动（Task 12 只加 `region !== 'cn'` 分支），输出与既有行为一致。
+
+**⚠️ 冒烟环境伪影（已定性，非应用缺陷）**：操作成功后对话框（编辑/导出/导入）**延迟很久甚至不关闭**。
+排查链：Vue 组件 `setupState` 实测三个 flag 均为 **`false`（状态正确）** → 但 DOM 仍可见 → 实测 `document.visibilityState === 'hidden'` 且 **`requestAnimationFrame` 一帧都不触发**（`rafFrames: 0`）。
+根因：导出触发下载 → Edge 打开 `edge://downloads-hub/` 并**抢走前台**，Vibe Route 沦为后台标签；后台标签的 rAF 被浏览器完全停止，而 Element Plus `el-dialog` 的关闭走 Vue `<Transition>`，其 leave 流程**第一步就是 `nextFrame()`（double rAF）**——卡在这里，连 `whenTransitionEnds` 的 setTimeout 兜底都从未注册。
+**验证**：把 `requestAnimationFrame` 临时 polyfill 成 `setTimeout` 后，对话框在 **t+3s 正常关闭**。
+**结论：应用逻辑完全正确，属「后台标签 + CDP 无标签激活能力」的测试环境伪影。**
+副作用：`window.close()` 关掉了多余的 `edge://permission-request-dialog/`（重复导出所致）；残留一个 `about:blank`（非脚本打开，关不掉）。
+
+**样例产物处置**：`frontend/smoke_indonesia.csv`（为绕过 Vite `server.fs.allow` 对 `/@fs/` 的 403 而临时复制）**已删除**；`backend/data/smoke_indonesia.csv` 保留（未入 git）；**开发库轨迹 99「印尼冒烟-泗水三语轨迹」保留**——授权范围是「写库」而非「清理」，删除不可逆，故保留；如需移除请明示。
+
+- [x] **Step 6: 记录冒烟结果与 Commit**
+
+冒烟**未发现问题、无代码改动，故本任务无 commit**；结果已记入下方与 Task 14 的 changelog。
 
 ---
 
