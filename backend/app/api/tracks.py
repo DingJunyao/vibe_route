@@ -43,6 +43,7 @@ async def upload_track(
     original_crs: str = Form("wgs84"),
     convert_to: Optional[str] = Form(None),
     fill_geocoding: bool = Form(False),
+    region: str = Form("cn"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -55,6 +56,7 @@ async def upload_track(
     - original_crs: 原始坐标系 (wgs84, gcj02, bd09)，仅用于 GPX、GPS Logger CSV 和 KML
     - convert_to: 转换到目标坐标系（可选），仅用于 GPX、GPS Logger CSV 和 KML
     - fill_geocoding: 是否填充行政区划和道路信息，仅用于 GPX、GPS Logger CSV 和 KML
+    - region: 地区 (cn, id)，作为新建轨迹点的默认值
     """
     # 验证坐标系
     valid_crs = ['wgs84', 'gcj02', 'bd09']
@@ -82,6 +84,13 @@ async def upload_track(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="只支持 GPX、CSV、XLSX、KML 或 KMZ 文件格式",
+        )
+
+    # 验证地区
+    if region not in ('cn', 'id'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="无效的地区，可选值: cn, id",
         )
 
     # 读取文件内容
@@ -117,6 +126,7 @@ async def upload_track(
                 original_crs=original_crs,
                 convert_to=convert_to,
                 fill_geocoding=fill_geocoding,
+                region=region,
             )
         elif file_ext == 'csv':
             # 解析 CSV
@@ -138,6 +148,7 @@ async def upload_track(
                 original_crs=original_crs,
                 convert_to=convert_to,
                 fill_geocoding=fill_geocoding,
+                region=region,
             )
         elif file_ext == 'xlsx':
             # 解析 XLSX（本项目导出格式）
@@ -148,6 +159,7 @@ async def upload_track(
                 xlsx_content=content,
                 name=name,
                 description=description,
+                region=region,
             )
         elif file_ext == 'kmz':
             # 解析 KMZ (ZIP 压缩的 KML)
@@ -182,6 +194,7 @@ async def upload_track(
                 original_crs=original_crs,
                 convert_to=convert_to,
                 fill_geocoding=fill_geocoding,
+                region=region,
             )
         else:  # kml
             # 解析 KML
@@ -203,6 +216,7 @@ async def upload_track(
                 original_crs=original_crs,
                 convert_to=convert_to,
                 fill_geocoding=fill_geocoding,
+                region=region,
             )
     except ValueError as e:
         logger.error(f"ValueError in upload_track for user {current_user.id}: {e}", exc_info=True)
@@ -424,6 +438,7 @@ async def get_track(
         "description": track.description,
         "original_filename": track.original_filename,
         "original_crs": track.original_crs,
+        "region": track.region or 'cn',
         "distance": distance,
         "duration": duration,
         "elevation_gain": elevation_gain,
@@ -703,6 +718,11 @@ async def get_track_points(
             "district_en": point.district_en,
             "road_name": point.road_name,
             "road_name_en": point.road_name_en,
+            "province_id": point.province_id,
+            "city_id": point.city_id,
+            "district_id": point.district_id,
+            "road_name_id": point.road_name_id,
+            "region": point.region or 'cn',
             "road_number": point.road_number,
         }
         result.append(point_data)
@@ -1031,6 +1051,7 @@ async def get_track_public(
         "description": track.description,
         "original_filename": track.original_filename,
         "original_crs": track.original_crs,
+        "region": track.region or 'cn',
         "distance": track.distance or 0,
         "duration": track.duration or 0,
         "elevation_gain": track.elevation_gain or 0,

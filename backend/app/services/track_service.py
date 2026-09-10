@@ -290,6 +290,7 @@ class TrackService:
         original_crs: CoordinateType = 'wgs84',
         convert_to: Optional[CoordinateType] = None,
         fill_geocoding: bool = False,
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
     ) -> Track:
         """
         从 GPX 内容创建轨迹
@@ -424,6 +425,7 @@ class TrackService:
             description=description,
             original_filename=filename,
             original_crs=original_crs,
+            region=region,
             distance=round(total_distance, 2),
             duration=duration,
             elevation_gain=round(elevation_gain, 2),
@@ -464,6 +466,7 @@ class TrackService:
                 "road_name": None,
                 "road_number": None,
                 "road_name_en": None,
+                "region": region,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
@@ -487,7 +490,7 @@ class TrackService:
         # 异步填充地理信息（如果启用）
         if fill_geocoding:
             task = asyncio.create_task(
-                self.fill_geocoding_info(db, track_obj.id, user.id)
+                self.fill_geocoding_info(db, track_obj.id, user.id, region=region)
             )
             task.add_done_callback(self._background_tasks.discard)
             self._background_tasks.add(task)
@@ -976,6 +979,7 @@ class TrackService:
                 'description': track.description,
                 'original_filename': track.original_filename,
                 'original_crs': track.original_crs,
+                'region': track.region or 'cn',
                 'distance': distance,
                 'duration': duration,
                 'elevation_gain': elevation_gain,
@@ -1014,6 +1018,7 @@ class TrackService:
                     'description': recording.description,
                     'original_filename': None,
                     'original_crs': 'wgs84',
+                    'region': 'cn',
                     'distance': 0,
                     'duration': 0,
                     'elevation_gain': 0,
@@ -2612,6 +2617,7 @@ class TrackService:
         original_crs: CoordinateType = 'wgs84',
         convert_to: Optional[CoordinateType] = None,
         fill_geocoding: bool = False,
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
     ) -> Track:
         """
         从 CSV 内容创建轨迹
@@ -2670,7 +2676,7 @@ class TrackService:
         if is_project_export:
             # 使用本项目导出格式解析
             return await self._create_from_csv_project_format(
-                db, user, filename, rows, name, description
+                db, user, filename, rows, name, description, region=region
             )
 
         # GPS Logger 格式
@@ -2826,6 +2832,7 @@ class TrackService:
             description=description,
             original_filename=filename,
             original_crs=original_crs,
+            region=region,
             distance=round(total_distance, 2),
             duration=duration,
             elevation_gain=round(elevation_gain, 2),
@@ -2866,6 +2873,7 @@ class TrackService:
                 "road_name": None,
                 "road_number": None,
                 "road_name_en": None,
+                "region": region,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
@@ -2889,7 +2897,7 @@ class TrackService:
         # 异步填充地理信息（如果启用）
         if fill_geocoding:
             task = asyncio.create_task(
-                self.fill_geocoding_info(db, track_obj.id, user.id)
+                self.fill_geocoding_info(db, track_obj.id, user.id, region=region)
             )
             task.add_done_callback(self._background_tasks.discard)
             self._background_tasks.add(task)
@@ -2904,6 +2912,7 @@ class TrackService:
         rows: list,
         name: str,
         description: Optional[str] = None,
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
     ) -> Track:
         """
         从本项目导出的 CSV 格式创建轨迹
@@ -3116,6 +3125,7 @@ class TrackService:
             description=description,
             original_filename=filename,
             original_crs=original_crs,
+            region=region,
             distance=round(total_distance, 2),
             duration=duration,
             elevation_gain=round(elevation_gain, 2),
@@ -3156,6 +3166,7 @@ class TrackService:
                 "road_name": point_data.get("road_name"),
                 "road_number": point_data.get("road_number"),
                 "road_name_en": point_data.get("road_name_en"),
+                "region": region,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
@@ -3198,6 +3209,7 @@ class TrackService:
         original_crs: CoordinateType = 'wgs84',
         convert_to: Optional[CoordinateType] = None,
         fill_geocoding: bool = False,
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
     ) -> Track:
         """
         从两步路 KML 内容创建轨迹
@@ -3397,6 +3409,7 @@ class TrackService:
             description=description,
             original_filename=filename,
             original_crs=original_crs,
+            region=region,
             distance=round(total_distance, 2),
             duration=duration,
             elevation_gain=round(elevation_gain, 2),
@@ -3437,6 +3450,7 @@ class TrackService:
                 "road_name": None,
                 "road_number": None,
                 "road_name_en": None,
+                "region": region,
                 "created_by": user.id,
                 "updated_by": user.id,
                 "is_valid": True,
@@ -3460,7 +3474,7 @@ class TrackService:
         # 异步填充地理信息（如果启用）
         if fill_geocoding:
             task = asyncio.create_task(
-                self.fill_geocoding_info(db, track_obj.id, user.id)
+                self.fill_geocoding_info(db, track_obj.id, user.id, region=region)
             )
             task.add_done_callback(self._background_tasks.discard)
             self._background_tasks.add(task)
@@ -3475,6 +3489,7 @@ class TrackService:
         xlsx_content: bytes,
         name: str,
         description: Optional[str] = None,
+        region: str = 'cn',  # 地区: cn=中国, id=印尼（新点的默认 region）
     ) -> Track:
         """
         从本项目导出的 XLSX 文件创建轨迹
@@ -3538,7 +3553,7 @@ class TrackService:
 
         # 使用与 CSV 相同的解析逻辑
         return await self._create_from_csv_project_format(
-            db, user, filename, rows, name, description
+            db, user, filename, rows, name, description, region=region
         )
 
     async def change_original_crs(
@@ -3935,6 +3950,7 @@ class TrackService:
             description=description,
             original_filename=f"merge:{merged_ids}",
             original_crs=plan['tracks'][0].original_crs,
+            region=plan['tracks'][0].region or 'cn',  # 首段源轨迹的 region 作为默认（点级已逐点复制）
             distance=plan['distance'],
             duration=plan['duration'],
             elevation_gain=plan['elevation_gain'],
@@ -3976,6 +3992,11 @@ class TrackService:
                 "road_name": point.road_name,
                 "road_number": point.road_number,
                 "road_name_en": point.road_name_en,
+                "province_id": point.province_id,
+                "city_id": point.city_id,
+                "district_id": point.district_id,
+                "road_name_id": point.road_name_id,
+                "region": point.region or 'cn',
                 "memo": point.memo,
                 "is_interpolated": bool(point.is_interpolated),
                 "interpolation_id": None,  # 不沿用源插值关联，避免悬空外键

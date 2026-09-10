@@ -69,6 +69,11 @@ async def get_shared_track(
             road_name=p.road_name,
             road_number=p.road_number,
             road_name_en=p.road_name_en,
+            province_id=p.province_id,
+            city_id=p.city_id,
+            district_id=p.district_id,
+            road_name_id=p.road_name_id,
+            region=p.region or 'cn',
             memo=p.memo,
         ))
 
