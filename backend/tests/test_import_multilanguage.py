@@ -312,12 +312,17 @@ class TestRowRegion:
 
         async def case():
             async with _db_env(workdir) as (db, user):
-                # ① 列存在、值为空
+                # ① 列存在、值为空 → 落回轨迹 region。
+                # 点值 'id' 与轨迹值 'cn' 刻意不同：期望值若等于点原值，
+                # 「整段没动点 region」这种错误也会绿。
                 t_empty = await track_service.create_from_gpx(
-                    db, user, 'a.gpx', _gpx(), 'a', region='id'
+                    db, user, 'a.gpx', _gpx(), 'a', region='cn'
                 )
+                for pt in await _track_points(db, t_empty.id):
+                    pt.region = 'id'
+                await db.commit()
                 await _import(db, t_empty.id, user.id, _new_format_csv(region0='', region1=''))
-                assert {p.region for p in await _track_points(db, t_empty.id)} == {'id'}
+                assert {p.region for p in await _track_points(db, t_empty.id)} == {'cn'}
 
                 # ② 旧格式无 region 列 → 完全不动点 region。
                 # 点值 'id' 与轨迹值 'cn' 刻意不同：期望值若等于轨迹默认值，
@@ -402,6 +407,11 @@ class TestRowRegion:
                 track = await track_service.create_from_gpx(
                     db, user, 'a.gpx', _gpx(), 'a', region='cn'
                 )
+                # 建点时 province 本就是 None → 「覆盖为空」与「整段没动」不可区分，
+                # 先设哨兵值，使断言能分辨这两种情形
+                for pt in await _track_points(db, track.id):
+                    pt.province = '哨兵'
+                await db.commit()
                 await _import(db, track.id, user.id, csv)
                 assert [p.province for p in await _track_points(db, track.id)] == [None, None]
 
