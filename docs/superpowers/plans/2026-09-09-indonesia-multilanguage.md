@@ -3773,7 +3773,9 @@ Expected: 两入口节点数与 stats 一致（同轨迹）；首节点含 regio
 
 **为什么必须有**：本 Task 的两类缺陷都**不会被冒烟验证发现**——(a) 节点 `names` 取错层级（市/区节点填了省名），冒烟只看「首节点含 region/names 键」，键在就通过；(b) 合并两函数时若等价性不成立，冒烟需要有「能被两个入口同时读到的轨迹」才会暴露。测试是唯一能真正钉住它们的东西。
 
-**推荐做法**：`_build_region_tree(points)` 的输入是**内存中的 `TrackPoint` 列表**，不依赖数据库；若 `self.spatial_service.distance(...)` 是纯计算（haversine，不查库），则可直接构造 `TrackPoint(...)` 对象（**不 add、不 commit**）后 `await track_service._build_region_tree(points)` 断言返回的 `(root_nodes, stats)`。**先确认 `spatial_service.distance` 是否触库**：若不触库就照此做（最省、最快）；若触库，退而用 `workdir` fixture + 建轨迹入库的方式，并在报告中说明。
+**做法（前提已核，无需再确认）**：`_build_region_tree(points)` 的输入是**内存中的 `TrackPoint` 列表**，不依赖数据库；`spatial_service.distance` 的两个实现（`app/services/spatial/python_spatial.py:25-35` 与 `app/services/spatial/postgis_spatial.py:24-38`）**都是纯 Haversine、不查库**。故**直接构造 `TrackPoint(...)` 对象（不 add、不 commit）后 `await track_service._build_region_tree(points)`**，断言返回的 `(root_nodes, stats)` 即可——最省、最快，不需要 `workdir` fixture，也不需要建轨迹入库。
+
+（构造时只需给出用例用到的字段：`latitude_wgs84` / `longitude_wgs84` / `time` / `region` / 各级 `province*`/`city*`/`district*`/`road_name*`/`road_number`。用例 5 需要走两个公共入口、必须入库，届时再用 `workdir` fixture；若嫌重可省略该条（计划已标「可选但推荐」）。）
 
 用例清单：
 1. `test_names_per_level` —— 构造一个点，**省/市/区/路四级的 zh、id、en 值两两不同**（如省 `P-zh/P-id/P-en`、市 `C-zh/C-id/C-en`…），断言省节点的 `names` 是省的三语值、市节点是市的三语值、区节点是区的三语值、道路节点是路的三语值。**这条直接钉住 `collect_names(point, level)` 的层级正确性**——把任一层的 `level` 参数写错就必红。
