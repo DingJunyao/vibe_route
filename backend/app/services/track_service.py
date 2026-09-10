@@ -1922,7 +1922,7 @@ class TrackService:
                 f"{total_distance:.2f}",
                 f"{point.bearing:.2f}" if point.bearing is not None else "",
                 f"{point.speed:.2f}" if point.speed is not None else "",
-                point.region or "",
+                point.region or 'cn',
                 point.province or "",
                 point.province_id or "",
                 point.province_en or "",
