@@ -6,6 +6,8 @@ export interface RoadSignRequest {
   code: string
   province?: string
   name?: string
+  region?: string      // 地区: cn(缺省)/id。id 时 sign_type 被忽略，按编号+路名判级生成六边形盾牌
+  name_id?: string     // 印尼语路名（TOL 关键词判定文本之一）
 }
 
 export interface RoadSignResponse {
@@ -15,6 +17,7 @@ export interface RoadSignResponse {
   code: string
   province?: string
   name?: string
+  region?: string      // 回显请求地区（缺省 'cn'）
 }
 
 export interface RoadSignListItem {

@@ -8,6 +8,7 @@ export interface Track {
   description: string | null
   original_filename: string
   original_crs: string
+  region: string  // 地区: cn=中国, id=印尼（新建点的默认 region，点级权威见 TrackPoint.region）
   distance: number
   duration: number
   elevation_gain: number
@@ -40,6 +41,7 @@ export interface UnifiedTrack {
   description: string | null
   original_filename: string | null
   original_crs: string | null
+  region: string  // 地区: cn=中国, id=印尼（新建点的默认 region，点级权威见 TrackPoint.region）
   distance: number
   duration: number
   elevation_gain: number
@@ -86,6 +88,11 @@ export interface TrackPoint {
   city_en: string | null
   district_en: string | null
   road_name_en: string | null
+  province_id: string | null  // 印尼语省级名
+  city_id: string | null  // 印尼语市级名
+  district_id: string | null  // 印尼语区级名
+  road_name_id: string | null  // 印尼语路名
+  region: string  // 点级地区（图标与显示回退的权威来源）
   memo: string | null  // 备注
 }
 
@@ -139,6 +146,8 @@ export type AllFillProgressResponse = Record<number, FillProgressItem>
 export interface RegionNode {
   id: string
   name: string
+  region?: string  // 节点地区（后端恒返回；可选以便兼容旧数据）
+  names?: Record<string, string>  // 组内各语言代表文本，如 { zh, id, en }（非空语言才出现）
   type: 'province' | 'city' | 'district' | 'road'
   original_type?: 'province' | 'city' | 'district' | 'road'  // 原始类型（压缩前的类型）
   original_name?: string  // 原始名称（压缩前的名称）
@@ -238,6 +247,7 @@ export const trackApi = {
     original_crs?: string
     convert_to?: string
     fill_geocoding?: boolean
+    region?: string
   }): Promise<Track> {
     const formData = new FormData()
     formData.append('file', data.file)
@@ -247,6 +257,7 @@ export const trackApi = {
     if (data.convert_to) formData.append('convert_to', data.convert_to)
     if (data.fill_geocoding !== undefined)
       formData.append('fill_geocoding', String(data.fill_geocoding))
+    if (data.region !== undefined) formData.append('region', data.region)
 
     return http.post('/tracks/upload', formData, {
       headers: {
@@ -288,7 +299,7 @@ export const trackApi = {
   },
 
   // 更新轨迹
-  update(trackId: number, data: { name?: string; description?: string }): Promise<Track> {
+  update(trackId: number, data: { name?: string; description?: string; region?: string }): Promise<Track> {
     return http.patch(`/tracks/${trackId}`, data)
   },
 
