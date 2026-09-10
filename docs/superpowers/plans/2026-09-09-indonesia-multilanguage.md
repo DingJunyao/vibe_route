@@ -2677,6 +2677,7 @@ git commit --amend --no-edit
 
 **Files:**
 - Modify: `backend/app/api/tracks.py`（upload Form + 详情手工 dict + 点接口 dict + 各 create 调用传 region）
+- Test: `backend/tests/test_region_propagation.py`（新建；Task 7 执行时补的回归测试，13 个用例覆盖 region 在 Form→create_*→Track()→批量插入→各响应序列化点的贯通。**规格审查判定它不在原 Files 清单内但内容全部落在 Task 7 明列的字段与行为上**，故登记为 Task 7 的正式产物）
 - Modify: `backend/app/api/shared.py`（Step 5b：公开分享页 TrackPointResponse 构造补字段）
 - Modify: `backend/app/services/track_service.py`（create_from_gpx/csv/xlsx/kml 签名与 Track() 构造、5 处批量插入、merge_tracks、gpx/csv/kml 尾部 fill 调用）
 - 说明：PATCH `/tracks/{id}`（update）无需改动——`track_service.update` 是通用 `setattr`（L673-687），Task 3 已给 `TrackUpdate` 加 `region` 字段，前端传即生效。
@@ -2771,15 +2772,25 @@ merge 的 Track() 构造（实测 L3921）加一行——首段源轨迹的 regi
 
 （plan['tracks'][0] 为第一个源轨迹对象，已在 _build_merge_plan 中加载。注意 merge 产物点级 region 已被逐点复制，track.region 仅作默认/回退值。）
 
-- [ ] **Step 5: 轨迹详情手工构造 dict 补 region（`tracks.py` L420-446）**
+- [ ] **Step 5: 轨迹手工构造 dict 补 region（`tracks.py` 两处）**
 
-`response_data` 在 `"original_crs": track.original_crs,` 后加：
+① `GET /tracks/{id}`（`tracks.py` L420-446 的 `response_data`）——在 `"original_crs": track.original_crs,` 后加：
 
 ```python
         "region": track.region or 'cn',
 ```
 
-（live_recordings detail 走 `TrackResponse.model_validate(track)` 自动携带；列表页同。）
+② **海报公开端点 `get_track_public`**（实测 `app/api/tracks.py:1047` 的 `response_data`，同为手工构造、同样有 `"original_crs": track.original_crs,`）——同样在该行后加**完全相同的一行**：
+
+```python
+        "region": track.region or 'cn',
+```
+
+> ⚠️ ② 是 **Task 7 执行时发现的计划遗漏**（原计划全篇未提及该端点）。两处漏传的后果相同：schema 里 `region` 带默认值 `'cn'`，漏传不报错、被静默掩盖 → 印尼轨迹的**海报生成**与公开分享会拿到 `region='cn'`，渲染中国式图标与中文回退文本。
+>
+> 执行时请顺带 grep 全 `app/api/` 下的手工 dict 构造（`"original_crs": track.`），确认没有第三处漏网再收工——这是根因层面的查全，不是只补这一个点。
+>
+> `live_recordings` detail 与列表页走 `TrackResponse.model_validate(track)` 自动携带，无需处理。
 
 - [ ] **Step 5b: 其余点序列化处补多语言/region 字段（Task 3 质量审查发现的「字段已宣告、生产者未填充」缺口）**
 
@@ -2821,20 +2832,110 @@ merge 的 Track() 构造（实测 L3921）加一行——首段源轨迹的 regi
 
 - [ ] **Step 6: 语法检查 + grep 核对全部 create/fill 调用**
 
-Run: `cd backend && ../.venv/Scripts/python -c "import app.api.tracks; import app.services.track_service; print('ok')"`
-然后 grep 核对 `fill_geocoding_info(`：本步做完后应命中 **5 处** —— ① `track_service.py` 的方法定义；② `live_recording_service.py` 的调用（不带 region，走增量 fill，`region=None` → 回读轨迹 region，正确）；③④⑤ 本 Task Step 3 刚加参数的 gpx / csv / kml 三处创建尾部。**若仍只有一两处，说明 Step 3 没改到位**。
+Run: `cd backend && ../.venv/Scripts/python -c "import app.api.tracks; import app.api.shared; import app.services.track_service; print('ok')"`
+然后 grep 核对 `fill_geocoding_info(`：本步做完后应命中 **5 处** —— ① `track_service.py` 的方法定义（实测 L517）；② `app/api/tracks.py` 的 `POST /tracks/{id}/fill-geocoding` 端点调用（Task 6 所加，已带 `region=region`）；③④⑤ 本 Task Step 3 刚加参数的 gpx / csv / kml 三处创建尾部。**若仍只有一两处，说明 Step 3 没改到位**。
+
+> ⚠️ **本节原有描述有误（Task 7 执行时实测修正）**：曾写「② 是 `live_recording_service.py` 的调用」——该文件**根本不调用** `fill_geocoding_info`，它走自己的内联地理编码（`live_recording_service.py:435-459`，`geo_service.get_point_info(lat, lon)` 两参调用，不写 `*_id` 也不写 `point.region`）。5 处的实际成分如上，**数字 5 不变**。
 Expected: ok
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/app/api/tracks.py backend/app/api/shared.py backend/app/services/track_service.py
+git add backend/app/api/tracks.py backend/app/api/shared.py backend/app/services/track_service.py backend/tests/test_region_propagation.py
 git commit -m "feat(upload): 上传/创建/合并链路贯通 region（Form 参数、批量插入注入点级region）
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
 ---
+
+### Task 7 fix loop（质量审查发现：响应侧字段与 API 上传分支零覆盖，2026-09-10）
+
+质量审用 9 组变异确认：**5 处 insert 注入点全部有守卫**（M1/M2/M3/M6 各自可精确归因到具体用例），薄弱环节集中在**响应侧字段**与 **API 上传分支**——M4a/M4b/M5a/M5b 四组改动生产代码后 13 个用例**全绿**。另有 1 处位置参数透传的未来失败模式。本轮修 5 处。
+
+> **关键背景（决定本轮为什么值得修）**：这 5 处 `insert_values` 都是「循环内同一个字面量」生成的**等键 dict 列表**，删掉某个键 = 整批少一列 → 该列被 INSERT 省略 → 模型 `default='cn'`（`models/track.py:104`）静默生效、**不抛任何异常**。这一层**没有「响亮失败」模式**，测试守卫是唯一防线。
+
+- [ ] **Step 1: I1 —— 4 个 `*_id` 字段的取值守卫（`tests/test_region_propagation.py`）**
+
+变异证据：删掉 `shared.py` 的 4 行 `*_id` 或 `tracks.py` 点 dict 的 4 行，13 个用例**全绿**。根因是测试全程 `fill_geocoding=False`，落库 `*_id` 恒为 `None`，而 schema 里它们是 `Optional[str] = None` → 漏传被默认值掩盖。更糟的是现有断言**只看键在不在、不看值从哪来**，所以「传错来源」（如 `province_id=p.city_id`）同样拦不住。
+
+新用例：create 之后用 ORM 赋**四个互不相同**的哨兵值，再断言取值：
+
+```python
+class TestMultilingualFieldPassthrough:
+    """4 个 *_id 字段的取值守卫（质量审 I1：此前只断言键、不断言值来源）"""
+
+    async def test_id_fields_reach_all_responses(self, ...):
+        pt = (await _track_points(db, track.id))[0]
+        # 四个值必须互不相同，否则「传错来源」仍会绿
+        pt.province_id, pt.city_id, pt.district_id, pt.road_name_id = 'PID', 'CID', 'DID', 'RID'
+        await db.commit()
+
+        pts = await tracks.get_track_points(track.id, db=db, current_user=user)
+        assert (pts[0]['province_id'], pts[0]['city_id']) == ('PID', 'CID')
+        # ... 四个字段逐一断言；再对 shared 公开页断言一次
+```
+
+**2 处消费者都要覆盖**：`GET /tracks/{id}/points` 的 dict、`shared.py` 的公开分享页（`TrackPointResponse`）。
+
+> ⚠️ **本节原有描述有误（fix loop 执行时实测修正）**：曾写「**三处**消费者，含 `GET /tracks/{id}` 详情」并给出 `detail['points'][0]['province_id']` 的示例——**该示例在本代码库无法成立**。实测 `list(TrackResponse.model_fields)` 里既无 `points` 也无任何 `*_id`（详情是**轨迹级**响应，不携带点级字段），照抄会 `KeyError`。全库响应侧消费 `*_id` 的生产者**只有 2 处**：`app/api/shared.py` 与 `app/api/tracks.py` 的点端点 dict（`app/api/road_signs.py` 的同名字段是盾牌接口的**入参**，与点序列化无关）。
+
+- [ ] **Step 2: I2 —— 五个上传分支 + Form 默认值（同文件）**
+
+变异证据：删掉 `tracks.py` xlsx 分支或 KMZ 分支的 `region=region,` → 13 个用例**全绿**（只有 GPX 分支被测过）。另外 `region: str = Form("cn")` 的默认值若被误改为 `Form("id")` **无任何测试变红**（现有 `test_default_is_cn` 测的是 **service 层**默认值，不是 Form 默认值）——那会导致**所有既有客户端上传的轨迹被静默标成 id**。
+
+改法：把 `test_region_passthrough` 参数化，复用文件里已有的 `_csv_project()` / `_xlsx()` / `_kml()` 内容，各配一个**扩展名正确**的 `UploadFile`；kmz 用 `zipfile` 把 `_kml()` 打包（若成本确实过高，可显式标注「kmz 不测」，但**不要**静默跳过）。再加一个用例钉死 Form 默认值：
+
+```python
+    async def test_upload_without_region_defaults_to_cn(self, ...):
+        # 请求里不带 region 字段 —— 钉住 Form("cn") 默认值
+        ...
+        assert track.region == 'cn'
+```
+
+- [ ] **Step 3: I3 —— 两处位置参数改关键字（`track_service.py`）**
+
+两处 `_create_from_csv_project_format(` 调用点（分别在 `create_from_csv` 与 `create_from_xlsx` 内）目前以 7 个**位置参数**透传 region。危险的不是少传（会 TypeError 响亮失败），而是**将来在 `description` 与 `region` 之间插入一个带默认值的形参**（如 `original_crs: str = 'wgs84'`）→ 7 个实参填满前 7 个形参，`region` 悄悄退回 `'cn'` 且不报错。改法：两处最后那个位置实参改成 `region=region`。
+
+- [ ] **Step 4: M3 —— `TrackUpdate.region` 收紧（`app/schemas/track.py`）**
+
+`TrackUpdate.region` 是 `Optional[str] = Field(None, ...)`，`track_service.py` 的 update 直接 `setattr` → `PATCH /tracks/{id}` 可写入**任意字符串**。Task 7 把 PATCH 的 region 接到了「新建点的默认 region」上，这个口子因此从「存着不用的字段」变成可达。用户的 PATCH 是信任边界，收紧：
+
+```python
+    region: Optional[str] = Field(None, pattern="^(cn|id)$", description="地区: cn=中国, id=印尼")
+```
+
+> 这也是 **M1 不修**的理由：`Literal` 只是类型注解、**运行时完全不校验**，把 5 处 `str` 换成别名不产生任何实际防护；真正的收口是这条 schema 校验。
+
+- [ ] **Step 5: M6 —— 让 merge 的 region 语义真正被钉住（测试）**
+
+`test_merge_keeps_per_point_region` 里 `a`（8 点）**既是第一个入参、又是最早轨迹**，所以即使实现取的是 `track_ids[0]`，断言照样通过——它没有钉住注释声称的「start_time 较早者」。改：倒转入参顺序传 `[b.id, a.id]`，断言 `merged.region == 'id'` 仍成立。一行成本，语义才真正被固定。
+
+- [ ] **Step 6: 验证、变异自检与提交**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/ -q`
+Expected: 全绿（用例数会因 Step 1/2 增加；先记下改动前的数字以便对比）
+
+**强制变异自检**（复现质量审的发现，证明新守卫真的拦得住——这是本轮的核心验收点）：
+1. 删掉 `shared.py` 的 4 行 `*_id` → 必须**红**（改动前为全绿）
+2. 删掉 `tracks.py` xlsx 分支的 `region=region,` → 必须**红**
+3. 把 `Form("cn")` 改成 `Form("id")` → 必须**红**
+4. 每次还原后给出 `sha256sum` 一致、或 `git status --short` 干净的证据
+
+提交：先 `git log --oneline -1` 确认 HEAD 是否仍是 Task 7 的提交；是则 `--amend --no-edit`，否则普通 commit。**只 add 实际改动的文件**，禁止 `git add -A` / `git add docs/`。
+
+#### 本轮不改（含理由，防止后续任务误改）
+
+| 项 | 判定 | 理由 |
+|---|---|---|
+| M1 服务层 `region: str` → `Literal` 别名 | 不改 | `Literal` 运行时零校验，纯注解；真收口在 Step 4 的 schema `pattern` |
+| M2 同一参数两种错误码（400 手工 vs 422 自动） | 不改 | 手工 400 是规格逐字给定；改成 `Literal` 会把既有 400 契约变 422，前端若按 400 分支处理会受损 |
+| M4 点 dict 里 `region` 打断了 `road_number`/`road_name` 相邻 | 不改 | 规格明确要求插在 `road_name_en` 之后；纯可读性，无行为差异 |
+| M5 点接口 dict 缺 `memo`（`tracks.py` 点端点） | 不改 | 既有问题、非本轮引入；该端点未声明 `response_model`，补 `memo` 会改变响应契约，属独立议题 |
+
+#### 交接提醒（Task 9 必读，已同步写入 Task 9 段落）
+
+`_create_from_csv_project_format` 内的 `point_data` **当前不含 `region` 键**，所以 Step 4 注入的 `"region": region` 字面量今天是正确的。**Task 9 接行级 region 时这里必须改成 `point_data.get("region") or region`**，否则行级值会被轨迹默认值覆盖。
 
 ### Task 8: CSV/XLSX 导出使用新列名（region + `*_zh/_id/_en`）
 
@@ -2951,6 +3052,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 **Files:**
 - Modify: `backend/app/services/track_service.py`（`update_point_fields`、`has_area`/`has_road` 重算、`_create_from_csv_project_format` 地理字段与检测段、`point_data`、`insert_values`；GPS Logger 检测后 project 分支）
+
+> ⚠️ **Task 7 交接的必改点**：`_create_from_csv_project_format` 内的 `point_data` 字典**目前不含 `region` 键**，Task 7 注入的是 `"region": region` 这个字面量（当时正确）。**本 Task 接行级 region 时必须把它改成 `point_data.get("region") or region`**——否则行级解析出的 region 会被轨迹级默认值覆盖，行级功能静默失效（且因为列有默认值，不会报错）。
+>
+> 参考：质量审的变异测试已证实**这类「少一列」的写法不会抛异常**——`insert_values` 是等键 dict 列表，缺键 = INSERT 省略该列 = 模型 `default` 静默生效。**同样的静默性也适用于本 Task 的行级 region：写错了测试不红就等于没写。**
 
 > **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
 > 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
@@ -4056,8 +4161,10 @@ Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）
 4. **印尼图标**：编号解析（NASIONAL/TOL 词边界/PROVINSI，省码三级来源）、六边形盾牌生成（Clearview 字体、模板 bbox 锚点）、config `indonesia_road_sign`、缓存键含 region；字体许可为商业字体（记录在案）
 5. **导出新列名 + 导入别名表**（兼容新/样例/旧三格式）、区域树按 (region,文本) 分组 + 节点 names
 6. **前端**：上传/编辑对话框地区选择；区域树按节点 region 分派渲染（cn 前端解析 / id 后端判级）；多语 tooltip；地图组件不改（文本回退）
-7. **测试**：backend pytest（tests/test_indonesia_road.py、test_indonesia_shield.py）；前端 build:check
+7. **测试**：backend pytest 全量——`tests/` 下本次新建的 5 个文件：`test_indonesia_road.py`、`test_indonesia_shield.py`、`test_road_sign_region.py`、`test_nominatim_region.py`、`test_region_propagation.py`；前端 build:check（以 `tests/` 实际为准）
 8. 冒烟结论（含开发者确认过的 UI 表现）
+9. **已知限制（必须写，勿省）**：**实时记录链路恒为 `cn`**。`live_recording_service.py:435-459` 走**自己的内联地理编码**（`geo_service.get_point_info(lat, lon)` 两参调用），**不经过** `fill_geocoding_info` → 既不写 `*_id`、也不写 `point.region`；且 `LiveRecording` 模型**无 region 列**（迁移 016 也未加），`app/api/live_recordings.py:474` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹会按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可正确回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外。
+10. **已知限制（必须写，勿省）**：**Geo Editor（地理信息编辑器）不认识多语言字段**。`geo_editor_service.py` 读路径（L82-105）构造的 `TrackPointGeoData` 只含 `province/city/district/road_number/road_name` 及其 `_en` 对，**不含 `*_id`、不含 region**；写路径（L152-184）的 `field_mapping` 同样只映射这几对，批量 `update(TrackPoint).values(**update_data)`。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 被更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id`/`region`）；**region 与图标不受影响**（编辑器不改 region）。**范围外原因**：修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；计划全篇（Task 1-14）未覆盖该文件。若后续要修，最小改动是给 `TrackPointGeoData`/`GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`。
 
 - [ ] **Step 1: 读 cc 现状 → 追加 → Commit**
 
