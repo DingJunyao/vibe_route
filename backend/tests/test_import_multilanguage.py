@@ -7,19 +7,15 @@
 - insert_values 写死 "region": region → 行级 region 被轨迹默认值整体覆盖，不报错。
 故本文件是这次改动的唯一防线：用例 2 钉死第三条，用例 1 钉死前两条。
 
-复用 tests/test_region_propagation.py 的 workdir fixture（本机 %TEMP%/pytest-of-* 不可访问）。
+复用 tests/conftest.py 的 workdir fixture 与 _db_env/_gpx/_track_points
+（本机 %TEMP%/pytest-of-* 不可访问）。
 """
 import asyncio
-import contextlib
-import tempfile
-from pathlib import Path
 
 import pytest
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.models import Base, TrackPoint, User
 from app.services.track_service import track_service
+from conftest import _db_env, _gpx, _track_points
 
 
 # 与 Task 8 导出的 30 列一致
@@ -30,50 +26,6 @@ NEW_HEADERS = ("index,time_date,time_time,time_microsecond,elapsed_time,"
                "area_zh,area_id,area_en,road_num,road_name_zh,road_name_id,"
                "road_name_en,memo")
 _COLUMNS = NEW_HEADERS.split(',')
-
-
-@pytest.fixture
-def workdir():
-    """临时目录（不用 pytest tmp_path：本机 %TEMP%/pytest-of-* 残留不可访问）"""
-    with tempfile.TemporaryDirectory() as d:
-        yield Path(d)
-
-
-@contextlib.asynccontextmanager
-async def _db_env(workdir):
-    """独立 SQLite + 一个用户；退出时 dispose（Windows 下否则临时目录无法清理）"""
-    engine = create_async_engine(f"sqlite+aiosqlite:///{workdir / 'test.db'}")
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
-            user = User(username='u', email='u@example.com', hashed_password='x')
-            db.add(user)
-            await db.commit()
-            await db.refresh(user)
-            yield db, user
-    finally:
-        await engine.dispose()
-
-
-async def _track_points(db, track_id):
-    result = await db.execute(
-        select(TrackPoint).where(TrackPoint.track_id == track_id).order_by(TrackPoint.point_index)
-    )
-    return list(result.scalars().all())
-
-
-def _gpx(hour=8):
-    pts = ''.join(
-        f'<trkpt lat="{-7.280 - i * 0.001}" lon="{112.735 + i * 0.001}">'
-        f'<ele>{10 + i}</ele><time>2026-09-01T{hour:02d}:00:{i * 10:02d}Z</time></trkpt>'
-        for i in range(2)
-    )
-    return (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">'
-        f'<trk><name>t</name><trkseg>{pts}</trkseg></trk></gpx>'
-    )
 
 
 def _row(**kw):
