@@ -4026,6 +4026,18 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - **发现但按 YAGNI 未扩范围**：后端 `RoadSignRequest` 尚有 `province_id`（`road_signs.py:38`，注释「印尼语省名文本（region=id 时查省码用）」），前端未加该字段。Task 11 规格本就只列 `region?`/`name_id?`；且 Task 12 的区域树对 id 分支只传 `code/signType/region/name/nameId`，**无任何调用点会发 `province_id`** → 不预先加死字段。**记为 Task 13 端到端冒烟的观察点**：若印尼盾牌实际渲染出现省份码缺失，此处是第一嫌疑。
 - 观感（未改，属计划原文规定）：`RoadSignRequest` 新增两行注释对齐到第 23 列，而同块 `province`/`name` 无注释，视觉上略显不齐——照抄计划原文，不擅自调整。
 
+**Task 11 fix loop（spec 审查发现，属计划缺陷、非实现者过失）**
+
+审查发现：`TrackPoint` 新增 5 个**必填**字段后，全仓唯一的 `TrackPoint` 对象字面量 `frontend/src/views/TrackDetail.vue:2883-2909`（`points.value.push({...})`，`points` 是 `ref<TrackPoint[]>([])`，见 L1282）**缺这 5 个键** → 新增 TS2739。
+
+> **这是本计划的自相矛盾**：Task 11 的 Files 只列了 `track.ts`/`roadSign.ts` 并明令「不得触碰其他文件」，却又要求新字段必填——而唯一受影响的字面量在第三个文件里，二者不可同时满足。**责任在计划，不在实现者**（实现者严格守住了范围裁定，是正确执行）。**裁定：授权 Task 11 fix loop 修改 `TrackDetail.vue`（仅此一处字面量），这是对「只改 2 文件」裁定的具名例外。**
+
+**定点排查证据（协调者独立复核，非采信报告）**：全仓 `grep -rn "road_name_en:\|road_name_id:" src/` 交叉验证——`TrackPoint` 字面量**仅此一处**（`OverlayTemplateEditor.vue:872/1533` 是海报模板样例数据、`api/geoEditor.ts:24` 是另一个接口）。实现者先前只查了 `TrackMerge.vue:360` 与 `Home.vue:782` 两处**显式类型标注的数组**，但这两处实为 `items.push(...res.items)`（spread 现成对象，`TrackMerge.vue:362`）与 `sampled.push(points[i])`（推已有元素，`Home.vue:784/789`），**本就不是字面量构造点**——排查方法错位，故漏掉了真破坏点。
+
+**定性校正（避免夸大）**：该处 **base 上本就有 TS2339 存量错误**——`handleNewPointAdded(data: PointAddedData)` 的 `PointAddedData` 从 `@/utils/liveTrackWebSocket` 导入（`TrackDetail.vue:1082`），其 `point` 只声明 9 个字段（`liveTrackWebSocket.ts:62-73`：`id`/`point_index`/`latitude`/`longitude`/`elevation`/`speed`/`time`/`created_at`），而 L2884-2908 大量访问 `point.latitude_wgs84`/`point.province`/`point.memo` 等**不存在于该类型的属性**。故这不是「从类型干净变坏」，而是「本已不干净处又添 5 个必填缺失」。**不修存量 TS2339**（超范围，且属独立议题；且因 vue-tsc 不可用，本仓当前无任何 TS 门禁，存量错误无从暴露）。
+
+**修复值的事实依据**：`backend/app/services/live_recording_service.py` **全文无 `region`**（grep 实测零命中）→ 实时记录建点时不传 region、落模型默认值 `'cn'`。故 4 个 `*_id` 填 `null`、`region` 填 `'cn'` 是**事实正确**而非猜测（与 Task 14 待记录的已知限制「实时记录恒 cn」一致）。
+
 ---
 
 ### Task 12: 前端视图：上传地区选择、编辑对话框地区、区域树印尼盾牌与多语 tooltip
