@@ -1376,7 +1376,7 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 设计（spec §5 API 与缓存）：
 - `generate_road_sign` 增 `region='cn'`；`id` 分支按「编号 + 路名文本序列 + 省名文本序列」调 `parse_indonesia_road_num`，结果交 `generate_indonesia_shield`。CN 分支完全不变。
-- service 缓存键含 region；`RoadSignCache.region` 落库；生成 id 图标时从 `configs['indonesia_road_sign']` 解析模板/字体文件名并拼 `data/templates`、`data/fonts` 绝对路径。
+- service 缓存键含 region；`RoadSignCache.region` 落库；生成 id 图标时从 `configs['indonesia_road_sign']` 解析模板/字体文件名并拼 `data/templates`、`data/fonts` 路径（用 `Path(settings.DATA_DIR)`，与 `admin.py:906` 既有约定一致；`DATA_DIR` 默认值 `"data"` **是相对路径**，随进程 cwd 解析，cn 分支的 `svg_gen.TEMPLATE_DIR` 同此约定）。
 - API `RoadSignRequest` 加 `region/name_id/province_id`（cn 行为不变，id 时跳过 CN 正则校验）；`RoadSignResponse` 回显 region。
 
 - [ ] **Step 1: 测试（红）**
@@ -1413,6 +1413,9 @@ class TestGenerateRoadSignDispatch:
             'way', '3', region='id', indonesia_config=ID_CONFIG)
         assert 'viewBox' in svg and 'polygon' in svg
 
+    # 注意：下面两个 TOL 用例的断言**已被下文「Task 5 fix loop」的 Step 9 取代**——
+    # 原断言只看 head 颜色，而 TOL 与 NASIONAL 同为 #B5273C（仅 PROVINSI 为蓝），
+    # 拦不住 TOL 判定回归（变异证实）。逐字执行本 Step 时以 Step 9 的版本为准。
     def test_id_tol_from_chinese_name(self):
         svg = generate_road_sign(
             'expwy', '8', name='雅加达收费高速', region='id',
@@ -1437,6 +1440,21 @@ class TestGenerateRoadSignDispatch:
     def test_id_without_config_raises(self):
         with pytest.raises(ValueError):
             generate_road_sign('way', '3', region='id', indonesia_config=None)
+
+
+class TestRoadSignRequestRegion:
+    """id 请求的 province 承载印尼语省名，不套用中文简称白名单（Step 5）"""
+
+    def test_id_request_accepts_province_text(self):
+        from app.api.road_signs import RoadSignRequest
+        req = RoadSignRequest(
+            sign_type='way', code='3', region='id', province='Provinsi Jawa Timur')
+        assert req.province == 'Provinsi Jawa Timur'
+
+    def test_cn_invalid_province_still_rejected(self):
+        from app.api.road_signs import RoadSignRequest
+        with pytest.raises(ValueError):
+            RoadSignRequest(sign_type='expwy', code='S1', province='豫X')
 
 
 class TestCacheKey:
@@ -1574,7 +1592,7 @@ def generate_road_sign(
         configs = await config_service.get_all_configs(db)
         font_config = configs.get('font_config')
 
-        # 印尼配置：把文件名解析为 data/templates、data/fonts 下的绝对路径
+        # 印尼配置：文件名解析为 DATA_DIR 下的资源路径（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
         indonesia_config = None
         if region == 'id':
             id_cfg = configs.get('indonesia_road_sign') or {}
@@ -1709,7 +1727,7 @@ _VALID_PROVINCE_ABBR = frozenset({
             raise ValueError(f"无效的省份简称：{province}。应为标准省份简称，如'京'、'津'、'冀'等")
 ```
 
-（cn 行为与改造前逐字等价：先 strip、空串转 None、再查白名单。测试补一条 id 请求带任意 province 文本通过的断言。）
+（cn 行为等价：先 strip、空串转 None、再查白名单。**唯一的非等价点**是错误文案中回显的值由未 strip 的原值 `v` 变为 strip 后的 `province`，仅当输入含首尾空白时可观察到，属有意收紧。测试补一条 id 请求带任意 province 文本通过的断言。）
 
 `RoadSignResponse` 加：
 
@@ -1760,6 +1778,233 @@ git commit -m "feat(road-sign): generate 接口与缓存按 region 分派，支�
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+#### Task 5 fix loop（质量审查回写，2026-09-10）
+
+质量审查结论：1 Critical + 2 Important。以下 Step 8-12 全部完成后**用 `git commit --amend --no-edit` 并入 Task 5 的提交**（保持单任务单 commit）。
+
+- [ ] **Step 8: [Critical] 放宽 `road_sign_cache.province` 列宽**
+
+问题：`province` 为 `String(10)`，而 `region='id'` 时该列承载印尼语省名，最长 `'Daerah Khusus Ibukota Jakarta'`（29 字符）。SQLite 不校验长度故当前无感；MySQL 严格模式（默认 `STRICT_TRANS_TABLES`）报 1406 `Data too long`、PostgreSQL 报 `value too long for type character varying(10)` → `POST /road-signs/generate` 变 500；MySQL 非严格模式静默截断为 `'Provinsi J'`。
+
+`backend/app/models/road_sign.py` 第 17 行：
+
+```python
+    province = Column(String(100), nullable=True)  # 省份（cn: 简称如 '豫'；id: 印尼语省名）
+```
+
+`backend/alembic/versions/016_add_multilanguage_region.py` 的 `upgrade()` 末尾（`road_sign_cache.region` 之后）追加：
+
+```python
+    # road_sign_cache.province 放宽：region='id' 时该列承载印尼语省名
+    # （最长 'Daerah Khusus Ibukota Jakarta' 29 字符；原 String(10) 在 MySQL 严格模式
+    #  报 1406 Data too long、PostgreSQL 报 value too long for type character varying(10)）
+    # 用 batch_alter_table：SQLite 不支持直接改列类型，batch 模式会重建表；
+    # MySQL / PostgreSQL 下退化为普通 ALTER COLUMN。
+    with op.batch_alter_table('road_sign_cache') as batch_op:
+        batch_op.alter_column(
+            'province', type_=sa.String(100), existing_type=sa.String(10),
+            existing_nullable=True,
+        )
+```
+
+`downgrade()` 里对称加回（放在 `drop_if_exists('road_sign_cache', 'region')` 之前）：
+
+```python
+    with op.batch_alter_table('road_sign_cache') as batch_op:
+        batch_op.alter_column(
+            'province', type_=sa.String(10), existing_type=sa.String(100),
+            existing_nullable=True,
+        )
+```
+
+三份 SQL 脚本同步（016 是本特性未发布迁移，直接改比新增 017 更小）：
+
+- `016_add_multilanguage_region.sql.mysql`（`road_sign_cache` 段之后、验证段之前）：
+  ```sql
+  -- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+  ALTER TABLE road_sign_cache MODIFY COLUMN province VARCHAR(100) NULL;
+  ```
+- `016_add_multilanguage_region.sql.postgresql`（同位置）：
+  ```sql
+  -- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+  ALTER TABLE road_sign_cache ALTER COLUMN province TYPE VARCHAR(100);
+  ```
+- `016_add_multilanguage_region.sql.sqlite`（`road_sign_cache` 段之后）——**只加注释，不加语句**：
+  ```sql
+  -- road_sign_cache.province 无需变更：SQLite 不校验 VARCHAR 长度，
+  -- 模型侧的 String(100) 仅为与 MySQL / PostgreSQL 对齐
+  ```
+
+开发库已在 016 上（用户决策「保留 016」），但 SQLite 不校验长度，无需重跑；`alembic upgrade head` 对新库会执行新版 016。
+
+- [ ] **Step 9: [Important] 加强两个 TOL 用例的断言（原断言空转）**
+
+问题：`INDONESIA_BANNER_RED`(#B5273C) 同时用于 `NASIONAL` 与 `TOL`，仅有 `PROVINSI` 是蓝 `#003E86`；故 `code='8'` 无论有无 TOL 关键词，head fill 都是 `#B5273C`。变异测试证实：把 `parse_indonesia_road_num(code, [name, name_id], …)` 分别改成 `[name]`（丢 name_id）或 `[name_id]`（丢 name），**42 个用例全绿** —— 两个 TOL 判定入口均无有效覆盖。
+
+**先验证断言有区分力**（SVG 需确定性与可区分，两步都须通过；任一失败则改用「色带文字路径条数」比对，TOL 3 字 vs NASIONAL 8 字）：
+
+```bash
+cd backend && ../.venv/Scripts/python.exe -c "
+import sys; sys.path.insert(0, '.')
+from app.gpxutil_wrapper.svg_gen import generate_road_sign
+c = {'template': 'data/templates/id_sheild.svg', 'upper': 'data/fonts/ClearviewHwy1W.ttf',
+     'lower': 'data/fonts/ClearviewHwy2W.ttf', 'tol_keywords': ['收费', 'Tol']}
+a = generate_road_sign(sign_type='way', code='8', region='id', indonesia_config=c)
+b = generate_road_sign(sign_type='way', code='8', region='id', indonesia_config=c)
+t = generate_road_sign(sign_type='way', code='8', region='id', indonesia_config=c, name='雅加达收费高速')
+assert a == b, 'SVG 非确定性，不能整体比对'
+assert a != t, 'TOL 与 NASIONAL 渲染相同，需换断言方式'
+print('ok')
+"
+```
+
+把 `test_road_sign_region.py` 的两个用例替换为（**每个变体只覆盖一个入口**：丢 `name` 时中文用例红、丢 `name_id` 时 name_id 用例红）：
+
+```python
+    def test_id_tol_from_chinese_name(self):
+        """name 含「收费」→ TOL（与「两语皆无关键词」基线渲染不同）"""
+        base = generate_road_sign(
+            'expwy', '8', name='雅加达高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Jagorawi')
+        tol = generate_road_sign(
+            'expwy', '8', name='雅加达收费高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Jagorawi')
+        # TOL 与 NASIONAL 同为红头（#B5273C），色带文字不同，只能比对整体渲染
+        assert tol != base
+
+    def test_id_tol_detected_from_name_id(self):
+        """name 无关键词、name_id 命中 tol → 仍判 TOL（与基线渲染不同）"""
+        base = generate_road_sign(
+            'expwy', '8', name='雅加达高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Jagorawi')
+        tol = generate_road_sign(
+            'expwy', '8', name='雅加达高速', region='id',
+            indonesia_config=ID_CONFIG, name_id='Jalan Tol Jagorawi')
+        assert tol != base
+        import xml.etree.ElementTree as ET
+        head = [e for e in ET.fromstring(tol).iter()
+                if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
+        # 色带红 = spec §5「实现时对齐 gpxutil」的 #B5273C（非国标红 #ED1724）
+        assert head and head[0].attrib['fill'].upper() == '#B5273C'
+```
+
+改完**必须逐条变异自证**（改坏 → 确认用例变红 → 还原，`git hash-object` 留证）：
+- 变异 E：`[name, name_id]` → `[name]` ⇒ `test_id_tol_detected_from_name_id` 红
+- 变异 F：`[name, name_id]` ⇒ `[name_id]` ⇒ `test_id_tol_from_chinese_name` 红
+
+- [ ] **Step 10: [Important] 补资源缺失分支的用例**
+
+问题：`road_sign_service.py:102-105` 的 `FileNotFoundError` 分支零覆盖——把 `raise` 改成静默吞掉后 42 个用例仍全绿。该分支在真实部署中可达（Clearview 字体需手工放置、不入库）。资源检查在 `config_service.get_all_configs(db)` 之后、`db.add` 之前，用 stub 会话即可覆盖，不需要真实数据库。
+
+在 `test_road_sign_region.py` 末尾追加：
+
+```python
+class TestMissingAssets:
+    """资源缺失路径（质量审查变异 D：此前该分支零覆盖）"""
+
+    def test_missing_indonesia_assets_raises(self, monkeypatch):
+        """DATA_DIR 指向空目录 → get_or_create_sign(region='id') 抛 FileNotFoundError"""
+        import asyncio
+        import tempfile
+        from app.core.config import settings
+        from app.services.config_service import config_service
+        from app.services.road_sign_service import RoadSignService
+
+        class _StubResult:
+            def scalar_one_or_none(self):
+                return None
+
+        class _StubDB:
+            async def execute(self, *args, **kwargs):
+                return _StubResult()
+
+        async def _empty_configs(_db):
+            return {}
+
+        with tempfile.TemporaryDirectory() as empty_dir:
+            monkeypatch.setattr(settings, 'DATA_DIR', empty_dir)
+            monkeypatch.setattr(config_service, 'get_all_configs', _empty_configs)
+            with pytest.raises(FileNotFoundError, match='印尼盾牌资源缺失'):
+                asyncio.run(RoadSignService().get_or_create_sign(
+                    _StubDB(), 'way', '3', region='id'))
+```
+
+- [ ] **Step 11: 两处 Minor 修正**
+
+1. `backend/app/services/road_sign_service.py:94` 注释「…下的绝对路径」→ 实际 `settings.DATA_DIR` 默认值是相对路径 `"data"`：
+   ```python
+        # 印尼配置：文件名解析为 DATA_DIR 下的资源路径（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
+   ```
+2. `backend/app/api/road_signs.py:32` 的 `sign_type` 描述与实际校验不符（`region='id'` 时端点仍强制 `way`/`expwy`，否则 400）：
+   ```python
+    sign_type: str = Field(..., description="标志类型: way(普通道路) 或 expwy(高速)；region=id 时该值不参与生成，但仍须为 way/expwy")
+   ```
+
+- [ ] **Step 12: 全量验证 + amend 提交**
+
+```bash
+cd backend && ../.venv/Scripts/python.exe -m pytest tests/ -q
+```
+Expected: **43 passed**（原 42 + 资源缺失 1 条；两个 TOL 用例是替换不是新增，不增计数）。
+
+```bash
+cd /d/code/vibe_route && git add backend/app/models/road_sign.py \
+  backend/alembic/versions/016_add_multilanguage_region.py \
+  backend/alembic/versions/016_add_multilanguage_region.sql.mysql \
+  backend/alembic/versions/016_add_multilanguage_region.sql.postgresql \
+  backend/alembic/versions/016_add_multilanguage_region.sql.sqlite \
+  backend/app/services/road_sign_service.py backend/app/api/road_signs.py \
+  backend/tests/test_road_sign_region.py
+git commit --amend --no-edit
+```
+
+> **执行教训（本次已发生一次）**：`--amend` 改的是 **HEAD**，若控制方在派发 fix loop 前又提交了别的东西（如计划文档），HEAD 就不是任务提交了，修复会被并进那个提交。本次因此产生一次历史重建（`git diff <错误提交> HEAD` 为空可证内容无损）。**后续任务的 fix loop**：派发前先确认 `git log --oneline -1` 就是该任务的提交，或在 fix 指令里写明「amend 前先 `git log -1` 确认 HEAD == 任务提交，不等则停下报告」。
+
+**已知但本轮不修**（记录备查）：
+- `road_sign_cache` 的 DB 落库分支（新建/命中/更新三分支的 `region` 写入）无测试覆盖（计划声明该文件不测 DB）；端到端冒烟（Task 13）兜底。
+- 缓存键换算法使既有 cn 缓存 100% 失效（实测 88 行 0 命中）→ 旧行与 `data/road_signs/*.svg` 成为孤儿，`/road-signs/list` 会对同编号显示新旧两条；发布后调一次 `POST /road-signs/clear-cache` 即可（写入 Task 14 的 cc 文档）。
+- `RoadSignListItem` 未暴露 `region`，列表页无法区分 cn/id 同编号图标；若 Task 12 前端需要再加 `region=cache.region`。
+- `_VALID_PROVINCE_ABBR` 与 `geocoding.PROVINCE_NAME_TO_SHORT.values()` 内容相同（跨层 import 会引入耦合，保持现状）。
+- 缓存键以 `:` 手拼自由文本的理论碰撞面（`name='a:b'` 跨字段移位）；旧键已有此性质，未构造出真实渲染分歧。
+
+- [ ] **Step 13: 复审 Minor 收尾（质量复审回写，2026-09-10）**
+
+复审结论 ✅ 通过（三项修复经变异反向验证）。以下 4 条 Minor 一并收尾，仍 `git commit --amend --no-edit` 并入 Task 5 提交：
+
+1. `backend/tests/test_road_sign_region.py:9` 的注释漏改（与 Step 11 同类的措辞）：
+   ```python
+       # pytest cwd = backend/，与 Task 4 测试同约定（服务层的 DATA_DIR 相对路径拼接见 RoadSignService 内 base_dir 逻辑）
+   ```
+2. `test_id_tol_detected_from_name_id` 补一道确定性守卫——该用例的 `assert tol != base` 比对的是**两份不同输入**，若渲染变得不确定（同输入两次输出不同），断言会因错误理由通过。把该用例改为：
+   ```python
+   def test_id_tol_detected_from_name_id(self):
+       """name 无关键词、name_id 命中 tol → 仍判 TOL（与基线渲染不同）"""
+       base_kwargs = dict(sign_type='expwy', code='8', name='雅加达高速',
+                          region='id', indonesia_config=ID_CONFIG,
+                          name_id='Jalan Jagorawi')
+       base = generate_road_sign(**base_kwargs)
+       # 守卫：同输入两次渲染须一致，否则下面的 != 断言会因非确定性假通过
+       assert generate_road_sign(**base_kwargs) == base
+       tol = generate_road_sign(
+           'expwy', '8', name='雅加达高速', region='id',
+           indonesia_config=ID_CONFIG, name_id='Jalan Tol Jagorawi')
+       assert tol != base
+       import xml.etree.ElementTree as ET
+       head = [e for e in ET.fromstring(tol).iter()
+               if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
+       # 色带红 = spec §5「实现时对齐 gpxutil」的 #B5273C（非国标红 #ED1724）
+       assert head and head[0].attrib['fill'].upper() == '#B5273C'
+   ```
+3. 三份 SQL 的 province 注释补一句「就地改写迁移」的补执行提示（MySQL / PostgreSQL 两份）：
+   ```sql
+   -- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+   -- 若某环境已执行过本迁移的早期版本（alembic 视为已应用而跳过），需手工补执行本行
+   ```
+4. SQLite 的 016 头注已在 Step 8 处理，无需再动。
+
+验收：`../.venv/Scripts/python.exe -m pytest tests/ -q` → **43 passed**（Step 13 只加断言不加用例）。
+
+
 ---
 
 ### Task 6: Nominatim 多语言请求 + fill_geocoding_info 写 `*_id` 与 region + 中文省回填
@@ -1802,8 +2047,9 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
             'memo': ''
         }
 
-        # 语言请求集：cn 维持现状（中文+英文），id 增加印尼语
-        languages = ['zh-CN', 'en'] if region == 'cn' else ['zh-CN', 'id', 'en']
+        # 语言请求集：cn 维持现状（中文+英文），id 增加印尼语；
+        # 未识别的 region 走 cn 集（spec §9：不选/未知地区 = 现状不变）
+        languages = ['zh-CN', 'id', 'en'] if region == 'id' else ['zh-CN', 'en']
 
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -1914,23 +2160,29 @@ docstring 补参数说明：`region: 填充的地区（'cn'/'id'）；None 时�
 
 - [ ] **Step 3: 填充循环写点（L590-624 区段改造）**
 
-把循环内「获取信息 + 写点」段（原 L591-624 的 try 开头到 `point.updated_by = user_id` 前）替换为：
+先在循环外判定 provider 能力，插在 L572 `logger.info(f"Geocoding service acquired: ...")` 之后、L574 `updated_count = 0` 之前——`region='id'` 只有 Nominatim 支持（amap/baidu/gdf 只服务中国），判定放循环外可避免逐点刷告警：
+
+```python
+                # 印尼多语言仅 Nominatim 支持（amap/baidu/gdf 只服务中国）；判定放循环外，避免逐点重复告警
+                from app.gpxutil_wrapper.geocoding import NominatimGeocoding
+                supports_id = isinstance(geocoding_service, NominatimGeocoding)
+                if region == 'id' and not supports_id:
+                    logger.warning(
+                        f"Track {track_id} region=id but geocoding provider "
+                        f"{type(geocoding_service).__name__} has no Indonesian support"
+                    )
+```
+
+再把循环内「获取信息 + 写点」段（**原 L591 `lat = point.latitude_wgs84` 到 L624 `updated_count += 1`**）整体替换为下方代码。原 L621-624 的 `point.updated_by = user_id` 与 `updated_count += 1` 已包含在下方代码块内，**替换后不要保留旧行**（否则重复赋值）；替换段之后的 L626-627 进度更新保持原位不动。
 
 ```python
                     try:
                         lat = point.latitude_wgs84
                         lon = point.longitude_wgs84
-                        # 仅 Nominatim 支持印尼多语言；其他 provider 维持现状调用
-                        from app.gpxutil_wrapper.geocoding import NominatimGeocoding
-                        if region == 'id' and isinstance(geocoding_service, NominatimGeocoding):
-                            info = await geocoding_service.get_point_info(lat, lon, region='id')
+                        if supports_id:
+                            info = await geocoding_service.get_point_info(lat, lon, region=region)
                         else:
                             info = await geocoding_service.get_point_info(lat, lon)
-                        if region == 'id' and not isinstance(geocoding_service, NominatimGeocoding):
-                            logger.warning(
-                                f"Track {track_id} region=id but geocoding provider "
-                                f"{type(geocoding_service).__name__} has no Indonesian support"
-                            )
 
                         # 检查是否获取到有效数据（至少有一个非空字段）
                         has_valid_data = any([
@@ -1986,7 +2238,7 @@ docstring 补参数说明：`region: 填充的地区（'cn'/'id'）；None 时�
                             updated_count += 1
 ```
 
-（注意：原 get_point_info 的 import 已在函数内完成，重复 import 无碍但建议放函数顶部一次——执行器在 Step 2 已把 Nominatim 判定 import 写在代码内时，可把本段的两行 import 删除只留判定。以**无重复 import 且可运行**为准，两处实现等价任选其一。）
+（说明：`NominatimGeocoding` 的 import 放在循环外的判定处；若你更希望放函数顶部、与 Step 2 引入的其它 import 合并亦可，以「无重复 import 且可运行」为准。`supports_id` 在循环外算好，循环内直接复用。）
 
 - [ ] **Step 4: 尾部轨道更新（L649-659 区段）**
 
@@ -2580,10 +2832,10 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 - [ ] **Step 2: 新增共享方法 `_build_region_tree(self, points)`（放 get_region_tree 之前）**
 
-整体（提取 auth 版逻辑 + region/names/回退链；供两个公共方法共用）：
+整体（提取 auth 版逻辑 + region/names/回退链；供两个公共方法共用）。**必须是 `async def`**：距离计算沿用现状的 `await self.spatial_service.distance(...)` 且留在点循环内（本方法同步化会把 await 挤到循环外、语义变化）：
 
 ```python
-    def _build_region_tree(self, points: list[TrackPoint]) -> tuple[list[dict], dict]:
+    async def _build_region_tree(self, points: list[TrackPoint]) -> tuple[list[dict], dict]:
         """按时间顺序构建区域树（两个公共入口共用）
 
         分组键含 (region, 文本)：同文本不同地区分开成组；节点显示文本按
@@ -2629,18 +2881,22 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
             }
 
         def collect_names(point: TrackPoint, is_road: bool) -> dict:
-            """取点在本级展示的语言代表值（非空才入 names）"""
+            """取点在本级展示的语言代表值（非空才入 names）
+
+            按 zh → id → en 顺序**对值去重**：Nominatim 无译文时各语言常返回同一个
+            本地名（如 zh 与 id 都是 'Jawa Timur'），不去重会让 tooltip 显示
+            「Jawa Timur / Jawa Timur」、也让前端「单语言不出 tooltip」判定失效。
+            """
             names = {}
             if is_road:
-                zh, id_, en = point.road_name, point.road_name_id, point.road_name_en
+                candidates = (('zh', point.road_name), ('id', point.road_name_id),
+                              ('en', point.road_name_en))
             else:
-                zh, id_, en = point.province, point.province_id, point.province_en
-            if zh:
-                names['zh'] = zh
-            if id_:
-                names['id'] = id_
-            if en:
-                names['en'] = en
+                candidates = (('zh', point.province), ('id', point.province_id),
+                              ('en', point.province_en))
+            for key, value in candidates:
+                if value and value not in names.values():
+                    names[key] = value
             return names
 
         # 当前活跃的节点路径（(region, 显示文本, 节点)）
