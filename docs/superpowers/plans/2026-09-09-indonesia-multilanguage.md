@@ -4108,6 +4108,9 @@ function renderNodeLabel(node: RegionNode) {
 
 同一份 `RoadSignFetchOptions`/`buildSignCacheKey`/`getRoadSignSvg`/`loadRoadSignSvg`/`renderNodeLabel` 代码应用到 SharedTrack.vue（当前 L771-876，行号以文件实际为准）。SharedTrack 无编辑/填充逻辑，其余零改动。
 
+> ⚠️ **`frontend/src/views/` 下有两个被 git 跟踪的废弃副本：`SharedTrack.vue.bak` 与 `SharedTrack.vue.bak2`**（已实测 `git ls-files` 确认在版本控制内）。两者**都含** `renderNodeLabel`（各在 L418）等同名符号。用 `grep`/全局替换定位时**务必确认命中的是 `SharedTrack.vue` 正式文件**（锚点：`SharedTrack.vue:833` 的 `function renderNodeLabel`），**不要改这两个 `.bak`**——它们是历史遗留、无人引用，改了除污染 diff 外没有任何作用。
+> （这两个文件的清理属独立议题，不在本计划范围；如需删除须先取得开发者同意——它们是**已被跟踪**的文件，删除是一次对仓库历史的可见改动。）
+
 - [ ] **Step 3: TrackUpload.vue —— 表单加「地区」选择**
 
 模板「原始坐标系」form-item（L86-96，`.form-tip` 提示段之后、`</el-form-item>` 后）插入：
