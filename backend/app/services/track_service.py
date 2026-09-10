@@ -2474,7 +2474,8 @@ class TrackService:
 
             只要文件里某字段的任一别名列存在，就用其值（包括空值）覆盖数据库中的值；
             所有别名列都不存在时，才保留数据库中的原值。
-            region 特殊：值为空时按『无 region 列』处理（不动该点 region）。
+            region 特殊：列存在但该行值为空 → 回退到轨迹级 region（track.region or 'cn'）；
+            列完全不存在 → 不动该点 region。
             """
             def has_key(field: str) -> bool:
                 """字段是否有任一别名列存在于文件中"""

@@ -179,6 +179,37 @@ class TestNewFormatColumns:
 
         asyncio.run(case())
 
+    def test_create_path_id_only_sets_has_area_flag(self, workdir):
+        """创建路径：只填 *_id 列（无中文/英文列）也要置 has_area_info / has_road_info
+
+        与上面的 test_id_only_columns_set_has_area_flag **不是同一条路径**，不可互替：
+        那条走导入（import_points_from_file 的重算分支），本条走创建
+        （_create_from_csv_project_format 的检测段 + Track(...) 构造参数），
+        两处各有一份 if，删掉一份不会让另一条的用例变红。
+        """
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                csv = (NEW_HEADERS + '\n'
+                       + _row(index=0, time_date='2026/09/01', time_time='08:00:00',
+                              longitude_wgs84='112.735000', latitude_wgs84='-7.280000',
+                              region='cn', province_id='JI')
+                       + '\n'
+                       + _row(index=1, time_date='2026/09/01', time_time='08:00:10',
+                              longitude_wgs84='112.736000', latitude_wgs84='-7.281000',
+                              region='cn', road_name_id='Jalan Satu'))
+                created = await track_service.create_from_csv(
+                    db, user, 'c.csv', csv, 'c', region='cn'
+                )
+
+                c0, c1 = await _track_points(db, created.id)
+                assert c0.province_id == 'JI' and c0.province is None
+                assert c1.road_name_id == 'Jalan Satu'
+                assert created.has_area_info is True  # 只靠 province_id
+                assert created.has_road_info is True  # 只靠 road_name_id
+
+        asyncio.run(case())
+
 
 class TestRowRegion:
     """行级 region 优先级与合法性"""
@@ -249,6 +280,24 @@ class TestRowRegion:
                 )
                 with pytest.raises(ValueError):
                     await _import(db, track.id, user.id, _new_format_csv(region0='sg', region1='cn'))
+
+        asyncio.run(case())
+
+    def test_create_path_invalid_region_raises(self, workdir):
+        """创建路径的 region 校验（_create_from_csv_project_format 的 row_region 分支）
+
+        与上面的 test_invalid_region_raises **不是同一条路径**，不可互替：那条走导入
+        （import_points_from_file），本条走创建（create_from_csv）。删掉创建路径那两行
+        raise 不会让导入路径的用例变红，反之亦然。
+        """
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                with pytest.raises(ValueError):
+                    await track_service.create_from_csv(
+                        db, user, 'c.csv', _new_format_csv(region0='sg', region1='cn'),
+                        'c', region='cn',
+                    )
 
         asyncio.run(case())
 
