@@ -4023,7 +4023,8 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - **必填字段破坏面定点排查**（无 vue-tsc 兜底，故由实现者手工排查、协调者复核）：`region` 在 `Track`/`UnifiedTrack`/`TrackPoint` 上是必填，全仓对这三类类型**显式标注的数组**只有 `TrackMerge.vue:360`（`UnifiedTrack[]`）与 `Home.vue:782`（`TrackPoint[]`），二者都只 `push` API 返回的现成对象、不构造字面量 → **无破坏面**。
 - **字段名溯源核对**（协调者独立做）：前端新增字段与后端权威定义逐字一致——点级 `province_id`/`city_id`/`district_id`/`road_name_id`/`region` 对 `backend/app/schemas/track.py:159-163`；节点级 `region`/`names` 对 `backend/app/schemas/track.py:191-192`；`RoadSignRequest`/`RoadSignResponse` 对 `backend/app/api/road_signs.py:30-38` 与 `105-113`。
   > 附注：道路图标 schema **不在** `backend/app/schemas/` 而在 `backend/app/api/road_signs.py`（易误判为「字段不存在」，审查时注意）。
-- **发现但按 YAGNI 未扩范围**：后端 `RoadSignRequest` 尚有 `province_id`（`road_signs.py:38`，注释「印尼语省名文本（region=id 时查省码用）」），前端未加该字段。Task 11 规格本就只列 `region?`/`name_id?`；且 Task 12 的区域树对 id 分支只传 `code/signType/region/name/nameId`，**无任何调用点会发 `province_id`** → 不预先加死字段。**记为 Task 13 端到端冒烟的观察点**：若印尼盾牌实际渲染出现省份码缺失，此处是第一嫌疑。
+- **发现但按 YAGNI 未扩范围**：后端 `RoadSignRequest` 尚有 `province_id`（`road_signs.py:38`，注释「印尼语省名文本（region=id 时查省码用）」），前端未加该字段。Task 11 规格本就只列 `region?`/`name_id?`；且 Task 12 的区域树对 id 分支只传 `code/signType/region/name/nameId`，**无任何调用点会发 `province_id`** → 不预先加死字段。
+  > **2026-09-10 实测升级：从「嫌疑观察点」变为「已确认的边界」**。原记「若印尼盾牌实际渲染出现省份码缺失，此处是第一嫌疑」——现已用后端 `parse_indonesia_road_num` 以真实入参实跑证实**必然缺失**，无需等冒烟：编号含内嵌省码前缀（`35-024`）时省码照常解析，1-2 位短编号（`3`）则 `province_code=None` → `svg_gen.py:893-895` 兜底使色带只显示等级名。**等级判定不受影响**（判级只看编号位数与路名关键词，与省码无关）。
 - ~~观感：`RoadSignRequest` 新增两行注释对齐不齐~~ → **该判断经复审实测推翻，撤回**。审查者逐行测了 `//` 列号：`roadSign.ts` L9/L10/L20 三处注释**全部落在第 23 列，本来就是对齐的**，无错可纠。至于 `track.ts` 新字段（L91-95 列号 30/26/30/31/18）虽不等宽，但**整个 `track.ts` 都不是列对齐风格**——它是「类型后固定两个空格」（对照存量 L28-30 = 33/34/40、L68/70 = 23/29、L96 = 23），新字段恰好符合本文件既有约定。若把 5 行单独对齐，反与紧邻 40 余行存量风格割裂，纯 churn、读者收益为零。**裁定：不改。**
   > 教训：**「视觉上不齐」这类判断不能靠印象**。实现者与我先后都凭观感报了同一处「不齐」，实测列号后两者皆错。凡涉格式的结论，一律用列号/字节级证据说话。
 
@@ -4471,6 +4472,19 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 **审查者明确未能验证的部分（诚实边界）**：① **SFC 层面未做类型检查**——`vue-tsc` 崩，临时 tsc 只覆盖拷入的表达式，**不覆盖** `.vue` 特有部分（模板类型、两处 `v-model="…region"`、自动导入、`<component :is>` slot 类型）；② 无浏览器冒烟（属 Task 13）；③ 数据库迁移未执行（属 Task 13）；④ `npm run build` 是语法/打包级验收，**不构成类型正确的证据**。
 
+**Task 12 fix loop 2（质量审 M1/M2）· 实现 `a15fde0`**
+
+2 文件 `+10/-8`（两文件各 5 增 4 删，净 +1 行）。改动**全部落在 `buildSignCacheKey` 内**：3 行旧注释 + 1 行旧 return 换成 3 行新注释 + 1 行新 return + 1 行 `// cn：` 注释；**cn 分支那行 return 逐字未动**。
+
+协调者独立复核（不采信实现者转述）：
+- 提交恰 2 文件；`git show a15fde0 --name-only | grep -ci bak` = **0**（三个 `.bak` 零触碰）。
+- 逐行核对 `git show` 改动明细：无模板、无其他函数、无 import、无格式化。
+- **三方字节级全等**（`diff` 实测，非肉眼）：整段（`interface RoadSignFetchOptions` → `renderNodeLabel` 结束）共 **154 行**，计划规格块 / `TrackDetail.vue:1793-1946` / `SharedTrack.vue:775-928` 两两 `diff` **全部空输出**（`FULL_SPEC_TD_IDENTICAL` / `FULL_SPEC_ST_IDENTICAL` / `FULL_TD_ST_IDENTICAL`）。
+- 独立复跑 `npm run build`：`✓ built in 1m 20s`，exit 0（仅存量 chunk >500kB 警告）。
+
+**Task 12 关闭。** 前端全部落地：上传对话框地区选择、编辑对话框地区 + `saveEdit` 无条件 PATCH、区域树按节点 region 分派（cn 走 `parseRoadNumber`、id 走后端判级）、印尼盾牌渲染、多语 tooltip。spec 审查 ✅、质量审 `Ready to merge: Yes`、两轮 fix loop 闭环。
+> 遗留（已记录、不在本计划范围）：① 156 行重复是否抽 composable → 单开 ticket（理由见上）；② 本仓 TS 基线不干净（M6，写入 Task 14）；③ `vue-tsc` 在本机不可用（存量环境问题，已上报开发者待裁决）。
+
 ---
 
 ### Task 13: 数据库迁移（需授权）+ 后端全量测试 + 端到端冒烟
@@ -4566,6 +4580,11 @@ index,time_date,time_time,time_microsecond,elapsed_time,longitude_wgs84,latitude
 - 点 0-2 道路节点：PROVINSI 蓝盾牌（35-024 → 大字 `024`，色带 `PROVINSI 35`）；**回退链验证**——该段中文路名留空，节点名显示回退结果 `Jl. Raya Mayjen Sungkono`
 - 点 3-6 道路节点：TOL 红盾牌（`3` + 中文「收费」命中；`Jalan Tol Juanda` 中 `\btol\b` 亦命中）
 - 点 7-9 道路节点：NASIONAL 红盾牌（`3` 无关键词——验证同编号缓存键含路名不串样：`3`+收费 与 `3`+雅尼路 是两张不同的图）
+
+> **执行前实测（2026-09-10）：色带省码的精确预期**。用后端 `parse_indonesia_road_num` 以**前端真实入参**（`province_texts=[None, None]`，因 id 分支结构上不发 `province`/`province_id`）实跑，结果：
+> `35-024` → `PROVINSI` / `province_code='35'`；`3`+收费 → `TOL` / `province_code=None`；`3`+雅尼路 → `NASIONAL` / `province_code=None`。
+> 含义：**`35-024` 的省码来自编号内嵌前缀**（`indonesia.py:147-153`，不受前端是否发 province 影响）→ 色带确为 `PROVINSI 35`；而 `3` 这类 1-2 位编号无内嵌前缀，省码**必为 None** → `svg_gen.py:893-895` 的 `if province_code:` 兜底使色带**只显示 `TOL` / `NASIONAL`、不带省码**。
+> **这不是缺陷**，是 Task 11 按 YAGNI 未给前端加 `province_id` 字段的必然结果（M3 已把「只少色带小字、不渲染错等级」钉死）。**冒烟时色带无省码属预期，不要报为 bug**；反过来说，**等级判定（PROVINSI / TOL / NASIONAL 三色）才是这几条断言真正的验证目标**。
 - 省/市/区组 tooltip 三语（东爪哇省 / Provinsi Jawa Timur / Province of East Java）；`35-024` 路节点 tooltip 两语（id+en）；cn 段节点单语言 → 无 tooltip（spec「单语言则无 tooltip」断言）
 - 点 10-11：与印尼段分开成组（区域树出现独立「广东省」根节点，region=cn，仅中文列）
 
