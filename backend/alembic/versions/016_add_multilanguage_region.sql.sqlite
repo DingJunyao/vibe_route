@@ -13,6 +13,9 @@ ALTER TABLE track_points ADD COLUMN road_name_id VARCHAR(200);
 
 ALTER TABLE road_sign_cache ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn';
 
+-- road_sign_cache.province 无需变更：SQLite 不校验 VARCHAR 长度，
+-- 模型侧的 String(100) 仅为与 MySQL / PostgreSQL 对齐
+
 -- 验证
 SELECT name FROM pragma_table_info('tracks') WHERE name = 'region';
 SELECT name FROM pragma_table_info('track_points') WHERE name IN ('region','province_id','city_id','district_id','road_name_id');

@@ -16,6 +16,10 @@ ALTER TABLE track_points
 ALTER TABLE road_sign_cache
     ADD COLUMN region VARCHAR(10) NOT NULL DEFAULT 'cn' COMMENT '地区: cn=中国, id=印尼';
 
+-- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+-- 若某环境已执行过本迁移的早期版本（alembic 视为已应用而跳过），需手工补执行本行
+ALTER TABLE road_sign_cache MODIFY COLUMN province VARCHAR(100) NULL;
+
 -- 验证
 SHOW COLUMNS FROM tracks LIKE 'region';
 SHOW COLUMNS FROM track_points LIKE '%_id';

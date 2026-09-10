@@ -14,7 +14,7 @@ class RoadSignCache(Base, AuditMixin):
 
     id = Column(String(32), primary_key=True, index=True)
     code = Column(String(50), index=True, nullable=False)
-    province = Column(String(10), nullable=True)  # 省份（高速用）
+    province = Column(String(100), nullable=True)  # 省份（cn: 简称如 '豫'；id: 印尼语省名）
     name = Column(String(100), nullable=True)  # 道路名称
     svg_path = Column(String(500), nullable=False)  # SVG 文件路径
     region = Column(String(10), nullable=False, default='cn', server_default='cn', comment="地区: cn=中国, id=印尼")

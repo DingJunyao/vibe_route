@@ -18,7 +18,9 @@ from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
 
 from app.core.config import settings
-from app.gpxutil_wrapper.indonesia import IndonesiaRoadLevel
+from app.gpxutil_wrapper.indonesia import (
+    REGION_CN, REGION_ID, IndonesiaRoadLevel, parse_indonesia_road_num,
+)
 from loguru import logger
 
 
@@ -954,26 +956,59 @@ def generate_road_sign(
     code: str,
     province: Optional[str] = None,
     name: Optional[str] = None,
+    region: str = 'cn',
+    indonesia_config: Optional[dict] = None,
+    name_id: Optional[str] = None,
+    province_id: Optional[str] = None,
     font_config: Optional[dict] = None,
-    output_path: Optional[str] = None
+    output_path: Optional[str] = None,
 ) -> str:
     """
-    统一的道路标志生成入口
+    统一的道路标志生成入口（按 region 分派）。
 
     Args:
-        sign_type: 标志类型 ('way' 或 'expwy')
-        code: 道路编号
-        province: 省份（仅高速用）
-        name: 道路名称
-        font_config: 字体配置字典，包含 font_a, font_b, font_c
+        sign_type: 标志类型 ('way' 或 'expwy')，region='id' 时忽略
+        code: 道路编号（cn: 如 G221/S21；id: 如 3、35-024）
+        province: 省份（cn: 简称仅高速用；id: 省名文本，查省码用，可选）
+        name: 道路名称（cn: 可选；id: 中文路名，TOL 关键词判定文本之一）
+        region: 地区 ('cn' | 'id')
+        indonesia_config: region='id' 时需要，dict {template, upper, lower, tol_keywords}
+        name_id: region='id' 时印尼语路名（TOL 关键词判定文本之二）
+        province_id: region='id' 时印尼语省名文本（查省码用，可选）
+        font_config: 字体配置字典（仅 cn 用）
         output_path: 输出路径
 
     Returns:
         SVG 内容或文件路径
+
+    Raises:
+        ValueError: 未知 region / id 无法识别编号 / id 缺配置 / cn 缺模板字体等
     """
-    if sign_type == 'way':
-        return generate_way_num_sign(code, font_config, output_path)
-    elif sign_type == 'expwy':
-        return generate_expwy_sign(code, province, name, font_config, output_path)
-    else:
+    if region == REGION_CN:
+        if sign_type == 'way':
+            return generate_way_num_sign(code, font_config, output_path)
+        elif sign_type == 'expwy':
+            return generate_expwy_sign(code, province, name, font_config, output_path)
         raise ValueError(f"未知的标志类型: {sign_type}")
+    elif region == REGION_ID:
+        if not indonesia_config:
+            raise ValueError('缺少印尼盾牌配置（template/字体/关键词）')
+        # 编号 + 路名（zh 与 id 任一命中 TOL 关键词）+ 省名文本 → 等级解析
+        info = parse_indonesia_road_num(
+            code,
+            [name, name_id],
+            [province_id, province],
+            indonesia_config.get('tol_keywords') or ['收费', 'Tol'],
+        )
+        if not info:
+            raise ValueError(f"无法识别的印尼道路编号: {code or ''}")
+        return generate_indonesia_shield(
+            info.code, info.level, info.province_code,
+            {
+                'template': indonesia_config['template'],
+                'upper': indonesia_config['upper'],
+                'lower': indonesia_config['lower'],
+            },
+            output_path,
+        )
+    raise ValueError(f"未知的地区: {region}")

@@ -3,6 +3,7 @@
 """
 import os
 import hashlib
+from pathlib import Path
 from typing import Optional
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,10 +29,14 @@ class RoadSignService:
         sign_type: str,
         code: str,
         province: Optional[str] = None,
-        name: Optional[str] = None
+        name: Optional[str] = None,
+        region: str = 'cn',
+        name_id: Optional[str] = None,
+        province_id: Optional[str] = None,
     ) -> str:
-        """生成缓存键"""
-        key_data = f"{sign_type}:{code}:{province or ''}:{name or ''}"
+        """生成缓存键（含 region，不同地区的同编号不串样）"""
+        key_data = (f"{region}:{sign_type}:{code}:{province or ''}:{name or ''}:"
+                    f"{name_id or ''}:{province_id or ''}")
         return hashlib.md5(key_data.encode()).hexdigest()
 
     def _get_svg_path(self, cache_key: str) -> str:
@@ -44,7 +49,10 @@ class RoadSignService:
         sign_type: str,
         code: str,
         province: Optional[str] = None,
-        name: Optional[str] = None
+        name: Optional[str] = None,
+        region: str = 'cn',
+        name_id: Optional[str] = None,
+        province_id: Optional[str] = None
     ) -> tuple[str, bool]:
         """
         获取或创建道路标志
@@ -55,11 +63,14 @@ class RoadSignService:
             code: 道路编号
             province: 省份（仅高速用）
             name: 道路名称
+            region: 地区 ('cn' | 'id')
+            name_id: 印尼语道路名称（region='id' 时 TOL 判定文本）
+            province_id: 印尼语省名文本（region='id' 时查省码用）
 
         Returns:
             (SVG 内容, 是否是缓存)
         """
-        cache_key = self._generate_cache_key(sign_type, code, province, name)
+        cache_key = self._generate_cache_key(sign_type, code, province, name, region, name_id, province_id)
         svg_path = self._get_svg_path(cache_key)
 
         # 检查缓存
@@ -76,9 +87,28 @@ class RoadSignService:
             except Exception as e:
                 logger.warning(f"Failed to read cached sign {cache_key}: {e}")
 
-        # 获取字体配置
+        # 获取配置
         configs = await config_service.get_all_configs(db)
         font_config = configs.get('font_config')
+
+        # 印尼配置：文件名解析为 DATA_DIR 下的资源路径（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
+        indonesia_config = None
+        if region == 'id':
+            id_cfg = configs.get('indonesia_road_sign') or {}
+            base_dir = Path(settings.DATA_DIR)
+            template_file = base_dir / 'templates' / (id_cfg.get('template') or 'id_sheild.svg')
+            upper_file = base_dir / 'fonts' / (id_cfg.get('font_upper') or 'ClearviewHwy1W.ttf')
+            lower_file = base_dir / 'fonts' / (id_cfg.get('font_lower') or 'ClearviewHwy2W.ttf')
+            missing = [str(f) for f in (template_file, upper_file, lower_file) if not f.exists()]
+            if missing:
+                logger.error(f"Missing indonesia road sign assets: {missing}")
+                raise FileNotFoundError('印尼盾牌资源缺失（模板/字体），请检查 data 目录')
+            indonesia_config = {
+                'template': str(template_file),
+                'upper': str(upper_file),
+                'lower': str(lower_file),
+                'tol_keywords': id_cfg.get('tol_keywords') or ['收费', 'Tol'],
+            }
 
         # 生成新的 SVG
         try:
@@ -87,6 +117,10 @@ class RoadSignService:
                 code=code,
                 province=province,
                 name=name,
+                region=region,
+                indonesia_config=indonesia_config,
+                name_id=name_id,
+                province_id=province_id,
                 font_config=font_config,
                 output_path=svg_path
             )
@@ -94,12 +128,14 @@ class RoadSignService:
             # 保存到缓存
             if cached:
                 cached.svg_path = svg_path
+                cached.region = region
             else:
                 cached = RoadSignCache(
                     id=cache_key,
                     code=code,
                     province=province,
                     name=name,
+                    region=region,
                     svg_path=svg_path
                 )
                 db.add(cached)

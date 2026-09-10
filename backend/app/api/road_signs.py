@@ -18,28 +18,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/road-signs", tags=["road-signs"])
 
 
+# 中国省份简称白名单（仅 region='cn' 校验用）
+_VALID_PROVINCE_ABBR = frozenset({
+    '京', '津', '冀', '晋', '蒙', '辽', '吉', '黑',
+    '沪', '苏', '浙', '皖', '闽', '赣', '鲁', '豫',
+    '鄂', '湘', '粤', '桂', '琼', '渝', '川', '贵',
+    '云', '藏', '陕', '甘', '青', '宁', '新',
+})
+
+
 class RoadSignRequest(BaseModel):
     """道路标志生成请求"""
-    sign_type: str = Field(..., description="标志类型: way(普通道路) 或 expwy(高速)")
-    code: str = Field(..., description="道路编号，如 G221, S221, G5, G4511")
-    province: Optional[str] = Field(None, description="省份简称，如 '豫', '晋'（仅高速用）")
-    name: Optional[str] = Field(None, description="道路名称（可选）")
+    sign_type: str = Field(..., description="标志类型: way(普通道路) 或 expwy(高速)；region=id 时该值不参与生成，但仍须为 way/expwy")
+    code: str = Field(..., description="道路编号（cn: G221/S88 等；id: 3/35-024/023 等）")
+    province: Optional[str] = Field(None, description="省份（cn: 简称如 '豫'；id: 省名文本如 'Provinsi Jawa Timur'，查省码用）")
+    name: Optional[str] = Field(None, description="道路名称（id: 中文路名，TOL 判定文本）")
+    region: str = Field('cn', description="地区: cn(中国国标) 或 id(印尼六边形盾牌)")
+    name_id: Optional[str] = Field(None, description="印尼语道路名称（region=id 时 TOL 判定文本）")
+    province_id: Optional[str] = Field(None, description="印尼语省名文本（region=id 时查省码用）")
+
+    @field_validator('region')
+    @classmethod
+    def validate_region(cls, v: str) -> str:
+        if v not in ('cn', 'id'):
+            raise ValueError("无效的地区，可选值: cn, id")
+        return v
 
     @field_validator('code')
     @classmethod
     def normalize_code(cls, v: str) -> str:
-        """规范化道路编号：转大写"""
+        """规范化道路编号：转大写（仅 cn 有意义；id 数字不受影响）"""
         return v.strip().upper()
 
     @model_validator(mode='after')
     def validate_road_sign(self) -> 'RoadSignRequest':
-        """校验道路编号"""
+        """校验道路编号（region=cn 时执行现有规则，region=id 时不套用国标正则）"""
         code = self.code
         sign_type = self.sign_type
         province = self.province
 
         if not code:
             raise ValueError("道路编号不能为空")
+
+        if self.region == 'id':
+            # 印尼编号由后端按编号+路名+省名解析（parse_indonesia_road_num），不做格式猜测
+            return self
+
+        if province and province not in _VALID_PROVINCE_ABBR:
+            raise ValueError(f"无效的省份简称：{province}。应为标准省份简称，如'京'、'津'、'冀'等")
 
         if sign_type == 'way':
             # 普通道路：字母 + 三位数字
@@ -69,27 +95,11 @@ class RoadSignRequest(BaseModel):
 
     @field_validator('province')
     @classmethod
-    def validate_province(cls, v: Optional[str], info) -> Optional[str]:
-        """校验省份简称"""
+    def normalize_province(cls, v: Optional[str]) -> Optional[str]:
+        """规范化省份：去空白，空串归一为 None（简称白名单见 validate_road_sign，仅 cn 适用）"""
         if v is None:
             return None
-
-        province = v.strip()
-        if not province:
-            return None
-
-        # 中国省份简称列表
-        valid_provinces = {
-            '京', '津', '冀', '晋', '蒙', '辽', '吉', '黑',
-            '沪', '苏', '浙', '皖', '闽', '赣', '鲁', '豫',
-            '鄂', '湘', '粤', '桂', '琼', '渝', '川', '贵',
-            '云', '藏', '陕', '甘', '青', '宁', '新',
-        }
-
-        if province not in valid_provinces:
-            raise ValueError(f"无效的省份简称：{v}。应为标准省份简称，如'京'、'津'、'冀'等")
-
-        return province
+        return v.strip() or None
 
 
 class RoadSignResponse(BaseModel):
@@ -100,6 +110,7 @@ class RoadSignResponse(BaseModel):
     code: str
     province: Optional[str] = None
     name: Optional[str] = None
+    region: str = 'cn'
 
 
 @router.post("/generate", response_model=RoadSignResponse)
@@ -132,6 +143,9 @@ async def generate_road_sign(
             code=request.code,
             province=request.province,
             name=request.name,
+            region=request.region,
+            name_id=request.name_id,
+            province_id=request.province_id,
         )
 
         return RoadSignResponse(
@@ -141,6 +155,7 @@ async def generate_road_sign(
             code=request.code,
             province=request.province,
             name=request.name,
+            region=request.region,
         )
     except ValueError as e:
         logger.error(f"ValueError in generate_road_sign: {e}", exc_info=True)

@@ -58,6 +58,16 @@ def upgrade():
         sa.Column('region', sa.String(10), nullable=False,
                   server_default='cn', comment='地区: cn=中国, id=印尼')
     )
+    # road_sign_cache.province 放宽：region='id' 时该列承载印尼语省名
+    # （最长 'Daerah Khusus Ibukota Jakarta' 29 字符；原 String(10) 在 MySQL 严格模式
+    #  报 1406 Data too long、PostgreSQL 报 value too long for type character varying(10)）
+    # 用 batch_alter_table：SQLite 不支持直接改列类型，batch 模式会重建表；
+    # MySQL / PostgreSQL 下退化为普通 ALTER COLUMN。
+    with op.batch_alter_table('road_sign_cache') as batch_op:
+        batch_op.alter_column(
+            'province', type_=sa.String(100), existing_type=sa.String(10),
+            existing_nullable=True,
+        )
 
 
 def downgrade():
@@ -75,4 +85,9 @@ def downgrade():
         drop_if_exists('track_points', col)
     drop_if_exists('track_points', 'region')
     drop_if_exists('tracks', 'region')
+    with op.batch_alter_table('road_sign_cache') as batch_op:
+        batch_op.alter_column(
+            'province', type_=sa.String(10), existing_type=sa.String(100),
+            existing_nullable=True,
+        )
     drop_if_exists('road_sign_cache', 'region')
