@@ -772,7 +772,17 @@
             <el-radio value="cn">中国</el-radio>
             <el-radio value="id">印尼</el-radio>
           </el-radio-group>
-          <div class="form-hint">轨迹的默认地区（新填充/新导入点的默认值；已有轨迹点不受影响）</div>
+          <div class="form-hint">轨迹的默认地区（新填充/新导入点的默认值）</div>
+          <el-checkbox
+            v-if="points.length > 0"
+            v-model="editForm.syncPointsRegion"
+            class="sync-region-checkbox"
+          >
+            同时更新已有轨迹点地区（共 {{ points.length }} 个点）
+          </el-checkbox>
+          <div v-if="points.length > 0" class="form-hint">
+            图标按点级地区渲染，切换地区后需勾选此项才能让已有轨迹点改用新地区的路牌
+          </div>
         </el-form-item>
       
       <!-- <el-divider content-position="left"></el-divider> -->
@@ -1315,7 +1325,8 @@ const editForm = ref({
   name: '',
   description: '',
   original_crs: 'wgs84',
-  region: 'cn'
+  region: 'cn',
+  syncPointsRegion: true
 })
 
 // 填充地理信息相关
@@ -2560,6 +2571,7 @@ function showEditDialog() {
     editForm.value.description = track.value.description || ''
     editForm.value.original_crs = track.value.original_crs || 'wgs84'
     editForm.value.region = track.value.region || 'cn'
+    editForm.value.syncPointsRegion = true
   }
   editDialogVisible.value = true
 }
@@ -2612,16 +2624,28 @@ async function saveEdit() {
       ElMessage.success('坐标系更改成功')
     }
 
+    // 地区变化且勾选同步时，才批量刷已有轨迹点的点级地区（点级是图标渲染的权威）
+    const regionChanged = editForm.value.region !== (track.value.region || 'cn')
+    const syncPointsRegion = regionChanged && editForm.value.syncPointsRegion
+
     // 更新名称、描述与地区（无论是否换坐标系都保存）
     const updated = await trackApi.update(track.value.id, {
       name: editForm.value.name.trim(),
       description: editForm.value.description.trim() || undefined,
       region: editForm.value.region,
+      sync_points_region: syncPointsRegion,
     })
     track.value = updated
 
-    if (!needsCrsChange) {
+    if (syncPointsRegion) {
+      ElMessage.success('保存成功，已更新轨迹点地区')
+    } else if (!needsCrsChange) {
       ElMessage.success('保存成功')
+    }
+
+    // 点级地区变了，区域树的图标需要重取
+    if (syncPointsRegion) {
+      await fetchRegions()
     }
 
     editDialogVisible.value = false
@@ -4172,6 +4196,20 @@ onUnmounted(() => {
 .chart-skeleton-content {
   padding: 20px;
   min-height: 180px;
+}
+
+/* 编辑对话框「同步已有轨迹点地区」开关 */
+.sync-region-checkbox {
+  width: 100%;
+  height: auto;
+  margin-top: 8px;
+  align-items: flex-start;
+}
+
+.sync-region-checkbox :deep(.el-checkbox__label) {
+  white-space: normal;
+  line-height: 1.5;
+  font-size: 13px;
 }
 
 /* 表单提示文本 */

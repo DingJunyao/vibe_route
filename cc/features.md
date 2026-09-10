@@ -79,7 +79,7 @@
 ### 地区贯通
 
 - **上传**: 上传对话框可选地区（中国 / 印尼），缺省 `cn`
-- **编辑**: 编辑对话框可改轨迹地区——**只改轨迹行级**，已有轨迹点不受影响（点级权威不被覆盖）
+- **编辑**: 编辑对话框可改轨迹地区。默认**只改轨迹行级**（新填充/新导入点的默认值）；勾选「同时更新已有轨迹点地区（共 N 个点）」（`sync_points_region=true`，默认勾选）才批量刷点级 region。**仅当 region 实际变化时**前端才发该标志，故改名不会重写上万个点。点级是图标渲染的权威，未勾选时改地区**不会**让已有轨迹点换用新地区路牌
 - **填充地理编码**: `POST /api/tracks/{id}/fill-geocoding` 支持 `region` 参数，缺省回读轨迹自身 region
 - **CSV 行级 region**: 导入以文件内每行的 `region` 列为准（跨地区文件的主通道，一个文件可含多地区点）
 - **合并轨迹**: 逐点复制点级 region
@@ -88,7 +88,7 @@
 ### 反向地理编码（多语）
 
 - region=id 时 Nominatim 发**三次**请求（`zh-CN` / `id` / `en`），分别写中文列 / `_id` / `_en`
-- 省级中文名回填表（38 个印尼省，自 gpxutil 移植，含前缀容错）；查不到中文时**留空**而非填英文
+- 省级中文名回填表（**34 个印尼省 × 三语键 = 102 条**，自 gpxutil 移植，含前缀容错）；查不到中文时**留空**而非填英文
 - 展示侧回退链 **zh → id → en**，故中文留空不会显示空段
 
 ### 道路图标
@@ -101,10 +101,14 @@
 前端按节点 region 分派（详情页 [`TrackDetail.vue`](frontend/src/views/TrackDetail.vue)、分享页 [`SharedTrack.vue`](frontend/src/views/SharedTrack.vue)，共用 `renderNodeLabel`）。
 
 - **id 等级判定**（后端）:
-  - `PROVINSI`：编号含内嵌省码前缀（如 `35-024` → 大字 `024`、色带 `PROVINSI 35`），蓝 `#003E86`
-  - `TOL`：路名命中关键词（中文子串「收费」或 ASCII 词边界 `Tol`），红 `#B5273C`
-  - `NASIONAL`：其余，红 `#B5273C`
-- **色带省码**: 仅编号内嵌前缀可得（`35-024` 得 `35`）；1-2 位编号（如 `3`）色带只显示等级词、不带省码——前端不发 province 的必然结果，属预期行为
+  - 3 位编号 → `PROVINSI`（蓝 `#003E86`）；1-2 位编号 → `TOL` / `NASIONAL`（均红 `#B5273C`）
+  - `TOL` 条件：路名命中关键词（中文子串「收费」或 ASCII 词边界 `Tol`），或请求带 `force_tol=true`（前端「收费公路」勾选框，仅 1-2 位编号有效）
+- **地区代码（kode wilayah）**: 交通部法规 `KP.1324/AJ.001/DRJD/2019 Lampiran I`，省级为 **1-34 序号**（东爪哇 `16`），**与 BPS/ISO 码无关**（旧表东爪哇为 `35`，已废弃）；县市码为 `省码.省内序号`（如 `16.17`）。色带来源按优先级：
+  1. 编号内嵌前缀且命中值集（`16-024` → `PROVINSI 16`；`16.17-024` → `PROVINSI 16.17`）
+  2. 内嵌前缀未命中（`99-024`、`abc-024`、`-024`、**旧数据 `35-024`**）→ 回退省名文本查表
+  3. 省名文本（中/英/印尼语，含无前缀容错如 `Jawa Timur`）或直接传省码字符串（`16`）
+  4. 都查不到 → 色带只显示等级词、不带地区码（如 `NASIONAL`）
+- **生成入口**: 生成页 [`RoadSignGenerator.vue`](frontend/src/views/RoadSignGenerator.vue) 与主页内嵌对话框 [`Home.vue`](frontend/src/views/Home.vue) 均有地区切换；id 模式字段为 编号 / 中文路名 / 印尼语路名 / 省份文本 / 收费公路勾选框。主页的国标字体检查（`areFontsConfigured`）**仅 cn 分支执行**——印尼盾牌用 `data/fonts/` 的 Clearview 字体，与 A/B/C 配置无关
 - **缓存键含 region**: 后端 `road_sign_cache` 与前端内存缓存均按 region 隔离；id 分支的键**还含路名与印尼语路名**（后端对两段文本联合判 TOL，防「同编号不同路名」串用同一张图）
 - 生成失败回退纯文本
 - **配置** `indonesia_road_sign`: `template`（`backend/data/templates/id_sheild.svg`）、`tol_keywords`、`font_upper` / `font_lower`（Clearview 字体，商业字体，许可记录在案）

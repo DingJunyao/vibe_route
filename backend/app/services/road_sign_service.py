@@ -33,10 +33,16 @@ class RoadSignService:
         region: str = 'cn',
         name_id: Optional[str] = None,
         province_id: Optional[str] = None,
+        force_tol: bool = False,
     ) -> str:
-        """生成缓存键（含 region，不同地区的同编号不串样）"""
+        """生成缓存键（含 region，不同地区的同编号不串样）
+
+        force_tol 仅在 True 时追加，False 时键与历史版本逐字节相同 → 旧缓存行继续命中。
+        """
         key_data = (f"{region}:{sign_type}:{code}:{province or ''}:{name or ''}:"
                     f"{name_id or ''}:{province_id or ''}")
+        if force_tol:
+            key_data += ':force'
         return hashlib.md5(key_data.encode()).hexdigest()
 
     def _get_svg_path(self, cache_key: str) -> str:
@@ -52,7 +58,8 @@ class RoadSignService:
         name: Optional[str] = None,
         region: str = 'cn',
         name_id: Optional[str] = None,
-        province_id: Optional[str] = None
+        province_id: Optional[str] = None,
+        force_tol: bool = False
     ) -> tuple[str, bool]:
         """
         获取或创建道路标志
@@ -66,11 +73,13 @@ class RoadSignService:
             region: 地区 ('cn' | 'id')
             name_id: 印尼语道路名称（region='id' 时 TOL 判定文本）
             province_id: 印尼语省名文本（region='id' 时查省码用）
+            force_tol: 印尼强制按收费公路解析（region='id' 且 1-2 位编号时生效）
 
         Returns:
             (SVG 内容, 是否是缓存)
         """
-        cache_key = self._generate_cache_key(sign_type, code, province, name, region, name_id, province_id)
+        cache_key = self._generate_cache_key(
+            sign_type, code, province, name, region, name_id, province_id, force_tol)
         svg_path = self._get_svg_path(cache_key)
 
         # 检查缓存
@@ -121,6 +130,7 @@ class RoadSignService:
                 indonesia_config=indonesia_config,
                 name_id=name_id,
                 province_id=province_id,
+                force_tol=force_tol,
                 font_config=font_config,
                 output_path=svg_path
             )

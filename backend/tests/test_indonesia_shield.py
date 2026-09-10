@@ -73,7 +73,7 @@ def _bbox(d: str):
 
 
 def test_nasional_shield_structure(shield_config):
-    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', shield_config)
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '16', shield_config)
     root = _parse(svg)
     # 六边形（polygon）+ 色带（polygon）+ 黑色描边（path）
     polygons = [e for e in root.iter() if _ns_free(e) == 'polygon']
@@ -92,7 +92,7 @@ def test_tol_shield_red(shield_config):
 
 
 def test_provinsi_shield_blue(shield_config):
-    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '16', shield_config)
     root = _parse(svg)
     head = [e for e in root.iter()
             if _ns_free(e) == 'polygon' and e.attrib.get('id') == 'head']
@@ -101,7 +101,7 @@ def test_provinsi_shield_blue(shield_config):
 
 def test_has_upper_and_lower_text_paths(shield_config):
     # 色带白字（PROVINSI 35）与大字黑字（024）
-    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '16', shield_config)
     root = _parse(svg)
     white_paths = _paths_with_fill(root, '#FFFFFF')
     black_paths = _paths_with_fill(root, '#000000')
@@ -124,15 +124,19 @@ def test_banner_text_level_and_province(shield_config):
         svg = generate_indonesia_shield(code, level, province, shield_config)
         return len(_paths_with_fill(_parse(svg), '#FFFFFF'))
 
-    assert _banner_len('3', IndonesiaRoadLevel.NASIONAL, '35') == len('NASIONAL 35')
-    assert _banner_len('024', IndonesiaRoadLevel.PROVINSI, '35') == len('PROVINSI 35')
+    assert _banner_len('3', IndonesiaRoadLevel.NASIONAL, '16') == len('NASIONAL 16')
+    assert _banner_len('024', IndonesiaRoadLevel.PROVINSI, '16') == len('PROVINSI 16')
+    # kode wilayah 为不补零序号：单数字省码（'3'）排版须自适应，不按固定两位数留位
+    assert _banner_len('3', IndonesiaRoadLevel.NASIONAL, '3') == len('NASIONAL 3')
+    # 县市码（'16.17'）5 字符，同样整段进色带
+    assert _banner_len('024', IndonesiaRoadLevel.PROVINSI, '16.17') == len('PROVINSI 16.17')
     # 无省码降级：仅等级词，无多余空格占位
     assert _banner_len('3', IndonesiaRoadLevel.TOL, None) == len('TOL')
 
 
 def test_text_heights(shield_config):
     """字号：色带 45px、大字 135px（spec §5 排版制式）"""
-    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '35', shield_config)
+    svg = generate_indonesia_shield('024', IndonesiaRoadLevel.PROVINSI, '16', shield_config)
     root = _parse(svg)
 
     def _height(elem):
@@ -153,7 +157,7 @@ def test_upper_text_centered_on_head(shield_config):
     template = shield_config['template']
     w, h = _get_template_size(template)
     hx1, hy1, hx2, hy2 = _get_head_bbox(template)
-    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', shield_config)
+    svg = generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '16', shield_config)
     root = _parse(svg)
     white_bboxes = [_bbox(e.attrib['d']) for e in _paths_with_fill(root, '#FFFFFF')]
     assert white_bboxes
@@ -196,7 +200,7 @@ def test_layout_follows_template_scale(shield_config, workdir):
     w, h = _get_template_size(template)
     assert (w, h) == (1124.0, 902.0)
     cfg = dict(shield_config, template=template)
-    root = _parse(generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '35', cfg))
+    root = _parse(generate_indonesia_shield('3', IndonesiaRoadLevel.NASIONAL, '16', cfg))
     white_bboxes = [_bbox(e.attrib['d']) for e in _paths_with_fill(root, '#FFFFFF')]
     assert white_bboxes
     xs = [b[0] for b in white_bboxes] + [b[2] for b in white_bboxes]

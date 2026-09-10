@@ -17,8 +17,16 @@
             </template>
 
             <el-form :model="form" label-width="80px" @submit.prevent="generate">
-              <!-- 标志类型 -->
-              <el-form-item label="标志类型">
+              <!-- 地区 -->
+              <el-form-item label="地区">
+                <el-radio-group v-model="form.region">
+                  <el-radio-button value="cn">中国</el-radio-button>
+                  <el-radio-button value="id">印尼</el-radio-button>
+                </el-radio-group>
+              </el-form-item>
+
+              <!-- 标志类型（仅国标） -->
+              <el-form-item v-if="form.region === 'cn'" label="标志类型">
                 <el-radio-group v-model="form.sign_type">
                   <el-radio-button value="way">普通道路</el-radio-button>
                   <el-radio-button value="expwy">高速</el-radio-button>
@@ -29,18 +37,21 @@
               <el-form-item label="道路编号" required>
                 <el-input
                   v-model="form.code"
-                  placeholder="如: G221, S221, G5, G45"
+                  :placeholder="form.region === 'id' ? '如: 3, 16-024, 16.17-024' : '如: G221, S221, G5, G45'"
                   style="text-transform: uppercase"
                   @input="form.code = form.code.toUpperCase()"
                 >
-                  <template #prepend>
+                  <template v-if="form.region === 'cn'" #prepend>
                     <span v-if="!form.code.startsWith('G') && !form.code.startsWith('S')">
                       {{ form.sign_type === 'way' ? 'G' : 'G' }}
                     </span>
                   </template>
                 </el-input>
                 <div class="form-tip">
-                  <template v-if="form.sign_type === 'way'">
+                  <template v-if="form.region === 'id'">
+                    1-2 位=国道/收费公路，3 位=省级公路；前缀可带省码(16-)或县市码(16.17-)
+                  </template>
+                  <template v-else-if="form.sign_type === 'way'">
                     G=国道(红), S=省道(黄), X=县道(白), Y=乡道
                   </template>
                   <template v-else>
@@ -49,8 +60,8 @@
                 </div>
               </el-form-item>
 
-              <!-- 省份（仅高速） -->
-              <el-form-item v-if="form.sign_type === 'expwy'" label="省份">
+              <!-- 省份（国标，仅高速） -->
+              <el-form-item v-if="form.region === 'cn' && form.sign_type === 'expwy'" label="省份">
                 <el-select
                   v-model="form.province"
                   placeholder="选择省份（省级高速必选）"
@@ -68,13 +79,40 @@
                 <div class="form-tip">选择省份后自动添加 S 前缀</div>
               </el-form-item>
 
-              <!-- 道路名称（可选） -->
-              <el-form-item label="道路名称">
+              <!-- 省份（印尼）：省名文本或法规省码 -->
+              <el-form-item v-if="form.region === 'id'" label="省份">
                 <el-input
-                  v-model="form.name"
-                  placeholder="如: 京沪高速"
+                  v-model="form.province"
+                  placeholder="如: Provinsi Jawa Timur 或 16"
                   clearable
                 />
+                <div class="form-tip">
+                  中/英/印尼语省名或法规省码(1-34)；编号已含省码时可留空
+                </div>
+              </el-form-item>
+
+              <!-- 道路名称（可选） -->
+              <el-form-item :label="form.region === 'id' ? '中文路名' : '道路名称'">
+                <el-input
+                  v-model="form.name"
+                  :placeholder="form.region === 'id' ? '如: 泗水收费高速（判定是否收费公路）' : '如: 京沪高速'"
+                  clearable
+                />
+              </el-form-item>
+
+              <!-- 印尼路名（仅印尼） -->
+              <el-form-item v-if="form.region === 'id'" label="印尼路名">
+                <el-input
+                  v-model="form.name_id"
+                  placeholder="如: Jalan Tol Surabaya"
+                  clearable
+                />
+              </el-form-item>
+
+              <!-- 收费公路（仅印尼） -->
+              <el-form-item v-if="form.region === 'id'" label="收费公路">
+                <el-checkbox v-model="form.force_tol">强制按收费公路(TOL)生成</el-checkbox>
+                <div class="form-tip">仅 1-2 位编号有效；3 位编号恒为省级公路</div>
               </el-form-item>
 
               <!-- 操作按钮 -->
@@ -142,8 +180,12 @@
                   class="history-item"
                   @click="applyHistory(item)"
                 >
-                  <el-tag size="small" :type="item.sign_type === 'way' ? 'warning' : 'success'">
-                    {{ item.sign_type === 'way' ? '道路' : '高速' }}
+                  <!-- id 行的 sign_type 是后端按国标规则反推的，无意义，改显示地区 -->
+                  <el-tag
+                    size="small"
+                    :type="item.region === 'id' ? 'danger' : item.sign_type === 'way' ? 'warning' : 'success'"
+                  >
+                    {{ item.region === 'id' ? '印尼' : item.sign_type === 'way' ? '道路' : '高速' }}
                   </el-tag>
                   <span class="history-code">{{ item.code }}</span>
                   <span v-if="item.province" class="history-province">{{ item.province }}</span>
@@ -193,10 +235,13 @@ import { roadSignApi, type RoadSignResponse, type RoadSignListItem } from '@/api
 
 // 表单数据
 const form = reactive({
+  region: 'cn' as 'cn' | 'id',
   sign_type: 'way' as 'way' | 'expwy',
   code: '',
   province: '',
   name: '',
+  name_id: '',
+  force_tol: false,
 })
 
 // 状态
@@ -253,6 +298,10 @@ const examples = [
   { label: 'G5 京昆高速', sign_type: 'expwy', code: 'G5', name: '京昆高速' },
   { label: 'G45 大广高速', sign_type: 'expwy', code: 'G45', name: '大广高速' },
   { label: 'S21 豫S21', sign_type: 'expwy', code: 'S21', province: '豫' },
+  { label: '3 印尼国道', code: '3', region: 'id' },
+  { label: '16-024 印尼省道', code: '16-024', region: 'id' },
+  { label: '16.17-024 印尼县市码', code: '16.17-024', region: 'id' },
+  { label: '8 印尼收费公路', code: '8', region: 'id', force_tol: true },
 ]
 
 // 生成标志
@@ -264,11 +313,15 @@ async function generate() {
 
   loading.value = true
   try {
+    // 印尼模式：sign_type 被后端忽略（按编号+路名判级），恒传 'way'
     const result: RoadSignResponse = await roadSignApi.generate({
-      sign_type: form.sign_type,
+      sign_type: form.region === 'id' ? 'way' : form.sign_type,
       code: form.code,
       province: form.province || undefined,
       name: form.name || undefined,
+      region: form.region,
+      name_id: form.region === 'id' ? form.name_id || undefined : undefined,
+      force_tol: form.region === 'id' && form.force_tol,
     })
 
     generatedSvg.value = result.svg
@@ -290,19 +343,25 @@ async function generate() {
 
 // 应用示例
 function applyExample(example: any) {
-  form.sign_type = example.sign_type
+  form.region = example.region || 'cn'
+  form.sign_type = example.sign_type || 'way'
   form.code = example.code
   form.province = example.province || ''
   form.name = example.name || ''
+  form.name_id = example.name_id || ''
+  form.force_tol = example.force_tol || false
   generate()
 }
 
-// 应用历史记录
+// 应用历史记录（缓存行未存 name_id/force_tol，无法回填；TOL 判定退回中文路名关键词）
 function applyHistory(item: RoadSignListItem) {
+  form.region = (item.region === 'id' ? 'id' : 'cn')
   form.sign_type = item.sign_type as 'way' | 'expwy'
   form.code = item.code
   form.province = item.province || ''
   form.name = item.name || ''
+  form.name_id = ''
+  form.force_tol = false
   generate()
 }
 

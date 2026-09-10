@@ -960,6 +960,7 @@ def generate_road_sign(
     indonesia_config: Optional[dict] = None,
     name_id: Optional[str] = None,
     province_id: Optional[str] = None,
+    force_tol: bool = False,
     font_config: Optional[dict] = None,
     output_path: Optional[str] = None,
 ) -> str:
@@ -968,13 +969,14 @@ def generate_road_sign(
 
     Args:
         sign_type: 标志类型 ('way' 或 'expwy')，region='id' 时忽略
-        code: 道路编号（cn: 如 G221/S21；id: 如 3、35-024）
+        code: 道路编号（cn: 如 G221/S21；id: 如 3、16-024、16.17-024）
         province: 省份（cn: 简称仅高速用；id: 省名文本，查省码用，可选）
         name: 道路名称（cn: 可选；id: 中文路名，TOL 关键词判定文本之一）
         region: 地区 ('cn' | 'id')
         indonesia_config: region='id' 时需要，dict {template, upper, lower, tol_keywords}
         name_id: region='id' 时印尼语路名（TOL 关键词判定文本之二）
         province_id: region='id' 时印尼语省名文本（查省码用，可选）
+        force_tol: region='id' 时强制按收费公路解析（仅 1-2 位编号有效）
         font_config: 字体配置字典（仅 cn 用）
         output_path: 输出路径
 
@@ -999,6 +1001,7 @@ def generate_road_sign(
             [name, name_id],
             [province_id, province],
             indonesia_config.get('tol_keywords') or ['收费', 'Tol'],
+            force_tol=force_tol,
         )
         if not info:
             raise ValueError(f"无法识别的印尼道路编号: {code or ''}")

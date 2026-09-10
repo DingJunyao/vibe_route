@@ -28,6 +28,10 @@ class TrackUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
     region: Optional[str] = Field(None, pattern="^(cn|id)$", description="地区: cn=中国, id=印尼")
+    sync_points_region: bool = Field(
+        False,
+        description="是否把新的 region 同步刷到所有已有轨迹点。仅当 region 同时变化时生效"
+    )
 
 
 class TrackResponse(BaseModel):

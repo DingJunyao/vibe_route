@@ -397,8 +397,9 @@ class TestInterpolationRegion:
                 # ① 常规：id 轨迹的插值点必须是 'id'（漏传 region 时这里是 'cn'）
                 a = await track_service.create_from_gpx(db, user, 'a.gpx', _gpx(), 'a', region='id')
 
-                # ② 锚点与行级不一致：编辑轨迹地区只改行级、不覆盖已有点级，
-                #    故必须取锚点的 'cn' —— 用 tracks.region（'id'）顶替的实现在这里变红
+                # ② 锚点与行级不一致：编辑轨迹地区默认只改行级，勾选 sync_points_region
+                #    才批量覆盖已有点级；故此处必须取锚点的 'cn'
+                #    —— 用 tracks.region（'id'）顶替的实现在这里变红
                 b = await track_service.create_from_gpx(db, user, 'b.gpx', _gpx(), 'b', region='id')
                 (await _track_points(db, b.id))[0].region = 'cn'
                 await db.commit()

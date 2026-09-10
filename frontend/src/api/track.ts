@@ -299,7 +299,12 @@ export const trackApi = {
   },
 
   // 更新轨迹
-  update(trackId: number, data: { name?: string; description?: string; region?: string }): Promise<Track> {
+  update(trackId: number, data: {
+    name?: string
+    description?: string
+    region?: string
+    sync_points_region?: boolean
+  }): Promise<Track> {
     return http.patch(`/tracks/${trackId}`, data)
   },
 

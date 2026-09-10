@@ -30,12 +30,13 @@ _VALID_PROVINCE_ABBR = frozenset({
 class RoadSignRequest(BaseModel):
     """道路标志生成请求"""
     sign_type: str = Field(..., description="标志类型: way(普通道路) 或 expwy(高速)；region=id 时该值不参与生成，但仍须为 way/expwy")
-    code: str = Field(..., description="道路编号（cn: G221/S88 等；id: 3/35-024/023 等）")
+    code: str = Field(..., description="道路编号（cn: G221/S88 等；id: 3/023/16-024/16.17-024 等）")
     province: Optional[str] = Field(None, description="省份（cn: 简称如 '豫'；id: 省名文本如 'Provinsi Jawa Timur'，查省码用）")
     name: Optional[str] = Field(None, description="道路名称（id: 中文路名，TOL 判定文本）")
     region: str = Field('cn', description="地区: cn(中国国标) 或 id(印尼六边形盾牌)")
     name_id: Optional[str] = Field(None, description="印尼语道路名称（region=id 时 TOL 判定文本）")
     province_id: Optional[str] = Field(None, description="印尼语省名文本（region=id 时查省码用）")
+    force_tol: bool = Field(False, description="id 时强制按收费公路(TOL)解析，仅 1-2 位编号有效")
 
     @field_validator('region')
     @classmethod
@@ -146,6 +147,7 @@ async def generate_road_sign(
             region=request.region,
             name_id=request.name_id,
             province_id=request.province_id,
+            force_tol=request.force_tol,
         )
 
         return RoadSignResponse(
@@ -172,6 +174,7 @@ class RoadSignListItem(BaseModel):
     province: Optional[str] = None
     name: Optional[str] = None
     sign_type: str
+    region: str = 'cn'
 
 
 @router.get("/list", response_model=list[RoadSignListItem])
@@ -186,7 +189,7 @@ async def list_road_signs(
     """
     caches = await road_sign_service.get_list(db, sign_type, limit)
 
-    # 判断标志类型
+    # 判断标志类型（仅 cn 有意义；id 行由前端按 region 改显示）
     result = []
     for cache in caches:
         # 根据代码和属性判断类型
@@ -201,6 +204,7 @@ async def list_road_signs(
             province=cache.province,
             name=cache.name,
             sign_type=st,
+            region=cache.region or 'cn',
         ))
 
     return result

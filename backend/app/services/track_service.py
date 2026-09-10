@@ -765,15 +765,33 @@ class TrackService:
                 await db.rollback()
 
     async def update(self, db: AsyncSession, track: Track, update_data, user_id: int) -> Track:
-        """更新轨迹信息（名称和描述）"""
+        """更新轨迹信息（名称、描述、地区）
+
+        sync_points_region=True 时，若 region 同时变化，则把点级 region 一并刷为新区值
+        （点级 region 是图标渲染的权威来源，仅改轨迹级不会影响已有点）。
+        """
         update_dict = update_data.model_dump(exclude_unset=True)
+        # 非 Track 列，须先取出，否则 setattr 会抛 AttributeError
+        sync_points_region = update_dict.pop('sync_points_region', False)
+        new_region = update_dict.get('region')
 
         if update_dict:
             for field, value in update_dict.items():
                 setattr(track, field, value)
 
             track.updated_by = user_id
-            track.updated_at = datetime.now(timezone.utc).replace(tzinfo=None).replace(tzinfo=None)
+            track.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+            if sync_points_region and new_region:
+                await db.execute(
+                    update(TrackPoint)
+                    .where(TrackPoint.track_id == track.id)
+                    .values(
+                        region=new_region,
+                        updated_by=user_id,
+                        updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
+                    )
+                )
 
             await db.commit()
             await db.refresh(track)

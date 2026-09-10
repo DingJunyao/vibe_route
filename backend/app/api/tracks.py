@@ -471,7 +471,10 @@ async def update_track(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    更新轨迹信息（名称和描述）
+    更新轨迹信息（名称、描述、地区）
+
+    同步置 sync_points_region=True 且 region 变化时，已有轨迹点的 region 一并刷新
+    （点级 region 决定图标渲染地区）。
     """
     track = await track_service.get_by_id(db, track_id, current_user.id)
     if not track:

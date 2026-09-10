@@ -3,7 +3,7 @@
 import pytest
 
 from app.gpxutil_wrapper.svg_gen import generate_road_sign
-from app.services.road_sign_service import RoadSignService
+from app.services.road_sign_service import RoadSignService, road_sign_service
 
 ID_CONFIG = {
     # pytest cwd = backend/，与 Task 4 测试同约定（服务层的 DATA_DIR 相对路径拼接见 RoadSignService 内 base_dir 逻辑）
@@ -56,6 +56,32 @@ class TestGenerateRoadSignDispatch:
         # 色带红 = spec §5「实现时对齐 gpxutil」的 #B5273C（非国标红 #ED1724）
         assert head and head[0].attrib['fill'].upper() == '#B5273C'
 
+    def test_id_force_tol_without_name(self):
+        """force_tol：无路名时强制 TOL（与默认 NASIONAL 渲染不同）"""
+        base = generate_road_sign('way', '8', region='id', indonesia_config=ID_CONFIG)
+        forced = generate_road_sign(
+            'way', '8', region='id', indonesia_config=ID_CONFIG, force_tol=True)
+        assert forced != base
+        import xml.etree.ElementTree as ET
+        head = [e for e in ET.fromstring(forced).iter()
+                if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
+        assert head and head[0].attrib['fill'].upper() == '#B5273C'
+
+    def test_id_force_tol_ignored_for_three_digits(self):
+        # 3 位编号恒为 PROVINSI，force_tol 不改变渲染
+        a = generate_road_sign('way', '023', region='id', indonesia_config=ID_CONFIG)
+        b = generate_road_sign(
+            'way', '023', region='id', indonesia_config=ID_CONFIG, force_tol=True)
+        assert a == b
+
+    def test_id_county_code_banner(self):
+        # 县市码内嵌 → 色带 'PROVINSI 16.17'，与无省码版渲染不同
+        with_code = generate_road_sign(
+            'way', '16.17-024', region='id', indonesia_config=ID_CONFIG)
+        without = generate_road_sign(
+            'way', '024', region='id', indonesia_config=ID_CONFIG)
+        assert with_code != without
+
     def test_id_unrecognizable_raises(self):
         with pytest.raises(ValueError):
             generate_road_sign('way', 'abc', region='id', indonesia_config=ID_CONFIG)
@@ -80,6 +106,38 @@ class TestRoadSignRequestRegion:
             RoadSignRequest(sign_type='expwy', code='S1', province='豫X')
 
 
+class TestGenerateEndpoint:
+    """HTTP 层：force_tol / region 是否正确透传到 svg_gen（端点接线是本类唯一覆盖点）"""
+
+    def test_force_tol_reaches_generator(self, monkeypatch):
+        import asyncio
+        from httpx import ASGITransport, AsyncClient
+        from app.main import app
+
+        seen = {}
+
+        async def _fake_get_or_create_sign(db, **kwargs):
+            seen.update(kwargs)
+            return '<svg viewBox="0 0 1 1"/>', False
+
+        monkeypatch.setattr(road_sign_service, 'get_or_create_sign', _fake_get_or_create_sign)
+
+        async def _run():
+            async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as c:
+                r = await c.post('/api/road-signs/generate', json={
+                    'sign_type': 'way', 'code': '8', 'region': 'id',
+                    'name_id': 'Jalan Tol Jagorawi', 'province_id': 'Provinsi Jawa Timur',
+                    'force_tol': True,
+                })
+                assert r.status_code == 200, r.text
+
+        asyncio.run(_run())
+        assert seen['force_tol'] is True
+        assert seen['region'] == 'id'
+        assert seen['name_id'] == 'Jalan Tol Jagorawi'
+        assert seen['province_id'] == 'Provinsi Jawa Timur'
+
+
 class TestCacheKey:
     """缓存键含 region 与多语字段（spec §8 用例 8）"""
 
@@ -100,6 +158,17 @@ class TestCacheKey:
         k4 = svc._generate_cache_key(
             'way', '8', None, None, region='id', name_id='Jalan Tol Cipularang')
         assert k3 != k4
+
+    def test_force_tol_only_appended_when_true(self):
+        """force_tol=False 的键与历史版本逐字节相同 → 旧缓存行继续命中"""
+        svc = RoadSignService()
+        import hashlib
+        legacy = hashlib.md5('id:way:8::雅加达收费高速::'.encode()).hexdigest()
+        assert svc._generate_cache_key(
+            'way', '8', None, '雅加达收费高速', region='id') == legacy
+        # 同一输入 force_tol=True 走另一键，不污染旧行
+        assert svc._generate_cache_key(
+            'way', '8', None, '雅加达收费高速', region='id', force_tol=True) != legacy
 
 
 class TestMissingAssets:

@@ -8,6 +8,8 @@ export interface RoadSignRequest {
   name?: string
   region?: string      // 地区: cn(缺省)/id。id 时 sign_type 被忽略，按编号+路名判级生成六边形盾牌
   name_id?: string     // 印尼语路名（TOL 关键词判定文本之一）
+  province_id?: string // 印尼语省名文本（id 时查省码用）
+  force_tol?: boolean  // id 时强制按收费公路(TOL)解析，仅 1-2 位编号有效
 }
 
 export interface RoadSignResponse {
@@ -26,6 +28,7 @@ export interface RoadSignListItem {
   province?: string
   name?: string
   sign_type: string
+  region?: string   // 地区: cn(缺省)/id。签名为 cn 语义，id 行仅作显示区分
 }
 
 // API 方法
