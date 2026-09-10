@@ -3424,18 +3424,18 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 - Modify: `backend/app/services/track_service.py`（`get_region_tree`、`get_region_tree_no_auth` → 提取共享 `_build_region_tree`）
 - Test: `backend/tests/test_region_tree.py`（**新建，Step 5**）
 
-> **⚠️ 行号基准（2026-09-10 实测；`track_service.py` 会随每个任务持续漂移）**
-> 下表数值为 Task 6 **首轮**完成时点；其后 Task 6 fix loop 2 又在 L19 前插入 11 行纯函数，故 **表中数值一律 +11**。更重要的是：**不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
+> **⚠️ 行号基准（2026-09-10 第二次实测，Task 9 完成后；`track_service.py` 会随每个任务持续漂移）**
+> **不要按数字跳转**——每个锚点都请用左列语义锚点（函数名 / 字段名 / 注释文本）grep 定位后再改，行号只用于理解相对结构。
 >
-> | 锚点（语义定位用） | 计划旧行号 | **实测行号** |
+> | 锚点（语义定位用） | 计划旧行号 | **本次实测行号** |
 > |---|---|---|
-> | `_aggregate_node_stats`（`def` 行） | L1269 | **L1310** |
-> | `get_region_tree`（`async def` 行至函数末） | L1316-1557 | **L1357-1598** |
-> | `get_region_tree` 内权限检查段（`track = await self.get_by_id(...)` → `return {'regions': [], ...}`） | L1338-1341 | **L1379-1382** |
-> | `get_region_tree_no_auth`（`async def` 行至函数末） | L1559-1766 | **L1600-1807** |
+> | `_aggregate_node_stats`（`def` 行 → 函数末） | L1269 | **L1349-1394** |
+> | `get_region_tree`（`async def` 行至函数末） | L1316-1557 | **L1396-1637** |
+> | `get_region_tree` 内权限检查段（`track = await self.get_by_id(...)` → `return {'regions': [], ...}`） | L1338-1341 | **L1418-1421** |
+> | `get_region_tree_no_auth`（`async def` 行至函数末） | L1559-1766 | **L1639-1846** |
 >
-> 统一偏移 **+41 行**（Task 6 在 `fill_geocoding_info` 内净增 41 行，全部位于这些锚点之前）。
-> 下文步骤已按实测行号书写；若前序任务又有改动，**以语义锚点（函数名 + 注释文本）为准，重新 grep 定位**。
+> 早前版本此表记的是「Task 6 首轮行号 + 统一 +11 / +41 偏移」——**那套偏移量已随 Task 7/8/9 的改动失效**，本次按语义锚点重新实测并整表覆盖。
+> 下文步骤文字中若还留有更早的行号，**一律以上表与语义锚点为准**；Step 1 / Step 5 内已写入的 L1396-1637、L1639-1846、L1386 等均为本次实测值。
 - Modify: `backend/app/schemas/track.py`（RegionNode——Task 3 已加字段；无需再动）
 
 行为（spec §6）：
@@ -3719,7 +3719,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 
 - [ ] **Step 3: 两公共方法改薄壳**
 
-`get_region_tree`（实测 L1357-1598）保留权限检查（实测 L1379-1382 不变），其后主体替换为：
+`get_region_tree`（实测 L1396-1637）保留权限检查（实测 L1418-1421 不变），其后主体替换为：
 
 ```python
         # 获取轨迹点（按时间排序，实时记录场景下 point_index 可能乱序）
@@ -3737,7 +3737,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
         return {'regions': root_nodes, 'stats': stats}
 ```
 
-`get_region_tree_no_auth`（实测 L1600-1807）同样替换为薄壳（无权限检查）。删除原两函数内的重复构建体。
+`get_region_tree_no_auth`（实测 L1639-1846）同样替换为薄壳（无权限检查）。删除原两函数内的重复构建体。
 
 - [ ] **Step 4: 冒烟验证等价性（临时脚本，不入库）**
 
