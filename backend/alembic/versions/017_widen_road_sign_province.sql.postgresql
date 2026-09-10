@@ -1,0 +1,15 @@
+-- ============================================
+-- 放宽 road_sign_cache.province 列宽（PostgreSQL）
+-- ============================================
+-- 执行方式: psql -U vibe_route -d vibe_route -f 017_widen_road_sign_province.sql.postgresql
+
+-- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+-- 016 的早期版本已 stamped 到 016 的环境不会重跑该 DDL，故由本文件显式承载
+ALTER TABLE road_sign_cache ALTER COLUMN province TYPE VARCHAR(100);
+
+-- 验证
+SELECT column_name, data_type, character_maximum_length
+FROM information_schema.columns
+WHERE table_name = 'road_sign_cache' AND column_name = 'province';
+
+SELECT COUNT(*) AS row_count FROM road_sign_cache;

@@ -1,0 +1,12 @@
+-- ============================================
+-- 放宽 road_sign_cache.province 列宽（SQLite）
+-- ============================================
+-- 执行方式: sqlite3 vibe_route.db < 017_widen_road_sign_province.sql.sqlite
+
+-- road_sign_cache.province 无需实际变更：SQLite 不校验 VARCHAR 长度，
+-- 模型侧的 String(100) 仅为与 MySQL / PostgreSQL 对齐，故这里只是声明性对齐说明。
+-- 注意：alembic 侧的 017 迁移会以 batch 模式重建该表，从而把列声明写成 VARCHAR(100)。
+
+-- 验证
+SELECT name, type FROM pragma_table_info('road_sign_cache') WHERE name = 'province';
+SELECT COUNT(*) AS row_count FROM road_sign_cache;

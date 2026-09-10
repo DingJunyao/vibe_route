@@ -1,0 +1,12 @@
+-- ============================================
+-- 放宽 road_sign_cache.province 列宽（MySQL）
+-- ============================================
+-- 执行方式: mysql -u vibe_route -p vibe_route < 017_widen_road_sign_province.sql.mysql
+
+-- province 放宽：region='id' 时承载印尼语省名（最长 29 字符）
+-- 016 的早期版本已 stamped 到 016 的环境不会重跑该 DDL，故由本文件显式承载
+ALTER TABLE road_sign_cache MODIFY COLUMN province VARCHAR(100) NULL;
+
+-- 验证
+SHOW COLUMNS FROM road_sign_cache LIKE 'province';
+SELECT COUNT(*) AS row_count FROM road_sign_cache;
