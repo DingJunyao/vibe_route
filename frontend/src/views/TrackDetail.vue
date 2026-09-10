@@ -2909,7 +2909,7 @@ async function handleNewPointAdded(data: PointAddedData) {
     city_id: null,
     district_id: null,
     road_name_id: null,
-    region: 'cn',  // 实时记录恒 cn
+    region: 'cn',  // 实时记录链路不传 region，落模型默认 cn
     memo: point.memo || null,
   })
 
