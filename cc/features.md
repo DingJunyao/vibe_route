@@ -127,6 +127,10 @@
 
 - **实时记录链路恒为 `cn`**: `live_recording_service.py` 走自己的内联地理编码（`geo_service.get_point_info(lat, lon)`），**不经过** `fill_geocoding_info` → 既不写 `*_id` 也不写点级 `region`；且 `LiveRecording` 模型**无 region 列**，`app/api/live_recordings.py` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /api/tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外
 - **Geo Editor（地理信息编辑器）不认识多语言字段**: `geo_editor_service.py` 读路径构造的 `TrackPointGeoData` 只含 `province` / `city` / `district` / `road_number` / `road_name` 及其 `_en` 对，写路径的 `field_mapping` 同样只映射这几对，**不含 `*_id`、不含 region**。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id` / `region`）；**region 与图标不受影响**。修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；最小改动是给 `TrackPointGeoData` / `GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`
+- **fill-geocoding 的地区/provider 不匹配只告警、不拦截**（本次范围内**唯一会静默填出整段错区数据**的路径）：`fill_geocoding_info` 有两条降级路径，均只打 `logger.warning` 后照常填充：
+  1. **地区值非法**（`track_service.py:585-587`）：`region` 缺省时回读轨迹自身 region，若仍不在 `('cn','id')` 内则**静默按 `'cn'` 填充**。API 层用 `Literal['cn','id']` 校验（`api/tracks.py:511`），故正常请求到不了这里，只影响内部直接调用。
+  2. **地区合法但 provider 不支持**（`track_service.py:639-645`，**可达**）：`region='id'` 而 provider 非 `NominatimGeocoding` 时同样只告警；默认配置正是 `gdf`（`config_service.py:27`，只服务中国）。随后照常用中文数据填充，并把 `point.region = 'id'`（L704）、`track.region = 'id'`（L752，注释写明「填充地区成为该轨迹的默认地区」）。**后果**：整轨点被标成印尼却只有中文数据，国标编号（如 `G221`）按 id 判级失败 → 原本的国标盾牌退化为纯文本。
+  **未拦截的原因**：修它要先定产品语义（直接返回 400 拒绝，还是按 provider 自动分流），属独立议题；最小改动是在 API 层前置校验，或让 `fill_geocoding_info` 对 `region == 'id' and not supports_id` 直接置 `failed` 状态返回
 
 ## PostGIS
 
