@@ -28,6 +28,12 @@ class ConfigService:
         "show_road_sign_in_region_tree": True,
         "spatial_backend": "auto",  # 空间计算后端: auto | python | postgis
         "allow_server_poster": True,  # 是否允许服务器生成海报
+        "indonesia_road_sign": {
+            "template": "id_sheild.svg",      # backend/data/templates/ 下模板文件名
+            "tol_keywords": ["收费", "Tol"],   # TOL 判定：ASCII 词边界 + 中文子串（见 indonesia.py）
+            "font_upper": "ClearviewHwy1W.ttf",  # 色带小字（backend/data/fonts/ 下）
+            "font_lower": "ClearviewHwy2W.ttf",  # 白色区大字
+        },
         "geocoding_config": {
             "nominatim": {
                 "url": "http://localhost:8080",
@@ -225,7 +231,7 @@ class ConfigService:
         获取所有配置
 
         使用智能解析来读取配置值
-        对于 map_layers 和 geocoding_config，会与默认配置进行深度合并
+        对于 map_layers、geocoding_config 和 indonesia_road_sign，会与默认配置进行深度合并
 
         Args:
             db: 数据库会话
@@ -269,6 +275,12 @@ class ConfigService:
                                 for key, value in provider_config.items():
                                     if key not in parsed_value[provider]:
                                         parsed_value[provider][key] = value
+                        configs[config.key] = parsed_value
+                    elif config.key == 'indonesia_road_sign' and isinstance(parsed_value, dict):
+                        # 与默认配置深度合并，新增默认键不因 DB 旧值丢失
+                        for key, value in self.DEFAULT_CONFIGS['indonesia_road_sign'].items():
+                            if key not in parsed_value:
+                                parsed_value[key] = value
                         configs[config.key] = parsed_value
                     else:
                         configs[config.key] = parsed_value

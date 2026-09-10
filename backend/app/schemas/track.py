@@ -27,6 +27,7 @@ class TrackUpdate(BaseModel):
     """轨迹更新 schema"""
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
+    region: Optional[str] = Field(None, description="地区: cn/id")
 
 
 class TrackResponse(BaseModel):
@@ -56,6 +57,7 @@ class TrackResponse(BaseModel):
     last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
     last_point_time: Optional[datetime] = Field(None, description="最近一次轨迹点的 GPS 时间")
     last_point_created_at: Optional[datetime] = Field(None, description="最近一次轨迹点的服务器接收时间")
+    region: str = 'cn'  # 地区: cn=中国, id=印尼（新建点默认值）
     # 分享相关字段
     share_token: Optional[str] = Field(None, description="分享令牌")
     is_shared: bool = Field(False, description="是否开启分享")
@@ -107,6 +109,7 @@ class UnifiedTrackResponse(BaseModel):
     last_upload_at: Optional[datetime] = Field(None, description="最近一次上传的时间")
     last_point_time: Optional[datetime] = Field(None, description="最近一次轨迹点的 GPS 时间")
     last_point_created_at: Optional[datetime] = Field(None, description="最近一次轨迹点的服务器接收时间")
+    region: str = 'cn'  # 地区: cn=中国, id=印尼（新建点默认值）
 
     @field_serializer('start_time', 'end_time', 'created_at', 'updated_at', 'last_upload_at', 'last_point_time', 'last_point_created_at')
     def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
@@ -153,6 +156,11 @@ class TrackPointResponse(BaseModel):
     road_name: Optional[str]
     road_number: Optional[str]
     road_name_en: Optional[str]
+    province_id: Optional[str] = None
+    city_id: Optional[str] = None
+    district_id: Optional[str] = None
+    road_name_id: Optional[str] = None
+    region: str = 'cn'
     memo: Optional[str]  # 备注
 
     @field_serializer('time')
@@ -180,6 +188,8 @@ class RegionNode(BaseModel):
     id: str
     name: str
     type: str  # province, city, district, road
+    region: str = 'cn'  # 该组所属地区（同文本不同地区分组建树）
+    names: Optional[dict] = None  # 各语言代表文本 {zh, id, en}，非空才出现
     point_count: int = 0
     distance: float = 0  # 路径长度（米）
     start_time: Optional[datetime] = None

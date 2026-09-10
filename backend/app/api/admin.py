@@ -23,6 +23,7 @@ from app.schemas.config import (
     InviteCodeResponse,
     FontConfig,
     FontInfo,
+    IndonesiaRoadSignConfig,
 )
 from app.services.user_service import user_service
 from app.services.config_service import config_service
@@ -319,6 +320,7 @@ async def get_config(
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
         allow_server_poster=configs.get("allow_server_poster", True),
+        indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
     )
 
 
@@ -355,6 +357,7 @@ async def update_config(
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
         allow_server_poster=configs.get("allow_server_poster", True),
+        indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
     )
 
 

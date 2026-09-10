@@ -55,6 +55,14 @@ class FontConfig(BaseModel):
     font_c: Optional[str] = Field(None, description="C 型字体路径（小数字）")
 
 
+class IndonesiaRoadSignConfig(BaseModel):
+    """印尼道路盾牌配置 schema"""
+    template: Optional[str] = Field(None, description="盾牌模板文件名（data/templates/ 下）")
+    tol_keywords: Optional[List[str]] = Field(None, description="TOL 判定关键词（ASCII 词边界 + 中文子串）")
+    font_upper: Optional[str] = Field(None, description="色带小字字体文件名（data/fonts/ 下）")
+    font_lower: Optional[str] = Field(None, description="白色区大字字体文件名（data/fonts/ 下）")
+
+
 class FontInfo(BaseModel):
     """字体文件信息 schema"""
     filename: str = Field(..., description="文件名")
@@ -74,6 +82,7 @@ class ConfigResponse(BaseModel):
     show_road_sign_in_region_tree: bool = True
     spatial_backend: str = "auto"
     allow_server_poster: bool = True  # 是否允许服务器生成海报
+    indonesia_road_sign: IndonesiaRoadSignConfig = Field(default_factory=IndonesiaRoadSignConfig)
 
     class Config:
         from_attributes = True
@@ -91,6 +100,7 @@ class ConfigUpdate(BaseModel):
     show_road_sign_in_region_tree: Optional[bool] = None
     spatial_backend: Optional[str] = None
     allow_server_poster: Optional[bool] = None  # 是否允许服务器生成海报
+    indonesia_road_sign: Optional[IndonesiaRoadSignConfig] = None
 
 
 class PublicConfigResponse(BaseModel):
