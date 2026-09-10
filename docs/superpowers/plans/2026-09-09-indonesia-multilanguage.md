@@ -4513,9 +4513,14 @@ index,time_date,time_time,time_microsecond,elapsed_time,longitude_wgs84,latitude
 7,2026-09-01,08:01:10,0,70,112.7420,-7.2863,13,840,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
 8,2026-09-01,08:01:20,0,80,112.7430,-7.2872,14,960,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
 9,2026-09-01,08:01:30,0,90,112.7440,-7.2881,14,1080,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
-10,2026-09-01,08:01:40,0,100,114.0600,22.5400,5,1200,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,,深港跨界冒烟段
-11,2026-09-01,08:01:50,0,110,114.0610,22.5410,5,1320,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,,
+10,2026-09-01,08:01:40,0,100,114.0600,22.5400,5,1200,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,深港跨界冒烟段
+11,2026-09-01,08:01:50,0,110,114.0610,22.5410,5,1320,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,
 ```
+
+> **修正记录（2026-09-10，执行前预防性修正）**：cn 两行原为 **27 字段**（`滨海大道` 后多一个逗号），
+> 而表头是 26 列。`csv.DictReader`（`track_service.py:2619`）对行尾多余列不报错，只把多出的值丢进
+> `None` 键——即 `memo` 会**静默变空**（「深港跨界冒烟段」丢失），肉眼看不出来。已改为 26 字段，
+> 并用同一个 `DictReader` 实跑：12 行全部对齐、`None` 键 0 个、`memo=深港跨界冒烟段` 正确落在 idx=10。
 
 预期语义核对（冒烟断言用）：
 - 树结构：根「东爪哇省」→「泗水市」→「杜库帕基斯区」一个分支，区下并列 3 条道路节点（`35-024` + `Jl. Raya Mayjen Sungkono`、`3` + 泗水朱安达收费高速、`3` + 艾哈迈德·雅尼路）
