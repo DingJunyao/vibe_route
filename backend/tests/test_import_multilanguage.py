@@ -147,12 +147,13 @@ def _new_format_xlsx(region0='id', region1='cn'):
 
 
 def _bare_province_csv():
-    """新列 province_zh 与旧列 province 并存：前两行 zh 为空、第三行两列都有值"""
+    """新列 province_zh 与旧列 province 并存：1-2 行 zh 为空、3 行两列都有值、4 行 zh 只有空白"""
     rows = []
     for i, (tm, lon, lat, zh, bare) in enumerate((
         ('08:00:00', '112.735000', '-7.280000', '', '旧省一'),
         ('08:00:10', '112.736000', '-7.281000', '', '旧省二'),
         ('08:00:20', '112.737000', '-7.282000', '新省', '旧省三'),
+        ('08:00:30', '112.738000', '-7.283000', '   ', '旧省四'),
     )):
         rows.append(_row(index=i, time_date='2026/09/01', time_time=tm,
                          longitude_wgs84=lon, latitude_wgs84=lat, region='cn',
@@ -370,11 +371,15 @@ class TestRowRegion:
     def test_create_path_takes_first_nonempty_alias(self, workdir):
         """新列 province_zh 与旧列 province 并存时，创建路径取「第一个非空」的值
 
-        F1 的防线，两条断言各钉一半：
+        F1 的防线，三条断言各钉一半：
         - 前两行 zh 列为空 → 落回旧列（若 `_row_aliased` 被写成「取第一个存在的列」，
           照抄导入路径的 get_val，这里只会得到 None）；
         - 第三行两列都有值 → 新列优先（若别名表里 'province' 项漏了 'province_zh'，
-          即创建路径没真的读这张表，这里会拿到 '旧省三'）。
+          即创建路径没真的读这张表，这里会拿到 '旧省三'）；
+        - 第四行 zh 列**只有空白** → 同样视为「无值」落回旧列。这一条钉的是
+          `_row_aliased` 的「先 strip 再判空」：旧写法 `(a or b or '').strip() or None`
+          按**原始**真值短路（'   ' 为真），会得到 None —— 即两种写法在这一格上
+          给出不同结果，别在「恢复等价」时把它静默改回去。
         同一份文件走导入路径得到 None —— 两条路径的语义差异（建点 vs 覆盖）在此钉住，
         以免日后被「统一一下」悄悄改掉。
         """
@@ -387,9 +392,10 @@ class TestRowRegion:
                 created = await track_service.create_from_csv(
                     db, user, 'c.csv', csv, 'c', region='cn'
                 )
-                c0, c1, c2 = await _track_points(db, created.id)
+                c0, c1, c2, c3 = await _track_points(db, created.id)
                 assert (c0.province, c1.province) == ('旧省一', '旧省二')
                 assert c2.province == '新省'  # 两列都有值 → 新列优先
+                assert c3.province == '旧省四'  # zh 只有空白 → 视为无值，落回旧列
 
                 # 导入路径：列存在即覆盖（空值也算值）→ province 被清空
                 # （本轨迹只有 2 点，第三行 index=2 无对应点，不影响本断言）
