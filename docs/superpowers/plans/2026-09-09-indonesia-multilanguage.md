@@ -2924,6 +2924,39 @@ Expected: 全绿（用例数会因 Step 1/2 增加；先记下改动前的数字
 
 提交：先 `git log --oneline -1` 确认 HEAD 是否仍是 Task 7 的提交；是则 `--amend --no-edit`，否则普通 commit。**只 add 实际改动的文件**，禁止 `git add -A` / `git add docs/`。
 
+#### fix loop 2（复审残余：merge 侧 `*_id` 复制仍零覆盖 + 测试全局副作用）
+
+复审独立重做 8 组变异（V1–V8）全部见红、确认 fix loop 1 的五处修复到位且无越界。仅剩两条：
+
+- [ ] **Step 1（R1）：钉住 merge 的 `*_id` 复制（`tests/test_region_propagation.py`）**
+
+`merge_tracks` 的 `insert_values` 逐点复制 4 个 `*_id`，但**没有任何用例断言 merge 产物的 `*_id` 取值**——现有 `test_merge_keeps_per_point_region` 只断言 `merged.region` 与逐点 `region`，而 `TestMultilingualFieldPassthrough` 的断言全在**消费端**（点接口 / 分享页）。所以把 `"province_id": point.province_id` 改成 `point.city_id` 对全部用例**全绿**。这正是 Task 10 的 `collect_names` 直读的字段，写错会静默污染多语 tooltip。
+
+改法：在 `test_merge_keeps_per_point_region` 里、**合并之前**给 a / b 两轨的点各赋**互不相同**的 `*_id`（如 `'A1'..'A4'` / `'B1'..'B4'`），合并后断言这些值随点迁移到 merge 产物。这同时把「merge 只复制这几列」这一事实钉死。
+
+- [ ] **Step 2（R2）：收窄测试的全局副作用（同文件）**
+
+`test_upload_without_region_form_defaults_to_cn` 的 `finally: app.dependency_overrides.clear()` 清空的是**全局**覆盖表。今天安全（其他用例都不用 override），但将来任何并行/集成用例一旦设置 override，就会在跑过这条之后被静默摘掉，产生极难定位的假失败。改为只摘自己设的两个键：
+
+```python
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
+```
+
+（用实际的依赖函数名；`pop` 不存在时返回 `None`，无副作用。）
+
+- [ ] **Step 3：验证与提交**
+
+Run: `cd backend && ../.venv/Scripts/python -m pytest tests/ -q`
+Expected: 全绿（用例数不变，本轮只加断言）。
+
+**变异自检（证明 R1 的新断言真的拦得住）**：把 merge 的 `"province_id": point.province_id` 改成 `point.city_id` → 必须**红**（改动前为全绿）→ 还原并给 `sha256sum` 一致或 `git diff` 为空的证据。
+
+提交：确认 `git log --oneline -1` 是否仍是 Task 7 的提交；是则 `--amend --no-edit`，否则普通 commit（**若 HEAD 已是 Task 8 的提交，必须用普通 commit，不要 amend 到 Task 8 上**）。
+
+> ⚠️ **执行前必须确认 Task 8 已提交完毕**（`git log --oneline -1` 不是 Task 8 的在途状态、`git status` 无他人的未完成改动）——两个 agent 并发提交会抢 git 索引。
+
 #### 本轮不改（含理由，防止后续任务误改）
 
 | 项 | 判定 | 理由 |
@@ -2932,6 +2965,8 @@ Expected: 全绿（用例数会因 Step 1/2 增加；先记下改动前的数字
 | M2 同一参数两种错误码（400 手工 vs 422 自动） | 不改 | 手工 400 是规格逐字给定；改成 `Literal` 会把既有 400 契约变 422，前端若按 400 分支处理会受损 |
 | M4 点 dict 里 `region` 打断了 `road_number`/`road_name` 相邻 | 不改 | 规格明确要求插在 `road_name_en` 之后；纯可读性，无行为差异 |
 | M5 点接口 dict 缺 `memo`（`tracks.py` 点端点） | 不改 | 既有问题、非本轮引入；该端点未声明 `response_model`，补 `memo` 会改变响应契约，属独立议题 |
+| R3 `TrackUpdate` 允许显式 `null` → 写 NOT NULL 列 500 | 不改 | 与 `name`（`models/track.py` 同为 NOT NULL）**完全同形**，是 PATCH 端点的既有通病、**非 region 回归**；只为 region 打补丁会造成同族字段行为不一致，要收口应在端点/服务层统一 `model_dump(exclude_none=True)`，属独立议题 |
+| R4 本提交用过 `amend`，旧哈希 `5f1935b` 已不在历史中 | 不改 | 已 grep `docs/` 与 `cc/`，无悬空引用（复审确认） |
 
 #### 交接提醒（Task 9 必读，已同步写入 Task 9 段落）
 
@@ -2993,7 +3028,7 @@ road_num, road_name_zh, road_name_id, road_name_en, memo
 行值（实测 L1907-1916，即 `row = [` 列表内从 `point.province or ""` 到 `getattr(point, 'memo', None) or ""` 的 10 行）替换：
 
 ```python
-                point.region or "",
+                point.region or 'cn',
                 point.province or "",
                 point.province_id or "",
                 point.province_en or "",
@@ -3012,7 +3047,9 @@ road_num, road_name_zh, road_name_id, road_name_en, memo
 
 - [ ] **Step 2: XLSX 表头与行值（export_points_to_xlsx）**
 
-表头（实测 L1978-1987）替换为与 CSV 相同的 30 列列表。行值（实测 L2044-2053，即 `row_data = [` 列表内从 `point.province` 到 `getattr(point, 'memo', None)` 的 10 行）替换为与 CSV 相同的字段序（xlsx 用 `point.region` 原值即 `point.region or 'cn'` 视 ORM 属性是否有值——SQLAlchemy 列 default 在查询返回后为 None 直至 Python 侧……注意：`server_default='cn'` 且 DB 侧填充 → 新库查询返回 'cn'；旧行迁移后亦为 'cn'。故写 `point.region` 即可，无需 or 兜底；为稳妥与 CSV 一致用 `point.region or 'cn'`）：
+表头（实测 L1978-1987）替换为与 CSV 相同的 30 列列表。行值（实测 L2044-2053，即 `row_data = [` 列表内从 `point.province` 到 `getattr(point, 'memo', None)` 的 10 行）替换为与 CSV 相同的字段序。
+
+> 兜底值统一为 `'cn'`（**CSV 与 XLSX 两处一致**）：`region` 列为 `nullable=False, server_default='cn'`，从库中读出的点不会为 `None`，故兜底实际不可达；取 `'cn'` 而非 `''` 是因为它与列默认值同值，万一将来出现内存中未 flush 的点，导出的也是可被导入端识别为合法 region 的值，而非空串。（**此段早前版本称「为稳妥与 CSV 一致」而 CSV 写的是 `''`，理由与事实不符，已随两处统一为 `'cn'` 修正。**）
 
 ```python
                 point.region or 'cn',
@@ -3045,6 +3082,12 @@ git commit -m "feat(export): CSV/XLSX 导出新列名（region + province/city/a
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
+
+#### 首轮执行后的处置（2026-09-10）
+
+Task 8 首轮已提交（`2ba3326`，67 passed）。implementer 上报一条 DONE_WITH_CONCERNS：**Step 1 要求 CSV 写 `point.region or ""`、Step 2 要求 XLSX 写 `point.region or 'cn'`，同一提交里两处不一致，且 Step 2 给的理由（「为稳妥与 CSV 一致」）与事实相反**。implementer 按「计划是权威」照做并上报，判断正确。
+
+处置：**不改实现方向，改为统一为 `'cn'`**——兜底在库侧不可达（列 `nullable=False, server_default='cn'`，迁移 016 已回填），但两处写不同值属于无谓的不一致，且 `''` 对导入端是无效 region。计划两处已同步改为 `point.region or 'cn'`；CSV 处的一行改动随本 Task 的审后修复一起提交。
 
 ---
 
