@@ -783,12 +783,13 @@ interface RoadSignFetchOptions {
 
 function buildSignCacheKey(opts: RoadSignFetchOptions): string {
   const region = opts.region || 'cn'
-  // cn: 维持现状键（signType:code[:province]）；id: 键含地区、编号与两个路名
-  // （TOL/NASIONAL 判级看 name_id 命中关键词、name 仅作兜底，二者都必须参与键，
-  //   防「同编号同中文名但 id 名不同」的两个节点串用同一张盾牌）
+  // id：后端对 [name, name_id] 两段文本联合匹配关键词判 TOL/NASIONAL（任一命中即 TOL），
+  // 故二者都必须进键，防「同编号不同路名」的两个节点串用同一张盾牌。
+  // 用 JSON 数组而非 join(':')：成分含冒号或为空时不会跨字段错位，天然单射。
   if (region !== 'cn') {
-    return [region, opts.signType, opts.code, opts.name || '', opts.nameId || ''].filter(Boolean).join(':')
+    return JSON.stringify([region, opts.signType, opts.code, opts.name ?? '', opts.nameId ?? ''])
   }
+  // cn：维持现状键（signType:code[:province]）
   return opts.province ? `${opts.signType}:${opts.code}:${opts.province}` : `${opts.signType}:${opts.code}`
 }
 
