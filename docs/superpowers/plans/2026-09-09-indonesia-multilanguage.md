@@ -4002,6 +4002,12 @@ export interface RoadSignResponse {
 Run: `cd frontend && npx vue-tsc --noEmit`
 Expected: 无错误（若有与本任务无关的存量错误先记录、不修）。
 
+> ⚠️ **本步实测不可执行（Task 11 执行时发现，协调者独立复核确认）**：本机 `vue-tsc` 完全跑不起来，属**存量环境问题**、与本计划无关。故以 `npx vite build`（项目自身标准，见 `cc/workflow.md:25`「前端在 `frontend` 目录下执行 `npm run build`」）替代，并辅以下述定点自查。详见「Task 11 记录」。
+>
+> 实证：`npx vue-tsc --version` **自身即崩**（读任何源码之前），报 `Search string not found: "/supportedTSExtensions = .*(?=;)/"`——`vue-tsc@1.8.27` 靠正则给 TypeScript 打补丁，而 `package.json` 声明 `typescript: ^5.3.3` 被解析成 **5.9.3**，该正则已失效。`package-lock.json` 里同样固化着 5.9.3，故 `npm ci` 也修不好。升 `vue-tsc@2` 亦不通：本机 TS 5.9.3 的 `package.json` 未导出 `./lib/tsc`，而 `vue-tsc@2` 正是 `require.resolve('typescript/lib/tsc')`；`npx -p typescript@5.9.3` 的钉版又会被 peer 解析覆盖回 typescript 7.0.2。**修它需动依赖版本（仓库级 blast radius），超出本计划范围——记录并上报，不擅自改。**
+>
+> **类型检查缺位的风险由「调用点定点自查」兜底**（本计划的函数签名改动均为文件内自洽重写）：`grep -rn "(loadRoadSignSvg|getRoadSignSvg)(" frontend/src` 实测——被改的两个函数其**全部调用点都在被替换的代码块内部**（`TrackDetail.vue:1826/1862`、`SharedTrack.vue:817/853`），5 个地图组件（`BMap`/`GoogleMap`/`TencentMap`/`AMap`/`LeafletMap`）各持**自己的私有同名副本**、不受签名变更影响。故 Task 11 新增的必填字段 `region`，其唯一可破坏面是**对象字面量构造点**，已定点排查（见记录）。
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -4010,6 +4016,15 @@ git commit -m "feat(api): 前端 API 类型与上传/更新请求支持 region �
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
+
+**Task 11 记录（执行后回写）**
+
+- 实现：`a8da60e`，`2 files changed, 15 insertions(+), 1 deletion(-)`，`git diff --stat` 越界检查通过（仅 2 文件）。状态 DONE_WITH_CONCERNS，唯一 concern 即上述环境问题。
+- **必填字段破坏面定点排查**（无 vue-tsc 兜底，故由实现者手工排查、协调者复核）：`region` 在 `Track`/`UnifiedTrack`/`TrackPoint` 上是必填，全仓对这三类类型**显式标注的数组**只有 `TrackMerge.vue:360`（`UnifiedTrack[]`）与 `Home.vue:782`（`TrackPoint[]`），二者都只 `push` API 返回的现成对象、不构造字面量 → **无破坏面**。
+- **字段名溯源核对**（协调者独立做）：前端新增字段与后端权威定义逐字一致——点级 `province_id`/`city_id`/`district_id`/`road_name_id`/`region` 对 `backend/app/schemas/track.py:159-163`；节点级 `region`/`names` 对 `backend/app/schemas/track.py:191-192`；`RoadSignRequest`/`RoadSignResponse` 对 `backend/app/api/road_signs.py:30-38` 与 `105-113`。
+  > 附注：道路图标 schema **不在** `backend/app/schemas/` 而在 `backend/app/api/road_signs.py`（易误判为「字段不存在」，审查时注意）。
+- **发现但按 YAGNI 未扩范围**：后端 `RoadSignRequest` 尚有 `province_id`（`road_signs.py:38`，注释「印尼语省名文本（region=id 时查省码用）」），前端未加该字段。Task 11 规格本就只列 `region?`/`name_id?`；且 Task 12 的区域树对 id 分支只传 `code/signType/region/name/nameId`，**无任何调用点会发 `province_id`** → 不预先加死字段。**记为 Task 13 端到端冒烟的观察点**：若印尼盾牌实际渲染出现省份码缺失，此处是第一嫌疑。
+- 观感（未改，属计划原文规定）：`RoadSignRequest` 新增两行注释对齐到第 23 列，而同块 `province`/`name` 无注释，视觉上略显不齐——照抄计划原文，不擅自调整。
 
 ---
 
@@ -4326,8 +4341,20 @@ async function saveEdit() {
 
 - [ ] **Step 5: 类型检查与构建**
 
-Run: `cd frontend && npm run build:check`
-Expected: vue-tsc 无错误 + vite build 成功。
+Run: `cd frontend && npm run build`（**非** `build:check`——见下方裁决）
+Expected: `✓ built in ...`，无错误（存量 chunk >500kB 警告可忽略）。
+
+> ⚠️ **验收命令已由 `build:check` 改为 `build`（Task 11 执行时实测 + 协调者独立复核的裁决）**：`build:check` = `vue-tsc && vite build`，而本机 `vue-tsc` **自身即崩**（`vue-tsc@1.8.27` × `typescript@5.9.3` 不兼容，`npx vue-tsc --version` 就报 `Search string not found: "/supportedTSExtensions = .*(?=;)/"`），属 **lockfile 里固化的存量问题**、与本计划无关。`npm run build`（=`vite build`）是**项目自身文档标准**（`cc/workflow.md:25`），可用。修 vue-tsc 需动依赖版本、有仓库级 blast radius，**超出本计划范围——已上报开发者，不擅自改**。
+>
+> **代价与对冲**：`vite build` 走 esbuild，**剥离类型但不做类型检查**。而本任务恰恰全是 `.vue` 内的渲染逻辑改写，是类型检查最有价值的场景。对冲手段是**调用点定点自查**（必须在提交前跑）：
+>
+> ```bash
+> cd /d/code/vibe_route && grep -rn "(loadRoadSignSvg\|getRoadSignSvg\|renderNodeLabel)(" frontend/src --include=*.vue
+> ```
+>
+> 逐条确认：(a) `TrackDetail.vue` / `SharedTrack.vue` 两文件内、被替换代码块**之外**没有残留的旧签名调用点（旧签名是 `getRoadSignSvg(code, signType, province?)` / `loadRoadSignSvg(parsed: ParsedRoadNumber)`）；(b) 5 个地图组件（`BMap`/`GoogleMap`/`TencentMap`/`AMap`/`LeafletMap`）各有**自己的私有同名副本**，本任务**不得**触碰，其内部调用自洽；(c) **`.bak`/`.bak2` 一律不得命中修改**。
+>
+> 已实测的基线（Task 11 时）：两文件内的调用点为 `TrackDetail.vue:1826/1862`、`SharedTrack.vue:817/853`，**全部落在被替换的代码块内部**；地图组件各 2 处（`BMap:118`、`GoogleMap:263`、`TencentMap:472`、`AMap:69`、`LeafletMap:2045`）均为文件内私有副本。`renderNodeLabel` 的调用点全部在模板 slot 内（`<component :is="() => renderNodeLabel(data)" />`），**模板零改动**。
 
 - [ ] **Step 6: Commit**
 
