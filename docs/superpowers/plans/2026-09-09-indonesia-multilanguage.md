@@ -4556,24 +4556,38 @@ Expected: 全绿（Task 1 的印尼解析/盾牌/缓存键/分派用例 + 无失
 
 ```csv
 index,time_date,time_time,time_microsecond,elapsed_time,longitude_wgs84,latitude_wgs84,elevation,distance,course,speed,region,province_zh,province_id,province_en,city_zh,city_id,city_en,area_zh,area_id,area_en,road_num,road_name_zh,road_name_id,road_name_en,memo
-0,2026-09-01,08:00:00,0,0,112.7350,-7.2800,10,0,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
-1,2026-09-01,08:00:10,0,10,112.7360,-7.2809,10,120,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
-2,2026-09-01,08:00:20,0,20,112.7370,-7.2818,11,240,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
-3,2026-09-01,08:00:30,0,30,112.7380,-7.2827,11,360,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,入口匝道段
-4,2026-09-01,08:00:40,0,40,112.7390,-7.2836,12,480,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
-5,2026-09-01,08:00:50,0,50,112.7400,-7.2845,12,600,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
-6,2026-09-01,08:01:00,0,60,112.7410,-7.2854,13,720,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
-7,2026-09-01,08:01:10,0,70,112.7420,-7.2863,13,840,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
-8,2026-09-01,08:01:20,0,80,112.7430,-7.2872,14,960,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
-9,2026-09-01,08:01:30,0,90,112.7440,-7.2881,14,1080,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
-10,2026-09-01,08:01:40,0,100,114.0600,22.5400,5,1200,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,深港跨界冒烟段
-11,2026-09-01,08:01:50,0,110,114.0610,22.5410,5,1320,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,
+0,2026/09/01,08:00:00,0,0,112.7350,-7.2800,10,0,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+1,2026/09/01,08:00:10,0,10,112.7360,-7.2809,10,120,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+2,2026/09/01,08:00:20,0,20,112.7370,-7.2818,11,240,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,35-024,,Jl. Raya Mayjen Sungkono,Sungkono Main Road,
+3,2026/09/01,08:00:30,0,30,112.7380,-7.2827,11,360,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,入口匝道段
+4,2026/09/01,08:00:40,0,40,112.7390,-7.2836,12,480,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+5,2026/09/01,08:00:50,0,50,112.7400,-7.2845,12,600,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+6,2026/09/01,08:01:00,0,60,112.7410,-7.2854,13,720,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,泗水朱安达收费高速,Jalan Tol Juanda,Juanda Toll Road,
+7,2026/09/01,08:01:10,0,70,112.7420,-7.2863,13,840,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+8,2026/09/01,08:01:20,0,80,112.7430,-7.2872,14,960,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+9,2026/09/01,08:01:30,0,90,112.7440,-7.2881,14,1080,90,40,id,东爪哇省,Provinsi Jawa Timur,Province of East Java,泗水市,Kota Surabaya,Surabaya,杜库帕基斯区,Kecamatan Dukuh Pakis,Dukuh Pakis District,3,艾哈迈德·雅尼路,Jalan Ahmad Yani,Ahmad Yani Street,
+10,2026/09/01,08:01:40,0,100,114.0600,22.5400,5,1200,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,深港跨界冒烟段
+11,2026/09/01,08:01:50,0,110,114.0610,22.5410,5,1320,90,40,cn,广东省,,,深圳市,,,南山区,,,,滨海大道,,,
 ```
 
 > **修正记录（2026-09-10，执行前预防性修正）**：cn 两行原为 **27 字段**（`滨海大道` 后多一个逗号），
 > 而表头是 26 列。`csv.DictReader`（`track_service.py:2619`）对行尾多余列不报错，只把多出的值丢进
 > `None` 键——即 `memo` 会**静默变空**（「深港跨界冒烟段」丢失），肉眼看不出来。已改为 26 字段，
 > 并用同一个 `DictReader` 实跑：12 行全部对齐、`None` 键 0 个、`memo=深港跨界冒烟段` 正确落在 idx=10。
+>
+> **修正记录 2（同日，日期格式）**：原写 `time_date=2026-09-01`（连字符），实测导入报 **12 条
+> `无法解析时间 ... does not match format '%Y/%m/%d %H:%M:%S'`**，`start_time`/`end_time` 双双为 null。
+> 根因是一条**既有缺陷**（非本计划引入）：`_create_from_csv_project_format`（`track_service.py:2920`）
+> **只试 `%Y/%m/%d %H:%M:%S` 一种格式**，而更新/地理编码路径（`track_service.py:2331-2332`）试 4 种、
+> 含 `%Y-%m-%d`。即**同一个连字符日期的 CSV，走「导入（创建）」丢时间、走「更新」正常**。
+> 冒烟 CSV 已改为与项目自身导出格式一致的 `2026/09/01`（导出侧 `track_service.py:1813` 用 `strftime("%Y/%m/%d")`），
+> 实跑确认 `start_time=2026-09-01 08:00:00`、零警告。**该既有缺陷记入 Task 14 要点**，本计划不修（超范围）。
+>
+> **实跑预验证（2026-09-10，临时库，不触开发库）**：用 `create_from_csv` + `get_region_tree` 完整跑通，
+> 输出与下方「预期语义核对」**逐条吻合**——树为 `东爪哇省 → 泗水市 → 杜库帕基斯区`，区下并列 3 条道路节点；
+> 节点名 `Jl. Raya Mayjen Sungkono` 正是中文列留空后的回退结果；`35-024` 节点 names 仅 `['en','id']`（中文空）、
+> 其余 id 节点 names 为 `['en','id','zh']`；cn 段独立成根且 names 仅 `['zh']`；`stats={'province':2,'city':2,'district':2,'road':4}`；
+> 点位 region 为 `['id']*10 + ['cn']*2`。
 
 预期语义核对（冒烟断言用）：
 - 树结构：根「东爪哇省」→「泗水市」→「杜库帕基斯区」一个分支，区下并列 3 条道路节点（`35-024` + `Jl. Raya Mayjen Sungkono`、`3` + 泗水朱安达收费高速、`3` + 艾哈迈德·雅尼路）
@@ -4629,17 +4643,19 @@ Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）
 
 先 Read `cc/changelog.md` 与相关模块看现有格式，按仓库惯例追加，要点（简洁、按模块落位）：
 
-1. **数据模型**：`tracks.region`、`track_points.region`（点级权威）+ 4 个 `*_id` 印尼语列；`road_sign_cache.region`；迁移 `016_add_multilanguage_region` + 三份 SQL（含 sqlite 版新增）
+1. **数据模型**：`tracks.region`、`track_points.region`（点级权威）+ 4 个 `*_id` 印尼语列；`road_sign_cache.region`；迁移 `016_add_multilanguage_region` + 三份 SQL（含 sqlite 版新增）；**外加 `017_widen_road_sign_province`**（`road_sign_cache.province` 10→100，因 016 在开发库先被 stamped、该 DDL 追加在后而从未落地——见 Task 13 Step 1）
 2. **region 贯通**：上传 Form、编辑 PATCH、fill-geocoding Query（缺省读轨迹自身）、CSV 行级 region（跨地区文件主通道）、merge 复制点级
 3. **Nominatim 多语**：region=id 三请求（zh-CN/id/en），38 省中文回填表（gpxutil 移植 + 前缀容错），中文缺失留空 + 前端回退链 zh→id→en
 4. **印尼图标**：编号解析（NASIONAL/TOL 词边界/PROVINSI，省码三级来源）、六边形盾牌生成（Clearview 字体、模板 bbox 锚点）、config `indonesia_road_sign`、缓存键含 region；字体许可为商业字体（记录在案）
 5. **导出新列名 + 导入别名表**（兼容新/样例/旧三格式）、区域树按 (region,文本) 分组 + 节点 names
 6. **前端**：上传/编辑对话框地区选择；区域树按节点 region 分派渲染（cn 前端解析 / id 后端判级）；多语 tooltip；地图组件不改（文本回退）
-7. **测试**：backend pytest 全量——`tests/` 下本次新建的 5 个文件：`test_indonesia_road.py`、`test_indonesia_shield.py`、`test_road_sign_region.py`、`test_nominatim_region.py`、`test_region_propagation.py`；前端 build:check（以 `tests/` 实际为准）
+7. **测试**：backend pytest 全量 **84 passed**——`tests/` 下本次新建的 5 个文件：`test_indonesia_road.py`、`test_indonesia_shield.py`、`test_road_sign_region.py`、`test_nominatim_region.py`、`test_region_propagation.py`。**前端无 TS 门禁**（见第 13 项），验收改用项目自身文档标准 `npm run build` + 人工定点核对（新增必填字段→找对象字面量构造点；改签名→找全部调用点；删 import→找别的使用点）
 8. 冒烟结论（含开发者确认过的 UI 表现）
 9. **已知限制（必须写，勿省）**：**实时记录链路恒为 `cn`**。`live_recording_service.py:435-459` 走**自己的内联地理编码**（`geo_service.get_point_info(lat, lon)` 两参调用），**不经过** `fill_geocoding_info` → 既不写 `*_id`、也不写 `point.region`；且 `LiveRecording` 模型**无 region 列**（迁移 016 也未加），`app/api/live_recordings.py:474` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹会按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可正确回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外。
 10. **已知限制（必须写，勿省）**：**Geo Editor（地理信息编辑器）不认识多语言字段**。`geo_editor_service.py` 读路径（L82-105）构造的 `TrackPointGeoData` 只含 `province/city/district/road_number/road_name` 及其 `_en` 对，**不含 `*_id`、不含 region**；写路径（L152-184）的 `field_mapping` 同样只映射这几对，批量 `update(TrackPoint).values(**update_data)`。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 被更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id`/`region`）；**region 与图标不受影响**（编辑器不改 region）。**范围外原因**：修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；计划全篇（Task 1-14）未覆盖该文件。若后续要修，最小改动是给 `TrackPointGeoData`/`GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`。
 11. **修复的既有缺陷（**必须写**，这是本次之外的真实收获）**：**导出的 CSV 首行曾是仅含 BOM 的空行**，导致**自家「导出→再导入」静默失效**。成因：`export_points_to_csv` 以 `csv_lines.append(BOM)` + `csv_lines.append(",".join(headers))` 组成、再 `"\n".join` → BOM 成为独立元素、独占首行；导入侧 `decode('utf-8-sig')` 去掉 BOM 后首行就是空行，`csv.DictReader` 把这一空行当作表头 → `fieldnames` 为 `[]`、每行键为 `None`（实测 `[{None: ['index','province']}, ...]`）→ `row.get("index")` 恒 `None` → **匹配 0 个点、返回 `matched_by: none`，全程不报错**。该缺陷自 `40aabe4` 起存在，与多语言工作无关，但**本计划 Task 9 要求的导出→导入闭环用例在未修时不可能通过**，故于 Task 9 一并修复：`csv_lines.append("﻿" + ",".join(headers))`（BOM 并入首字段）。**结论：vibe_route 自家导出的 CSV 在这次之前无法被自家导入器正确读回**；本次修复后闭环成立。另注：行分隔符仍是 `\n` 而非 RFC 4180 的 `\r\n`（既有，未改，导入侧不受影响）。
+12. **发现但未修的既有缺陷（**必须写**）**：**CSV 导入（创建路径）只认斜杠日期，连字符日期会静默丢时间**。`_create_from_csv_project_format`（`track_service.py:2920`）解析 `time_date + time_time` 时**只试 `%Y/%m/%d %H:%M:%S` 一种格式**，而更新/地理编码路径（`track_service.py:2331-2332`）试 4 种、含 `%Y-%m-%d`。后果：`time_date` 写成 `2026-09-01` 的 CSV **导入（创建）成功但 `start_time`/`end_time` 双双为 null**，仅打一条 `logger.warning`（实测本计划冒烟 CSV 初版即命中，12 个点 12 条警告）；同一文件若走「更新」路径则正常。**影响面**：轨迹列表与区域树的时间显示为空。**本计划不修**（超范围，属独立议题）；若要修，最小改动是把 L2920 那行单格式 `strptime` 换成与 L2331-2332 相同的格式循环。
+13. **前端无 TS 门禁（**必须写**，本窗口最大发现）**：`vue-tsc` 在本机**完全不可用**（`vue-tsc@1.8.27` × `typescript@5.9.3`，`npx vue-tsc --version` 自身即崩 `Search string not found: "/supportedTSExtensions = .*(?=;)/"`）；lockfile 固化 5.9.3 故 `npm ci` 修不好；`vue-tsc@2` 路线同样堵死（本地 TS 5.9.3 未导出 `./lib/tsc`，而 vue-tsc@2 正是 `require.resolve('typescript/lib/tsc')`）。故 `npm run build:check`（= `vue-tsc && vite build`）不可用。**且仓库 TS 基线本就不干净**——质量审用 `node node_modules/typescript/bin/tsc` 实测出 3 条真错：`src/api/request.ts:31,46` 的 `config.skipProgress`、`src/api/roadSign.ts:35` 的 `skipAuth`（`src/` 下无任何 `declare module 'axios'` 增补，`src/*.d.ts` 仅 3 个自动生成文件）。**含义**：修好 vue-tsc 的那天仓库**不会立刻全绿**，「无新增类型错误」只能相对这个脏基线判定。**已上报开发者待裁决**（是否单开任务修 vue-tsc / 补 axios 类型增补）。
 
 - [ ] **Step 1: 读 cc 现状 → 追加 → Commit**
 
