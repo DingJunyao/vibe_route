@@ -2990,7 +2990,7 @@ Expected: 全绿（用例数不变，本轮只加断言）。
 | M5 点接口 dict 缺 `memo`（`tracks.py` 点端点） | 不改 | 既有问题、非本轮引入；该端点未声明 `response_model`，补 `memo` 会改变响应契约，属独立议题 |
 | R3 `TrackUpdate` 允许显式 `null` → 写 NOT NULL 列 500 | 不改 | 与 `name`（`models/track.py` 同为 NOT NULL）**完全同形**，是 PATCH 端点的既有通病、**非 region 回归**；只为 region 打补丁会造成同族字段行为不一致，要收口应在端点/服务层统一 `model_dump(exclude_none=True)`，属独立议题 |
 | R4 本提交用过 `amend`，旧哈希 `5f1935b` 已不在历史中 | 不改 | 已 grep `docs/` 与 `cc/`，无悬空引用（复审确认） |
-| BOM 独占首行：`csv_lines = ["﻿", headers, ...]` 经 `"\n".join` 后导出 CSV 的首行是**只含 BOM 的空行**，表头落在第 2 行 | 不改 | **既有问题、非本计划引入**（`2ba3326` 之前即如此）。与本计划的多语言列改名无关；修它要动导出拼接结构（应把 BOM 并进首个字段而非独立元素），属独立议题。**已在 Task 14 记为已知问题**，不在本计划范围 |
+| BOM 独占首行：`csv_lines = ["﻿", headers, ...]` 经 `"\n".join` 后导出 CSV 的首行是**只含 BOM 的空行**，表头落在第 2 行 | **已于 Task 9 修复** | **既有问题、非本计划引入**（`2ba3326` 之前即如此）。与本计划的多语言列改名无关；修它要动导出拼接结构（应把 BOM 并进首个字段而非独立元素），属独立议题。**已于 Task 9 修复**（见下「Task 9 的越界修复」）——修它不是因为顺手，而是因为**本计划要求的导出→导入闭环用例在未修时根本不可能通过**：BOM 独占首行会让 `DictReader` 的 `fieldnames` 变成空列表 `[]`，此后每行的键都是 `None`（实测 `[{None: ['index','province']}, ...]`），于是 `row.get("index")` 恒为 `None` → **静默匹配 0 个点、返回 `matched_by: none`，不报错**。 |
 
 #### 交接提醒（Task 9 必读，已同步写入 Task 9 段落）
 
@@ -3381,7 +3381,10 @@ NEW_HEADERS = ("index,time_date,time_time,time_microsecond,elapsed_time,"
 
 用例清单：
 1. `test_new_format_all_columns_applied` —— 新格式两行（region 列分别 `id` / `cn`）；导入后逐点断言 `province/province_id/province_en`、`city*`、`area*`（注意落到模型的 `district*`）、`road_number/road_name/road_name_id/road_name_en`、`region` 全部等于文件值。
-2. `test_row_region_overrides_track_default` —— 轨迹建成 `region='cn'`，文件 region 列写 `id` → 断言点 `region == 'id'`。**这条就是钉住 `"region": point_data.get("region") or region` 的守卫**（改回字面量 `region` 必须变红）。
+2. `test_row_region_overrides_track_default` —— **必须同时覆盖两条路径**（首轮执行时发现本节原描述有误，见下方「路径错配」）：
+   - **导入路径**（`import_points_from_file`）：轨迹建成 `region='cn'`，文件 region 列写 `id` → 点 `region == 'id'`。这条钉的是 Step 1 `update_point_fields` 里的行级 region 分支。
+   - **创建路径**（`create_from_csv(..., region='cn')`）：**Step 4 的 `"region": point_data.get("region") or region` 只在创建路径生效**，导入路径根本不经过它。若只测导入路径，把该行改成字面量 `region` 仍会全绿——即该行**没有防线**。故必须补创建路径断言。
+   - 两条路径的字段断言应抽成共享 helper，避免重复，同时保证两条路径都被逐字段钉住。
 3. `test_empty_region_falls_back_to_track` —— region 列**存在但值为空** → 点 region 取轨迹自身 region；另建一条跑**旧格式**（无 region 列）→ 点 region **保持原值不变**（不是被改成轨迹 region）。
 4. `test_invalid_region_raises` —— region 列写 `sg` → `pytest.raises(ValueError)`。
 5. `test_legacy_format_still_works` —— 旧格式表头（`index,province,city,area,road_num,road_name`，无后缀）→ 中文列照旧落库（回归守卫，防别名表把老文件读坏）。
@@ -3399,6 +3402,16 @@ git commit -m "feat(import): CSV/XLSX 导入列名别名表（兼容三类格式
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
+
+#### 首轮执行后的处置（2026-09-10）
+
+Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；全量 **74 passed** = 基线 67 + 新建 7 个用例）。三件事需要记录：
+
+**1. 路径错配（本节原描述有误，已在上方 Step 6 用例 2 修正）**：Step 4 的 `"region": point_data.get("region") or region` **只在创建路径生效**，而本节原用例 2 描述的是**导入**路径（`import_points_from_file`）——导入路径的行级 region 由 Step 1 的 `update_point_fields` 处理，根本不经过 `insert_values`。implementer 按「不变红即等于该行无防线」补了创建路径分支，变异自检随即转红（变异期 1 failed）。**这与 Task 7「三处消费者」那次是同一类错误：凭印象分配守卫，未先确认哪条代码路径真正执行。**
+
+**2. 越界修复（必要，非顺手）**：首轮 implementer 修了 `export_points_to_csv` 的 BOM 独占首行缺陷（**Task 8 的函数**）。经独立复现确认该缺陷真实且后果严重——旧写法下 `DictReader` 的 `fieldnames` 为 `[]`、每行键为 `None`，导入**静默匹配 0 个点**。也就是说本节要求的 `test_export_import_roundtrip` **在未修时不可能通过**，修它是完成本 Task 的前提而非扩大范围。**已同步更正上方「本轮不改」表与 Task 14 第 11 条**（原判「不改、记为已知问题」已作废）。
+
+**3. 新发现未修（既有缺口）**：`_create_from_csv_project_format` **既不解析也不写入 `memo`** —— 走「创建」路径的 CSV/XLSX 会丢备注（导入路径正常）。不在本计划列出的 `insert_values` 字段清单内，属既有缺口，已在测试 helper 的文档串中标明。**是否补属独立议题**（补它要同时改 `point_data` 与 `insert_values` 两处，且与多语言无关）。
 
 ---
 
@@ -4269,7 +4282,7 @@ Expected: 区域树根节点含 `region: 'id'`、`names` 三语言（zh/id/en）
 8. 冒烟结论（含开发者确认过的 UI 表现）
 9. **已知限制（必须写，勿省）**：**实时记录链路恒为 `cn`**。`live_recording_service.py:435-459` 走**自己的内联地理编码**（`geo_service.get_point_info(lat, lon)` 两参调用），**不经过** `fill_geocoding_info` → 既不写 `*_id`、也不写 `point.region`；且 `LiveRecording` 模型**无 region 列**（迁移 016 也未加），`app/api/live_recordings.py:474` 调 `create_from_gpx` 不传 region → 模型默认 `'cn'`。后果：印尼实时记录的轨迹会按 cn 渲染图标、走中文回退文本。**绕行方案**：录完后 `PATCH /tracks/{id}` 把 `track.region` 改为 `'id'`，再跑一次 fill-geocoding（`region` 缺省时后端回读轨迹自身 region）即可正确回填点级 region 与 `*_id`。**实时记录界面的地区选择属后续工作**（需新迁移 + 前端改造），列为本次范围外。
 10. **已知限制（必须写，勿省）**：**Geo Editor（地理信息编辑器）不认识多语言字段**。`geo_editor_service.py` 读路径（L82-105）构造的 `TrackPointGeoData` 只含 `province/city/district/road_number/road_name` 及其 `_en` 对，**不含 `*_id`、不含 region**；写路径（L152-184）的 `field_mapping` 同样只映射这几对，批量 `update(TrackPoint).values(**update_data)`。后果：在 Geo Editor 里修改印尼轨迹的路名后，`road_name` 被更新而 `road_name_id` 保持旧值 → **tooltip 与 TOL 判定读的是 `*_id`，会与实际路名不一致**。**无数据丢失风险**（`.values()` 只写列出的字段，不误伤 `*_id`/`region`）；**region 与图标不受影响**（编辑器不改 region）。**范围外原因**：修它要改 `app/schemas/geo_editor.py` + 前端 Geo Editor 界面，属独立议题；计划全篇（Task 1-14）未覆盖该文件。若后续要修，最小改动是给 `TrackPointGeoData`/`GeoSegmentUpdate` 加 `*_id` 字段并纳入 `field_mapping`。
-11. **既有问题（非本计划引入，记录备查）**：**导出的 CSV 首行是空行**。`export_points_to_csv` 把 `csv_lines` 以 `["﻿", headers, *rows]` 组成、再 `"\n".join`，于是 BOM 成为独立元素 → 导出文件首行是「只含 BOM 的空行」，表头在第 2 行（Excel 打开会看到一行空行）。该写法在本次列改名**之前**即存在，与多语言工作无关；正确修法是把 BOM 并进首个字段（如 `"﻿" + headers`）而非作为独立元素。**本计划不改**（会动导出拼接结构，属独立议题）。另注：行分隔符是 `\n` 而非 RFC 4180 的 `\r\n`，同属既有。
+11. **修复的既有缺陷（**必须写**，这是本次之外的真实收获）**：**导出的 CSV 首行曾是仅含 BOM 的空行**，导致**自家「导出→再导入」静默失效**。成因：`export_points_to_csv` 以 `csv_lines.append(BOM)` + `csv_lines.append(",".join(headers))` 组成、再 `"\n".join` → BOM 成为独立元素、独占首行；导入侧 `decode('utf-8-sig')` 去掉 BOM 后首行就是空行，`csv.DictReader` 把这一空行当作表头 → `fieldnames` 为 `[]`、每行键为 `None`（实测 `[{None: ['index','province']}, ...]`）→ `row.get("index")` 恒 `None` → **匹配 0 个点、返回 `matched_by: none`，全程不报错**。该缺陷自 `40aabe4` 起存在，与多语言工作无关，但**本计划 Task 9 要求的导出→导入闭环用例在未修时不可能通过**，故于 Task 9 一并修复：`csv_lines.append("﻿" + ",".join(headers))`（BOM 并入首字段）。**结论：vibe_route 自家导出的 CSV 在这次之前无法被自家导入器正确读回**；本次修复后闭环成立。另注：行分隔符仍是 `\n` 而非 RFC 4180 的 `\r\n`（既有，未改，导入侧不受影响）。
 
 - [ ] **Step 1: 读 cc 现状 → 追加 → Commit**
 
