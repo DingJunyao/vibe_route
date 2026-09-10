@@ -4024,7 +4024,8 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 - **字段名溯源核对**（协调者独立做）：前端新增字段与后端权威定义逐字一致——点级 `province_id`/`city_id`/`district_id`/`road_name_id`/`region` 对 `backend/app/schemas/track.py:159-163`；节点级 `region`/`names` 对 `backend/app/schemas/track.py:191-192`；`RoadSignRequest`/`RoadSignResponse` 对 `backend/app/api/road_signs.py:30-38` 与 `105-113`。
   > 附注：道路图标 schema **不在** `backend/app/schemas/` 而在 `backend/app/api/road_signs.py`（易误判为「字段不存在」，审查时注意）。
 - **发现但按 YAGNI 未扩范围**：后端 `RoadSignRequest` 尚有 `province_id`（`road_signs.py:38`，注释「印尼语省名文本（region=id 时查省码用）」），前端未加该字段。Task 11 规格本就只列 `region?`/`name_id?`；且 Task 12 的区域树对 id 分支只传 `code/signType/region/name/nameId`，**无任何调用点会发 `province_id`** → 不预先加死字段。**记为 Task 13 端到端冒烟的观察点**：若印尼盾牌实际渲染出现省份码缺失，此处是第一嫌疑。
-- 观感（未改，属计划原文规定）：`RoadSignRequest` 新增两行注释对齐到第 23 列，而同块 `province`/`name` 无注释，视觉上略显不齐——照抄计划原文，不擅自调整。
+- ~~观感：`RoadSignRequest` 新增两行注释对齐不齐~~ → **该判断经复审实测推翻，撤回**。审查者逐行测了 `//` 列号：`roadSign.ts` L9/L10/L20 三处注释**全部落在第 23 列，本来就是对齐的**，无错可纠。至于 `track.ts` 新字段（L91-95 列号 30/26/30/31/18）虽不等宽，但**整个 `track.ts` 都不是列对齐风格**——它是「类型后固定两个空格」（对照存量 L28-30 = 33/34/40、L68/70 = 23/29、L96 = 23），新字段恰好符合本文件既有约定。若把 5 行单独对齐，反与紧邻 40 余行存量风格割裂，纯 churn、读者收益为零。**裁定：不改。**
+  > 教训：**「视觉上不齐」这类判断不能靠印象**。实现者与我先后都凭观感报了同一处「不齐」，实测列号后两者皆错。凡涉格式的结论，一律用列号/字节级证据说话。
 
 **Task 11 fix loop（spec 审查发现，属计划缺陷、非实现者过失）**
 
