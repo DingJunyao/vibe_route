@@ -3429,7 +3429,7 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 | F3 | **XLSX 导入分支零覆盖**：`get_val` 的 `headers.index(alias)` 分支（L2498-2503）是本次重写的代码，而 `tests/` 里 `file_format` 只出现 `'csv'` | 新文件补一个 `file_format='xlsx'` 用例（openpyxl 写 `NEW_HEADERS` + 两行），复用 `_new_format_csv` 的字段值与 `_assert_full_fields` |
 | F4 | **旧格式「无 region 列」断言无分辨力**（`test_import_multilanguage.py:262-270`：期望值恰等于轨迹自身默认值） | 让点值与轨迹值**不同**（建轨迹 `region='cn'` 后把点改成 `'id'`，或反之），使「一律写 `track.region`」这种错误必红 |
 | F5 | `headers: set \| list \| None` 注解与实现不符（`.index` 对 set 抛 `AttributeError`；旧代码的 `list(headers)` 兜底本次被去掉） | 注解删去 `set`（无 set 调用者 —— 两处调用点传的是 dict 与 list，YAGNI） |
-| F6 | region 白名单项目**已有** `REGION_VALUES`（`gpxutil_wrapper/indonesia.py:18`，`svg_gen.py` 已在用）却未被复用 | 本次新增的两处（`update_point_fields`、`_create_from_csv_project_format`）改用 `REGION_VALUES` |
+| F6 | region 白名单项目**已有** `REGION_VALUES`（`gpxutil_wrapper/indonesia.py:18`）却未被复用（**该常量此前无引用点，本次首次启用**——论据更正见本节末） | 本次新增的两处（`update_point_fields`、`_create_from_csv_project_format`）改用 `REGION_VALUES` |
 | F7 | `pytest.raises(ValueError)` 未带 `match`，任意 `ValueError` 都能顶替 | 两处补 `match='无效的地区值'` |
 | F8 | 创建路径 region 用例两行同值（`_new_format_csv(region0='id', region1='id')`），分辨力弱 | 改 `region1='cn'`；并补一条「`province_zh` 列**存在但为空** + 旧列 `province` 有值 → 创建路径取旧列值」钉住 F1 的语义 |
 | F9 | **`memo` 在创建路径丢失**（走「创建」路径的 CSV/XLSX 丢备注） | `point_data` 与 `insert_values` 各加 1 行（`"memo": point_data.get("memo")`），并加创建路径的 memo 断言 |
@@ -3471,6 +3471,25 @@ Task 9 首轮已提交（`1b0c90a`，2 files / 442 insertions / 61 deletions；�
 > 正确做法二选一：① 变异脚本用 `read_bytes()`/`write_bytes()`（二进制，无翻译）或 `open(..., newline='')`；② 还原后用 **`git status --porcelain` / `git diff`** 或 **shell 的 `sha256sum`**（读原始字节）验收。**git 是唯一的地面真相。**
 >
 > 本 window 的修复 loop（`dcd6223`）用的是 ②（`sha256sum -c`），方法本身没问题；踩坑的是协调者自写的 Python 脚本。
+>
+> **③ 还原的范围必须精确到变异本身**（协调者本轮第二次踩坑：`e29f11d` 提交里少了 `track_service.py`，靠 `6a72e31` 补回）：`git checkout -- <file>` 还原的是**整个文件**，会把同文件里**尚未提交**的正常改动一并抹掉。危险之处在于它伪装成成功——`git status --porcelain` 确实「干净」了，但「干净」有两种成因（变异被还原 ✓ / 连正常改动一起被还原 ✗），**单看 status 分不出来**。正确做法二选一：**先提交正常改动再做变异**，或提交前用 `git diff --stat` 核对文件数与改动条数是否与预期一致（事故就是靠这一步发现的）。
+
+#### 复审后的收尾（2026-09-10，`e29f11d` + `6a72e31`）
+
+fix loop 的独立复审结论：**九项逐条按规格落地、diff 面严格限于规格内、无附带损害、无越界改动/遗留调试代码**，工作树干净，**78 passed** 复现一致 → **Task 9 可关闭**。复审另提 4 条次要项，处置如下（均为 1 行级，由协调者就地修，未再派 subagent）：
+
+| # | 项 | 处置 |
+|---|---|---|
+| 次要 1 | `test_import_multilanguage.py` 导入侧断言 `[None, None]`：点由 `create_from_gpx` 建出时 `province` **本就是 `None`** → 「覆盖为空」与「整段没动」不可区分 | **修**：导入前给两点设哨兵 `'哨兵'`，再断言 `[None, None]`。变异（`point.province = get_val('province')` 改 `pass`）实测目标用例变红（连带 5 个同族用例） |
+| 次要 2 | `track_service.py:2488` 的 `row: dict` 对 xlsx 调用点（传 tuple）是错误注解；函数体内 `has_key`/`get_val` 均已按 `isinstance(row, dict)` 分派 | **修**：改 `row: dict \| tuple` |
+| 次要 3 | 同文件 ① 分支「列存在、值为空」的**既有**弱断言（不在本次 diff 内）：轨迹与点都是 `'id'` → 「整段没动」也会绿，**与 F4 完全同型** | **修**：轨迹改 `region='cn'`、两点改 `'id'`，期望 `{'cn'}`。变异（删掉落回轨迹的赋值）实测变红 |
+| 次要 4 | 计划为 F6 写的论据「`svg_gen.py` 已在用」不准确；`_create_from_csv_project_format` docstring 对「空白串」的落点描述不精确 | **修**：见下两条更正 |
+
+**F6 论据更正**：`REGION_VALUES` 在本 Task 之前**无任何引用点**——实测 `svg_gen.py:987/993` 用的是 `REGION_CN`/`REGION_ID` 两个**标量**，不是这个元组。结论不变（常量本就定义在 `indonesia.py`，是 region 白名单的既定归属地，复用它优于新写字面量），但「已有代码在用」这半句不成立：本条是**首次启用**该常量。
+
+**docstring 措辞更正**：原文「导入路径则把 province 覆盖为 None」严格说只对**空串**成立——`get_val` 的 `val.strip() if val else None` 真值判断在 strip **之前**，故仅含空白的串（`'   '`）落为 `''` 而非 `None`（这正是上文 F1 对拍里那 8 组差异的成因）。已改为「空串落为 None，仅含空白的串落为 `''`，两者都不是『保留原值』」，使两条路径在「空白串」这一格的真实落点可直接读出。
+
+次要 1/3 属于**同一类缺陷**（期望值恰等于原值 → 断言无分辨力），与刚修完的 F4 同型；**不留作后续**的理由与本 Task 的性质有关：该文件的 docstring 自称「静默失效的唯一防线」，把已知无分辨力的断言留在防线里，等于把刚付过学费的坑重新埋回去。
 
 ---
 
