@@ -3887,6 +3887,48 @@ git commit -m "feat(region-tree): 区域树按(region,文本)分组、节点携�
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ```
 
+#### 实现与审查记录（2026-09-10，`e4d2505` + `2b6aa0a` + `02a6ebd`）
+
+**Step 0 成功**（`e4d2505`）：`from conftest import ...` 实测可用（prepend 模式，`tests/` 在 `sys.path` 上），未走跳过分支；全量 78 → 78 passed。**已核实**：conftest 的四个定义块与 base 版两处副本 **sha256 逐字节相同**（`d2f6081d…f70097` 三份全等）。一处**有意的偏离**：两个测试文件除「删定义 + 加 import」外还删掉了因此不再使用的 8 个 import 行——审查者按标识符边界**独立计数**确认全部为 0 次代码引用（`Track` 的 4 次命中全是 docstring/注释/KML 字面量），判定为安全清理。
+
+**Step 1 等价性——三重独立复核，结论一致**：实现者逐段比对两版 240 行确认差异只有计划所列两处；spec 审查者另用 `ast` 从 `7cd90bd` 抽出旧函数体、`exec` 成独立协程，配 FakeDB 与新实现跑同一批内存点，**9 个场景**（四级中文 / 省市同名 / city 重置分支 / 无名道路 / 省切换 / 区市同名 / 无时间 / 哨兵省 / zh 与 id·en 并存）**逐字段全等**；质量审再做**3000 组随机点序列**（region ∈ {cn, id, None}，四文本随意交叉）的内存内源码置换变异。差异全部落在计划已认可的回退链一类，**无第三类差异**。
+
+**「防御性 region」的实证裁决（保留）**：质量审把市/区/道路三级键里的 region 去掉后跑 3000 组，**0 处差异**——证实那三处 region **在行为上不可观测**（归纳不变量：region 一变必然使省级键不等 → 新建省级节点 → `current_city/district/road` 全部置 None，故三个下层键的 region 分量恒等于当前 region）。**裁决：保留，不删也不补测试**——它的价值不是防御而是「四处键形状统一」，而统一本身值这一行；变异测不出来是它的定义使然，不是覆盖漏洞。
+
+**测试**：新建 `backend/tests/test_region_tree.py`（6 用例，176 行），实现前 `6 failed` → 实现后 `6 passed`；全量 **78 → 84 passed**。用例 1-4、6 在实现前**红于 `AttributeError`/`KeyError`（API 不存在）而非逻辑红**，实现者如实说明并用 6 项变异（每项只让对应用例变红、其余 5 个保持绿）证明非空转；spec 审查者另做 11 项独立变异复核（7 项有效）。
+
+**质量审结论**：**Ready to merge: Yes**，**无 Critical**；区域树代码总量 **452 行（243+209）→ 324 行**（235 行共享 + 40/31 行两薄壳），`track_service.py` 4135 → 4010 行。10 条 Important/Minor 中**修 7 留 3**：
+
+| 修（`02a6ebd`） | 内容 |
+|---|---|
+| 薄壳死代码 | 删两处 `if not points:` 早退（`_build_region_tree([])` 已返回同形空结构，实测零行为变化）；**权限检查段的空结构返回保留**（语义不同） |
+| `create_node` 静默默认 | `region: str = 'cn'` → `*, region: str`（必填**关键字**参数）。理由：仓库教条即「region 是唯一带默认值的字段、漏传被静默掩盖，故须逐个生产者守卫」，不该新开同类默认值。实现者**纠正了协调者的方案**：Python 不允许有默认值参数后跟无默认值参数（`def g(a, b=None, c)` 实测 `SyntaxError`），而 `region` 前有 `road_number=None`/`names=None`。加 `*` 后 4 个调用点**零改动**（本就用关键字传参），漏传立刻 `TypeError: missing 1 required keyword-only argument`；而「无默认值的位置参数」方案仍允许未来的 `create_node(name, 'road', road_number)` 把 `road_number` **静默**绑进 `region`（实测）——`*` 让这类错位在语法上不可能发生，**严格优于原要求**（理由的精确化见文末复审） |
+| docstring 过宽 | 「组内**首见**」→「取**建点那一点**的非空语言值（按 zh → id → en 去重），组内后续点不补全缺失语言」（实现只传触发建点的那个 `point`） |
+| 无名道路零断言 | 该分支本 Task 重写过却无断言（删掉 `road_name = '（无名）'` 重赋值不会被拦住，要到 API 层 `RegionNode.name: str` 收到 `None` 才炸）；补 3 条断言（`type`/`name`/`names`）+ 变异自检（删重赋值 → `assert None == '（无名）'` 红） |
+| 用例 5 名义入库 | `expire_on_commit=False` 下 commit 后读到的是同一 identity map 的对象、**不经 DB 往返**；加 `db.expunge_all()` + 捕获 `track_id/user_id`（捕获是**防御性**的，非必需——见文末复审） |
+| 冗余断言 | 删 `len(names.values()) == len(set(...))`（被紧随的 `names == {...}` 包含） |
+| stats 语义 | 注释补「跨地区同文本计两次，前端展示为「N 省级」即 N 个省级条目」 |
+
+**留 3 项的理由（既有债，非本次贡献）**：`node_counter = [0]`（原样搬运的既有风格，`nonlocal` 更直白但不在本次范围）、`city_key`/`district_key` 的命名与「比较处/赋值处各写一遍 `(region, x)`」、`test_indonesia_shield.py` 仍留自己那份 `workdir`（计划明确 Step 0 只收编逐字相同的两份）。**另有既有债一并记录、不阻塞**：253 行方法体与 5 处 `end_index` 收尾块（`git show` 中全是未改动的 context 行）、点查询谓词在全文件出现 11 次（文件级 codemod 议题）、`track_service.py` 4010 行。
+
+**未采纳的一条建议**：质量审建议抽 `_load_region_points(db, track_id)` 消除两薄壳的 5 行查询重复。**不采纳**——5 行重复的抽象成本大于收益，且两个端点的查询将来可能分叉（公开分享页要加过滤），抽早了把两条路径绑死。**同时定为契约**（其 Recommendation 3）：`_build_region_tree(points)` 收 `points` 而非 `db`，这是 6 个用例中 5 个能**全内存跑**（不入库、不依赖 `spatial_service` 是否被换成 PostGIS 实现）的前提，将来不要「顺手把查询也合并进去」。
+
+**计数更正**：协调者转述质量审时写「空 stats 字面量 3 处降到 2 处」，实现者实测更正为 **3 → 1**（权限失败 1 + 两薄壳 2 = 3；删两处后只剩权限失败那处）。**实现者正确，协调者算错**——`_build_region_tree` 末尾的 `stats` 是从四个 set 现算的、不是字面量（`grep -n "'province': 0"` 可验）。
+
+**给 Task 12 的交接（质量审 Recommendation 2，计划层提醒）**：前端判断节点「无数据」**优先用 `Object.keys(names).length === 0` 而不是 `name === '未知区域'`**——`names == {}` ⟺ 三语全空 ⟺ 哨兵，是结构性信号。现有前端四处（`TrackDetail.vue:438/692`、`SharedTrack.vue:272/436`）都在做中文字面量比较，region 一多就会成为「中文硬编码泄漏进印尼语 UI」的来源（`'（无名）'` 同理）。**哨兵取 `'未知区域'` 是 spec 决策，本 Task 不改**，但 Task 12 实现时按上述判据。
+
+**给 Task 14 的回归风险点（质量审 Recommendation 4，须写进 changelog）**：`city`/`district`/`road_name` 现在会回退到 `*_en`/`*_id`，故 cn 轨在「zh 某级为空、en 该级有值」时会**新出现**一个英文名节点，而合并前该点会并进上层。geocoding 的三语取值为同一轮请求、同一 `admin` 层级，presence 应一致 → 实际概率很低，且方向是「显示更多信息而非更少」；但它确实是 commit message「cn 点 zh 非空时一致」这一限定语的**边界**，需在 changelog 留一句。
+
+**fix loop 复审结论（2026-09-10，可关闭）**：7 项全部按裁决落地、**零行为变化**、无越界、无附带损害。复审者逐行归账 8 个 hunk 的每一条都能对上某一项，「明确不修」清单**一处未动**；`--ignore-all-space` 后 stat 完全相同（无格式化噪音），diff 内无 `print`/`breakpoint`/TODO 残留。三处超出要求的独立验证：
+
+1. **自己推了一遍空列表路径**（`for` 不执行 → 四个 `current_*` 全 None → 四个收尾块被 `is not None` 守卫 → `root_nodes == []`；四个 set 全空 → 四个 0 且**键序也相同**），并核实两个消费方（`app/api/tracks.py:834-840`、`app/api/shared.py:180-186`）只做 `.get('regions', [])`/`.get('stats', {})` 透传 → 响应体逐字节不变。
+2. **用另一条连接直接改 DB 行**验证第 5 项：commit 后把该行 `province` 从 `AAA` 改成 `BBB`，不 `expunge_all` 时树的省名仍是 `AAA`（identity map 里的旧对象），`expunge_all` 后为 `BBB`。**修复前这条用例证明不了任何 DB 往返，现在能** —— 本轮最有价值的一处修复。
+3. **独立变异复核第 4 项**：删 `road_name = '（无名）'` → 红在**新断言那一行**（`assert None == '（无名）'`），而上一行的 `type == 'road'` 仍通过，反证节点身份正确（题目假设的三层 `children` 路径在本 fixture 下会 IndexError，实际道路节点直挂省节点下）。
+
+**复审更正的两处理由（结论均不受影响）**：① 加 `*` 的**结论正确**（实测：漏传得 `TypeError: missing 1 required keyword-only argument`；而无默认值的位置参数方案仍允许未来写法把 `road_number` 静默绑进 `region`），但实现者给的理由不精确——**现有**调用点本就带 `region=` 关键字，把 `region` 提到第三位会得到**响亮的** `TypeError: got multiple values for argument 'region'`，静默错位属于**未来/其他写法**的调用者。② 第 5 项捕获 `track_id/user_id` 是**防御性**而非必需：把两行对调（先 `expunge_all` 再读 `track.id`）用例仍 passed（`expire_on_commit=False` 不使属性失效，detached 对象仍持有已加载值）；保留捕获的理由是 conftest docstring 明说将来可能换 `expire_on_commit`，一行成本换意图清晰，**不作为缺陷**。
+
+**残留风险（已知、可接受）**：两个已删早退没有直接单测（实现者明说未加空列表断言，用例数保持 6）；空轨迹走端点的路径现在只有间接覆盖——但连续两轮独立实证（实现者的等价脚本 + 复审者的空列表推演与实测）已把它钉死。另：`1426` 注释前半句「去重键 = (region, 显示文本)」对**道路级**略宽（stats 的 road 键用的是重赋值前的 `road_name`，故「（无名）」永不进 `road_set`）——属基线文字，本次只加了准确的后半句，不构成回归。
+
 ---
 
 ### Task 11: 前端 API 层：类型加 region/多语言字段，upload/update 透传 region
