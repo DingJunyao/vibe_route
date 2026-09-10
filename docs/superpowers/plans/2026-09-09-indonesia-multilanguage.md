@@ -4705,6 +4705,49 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 ---
 
+## 最终整体代码审查（`750fa35..HEAD`，2026-09-10）
+
+**范围**：35 个代码文件（已排除 `docs/`、`cc/`）。**审查结论**：建议修复后合并——1 个真缺陷、无数据丢失、无安全问题、7 条「值得改进」。
+
+### 真缺陷（1 个，已修）
+
+**轨迹插值产生的点不写 `region`，违反点级权威**。`interpolation_service.py` 全文零 `region` 引用，`_insert_interpolated_points` 构造 `TrackPoint` 时漏传 → 插值点落模型默认值 `'cn'`（`models/track.py:26`）。印尼轨做插值后：① 点级 region 错误；② 区域树省级节点是**无条件创建**的（`track_service.py` 约 L1513 起，取到哨兵 `未知区域` 也建节点），故会凭空冒出一个 `region=cn` 的「未知区域」根节点与 id 分组并列；③ 导出 CSV 混入 `region=cn` 行，破坏「导出→再导入」一致性。
+
+**修复（`8c58b80`）**：插值点继承**区段锚点**（`point_index == start_point_index` 的真实点）的 region，锚点缺失时回退 `tracks.region`、再回退 `'cn'`。**锚点必须优先于行级**——冒烟已实测二者可不一致（编辑轨迹地区只改行级、不覆盖已有点级）。跨地区边界时整段取锚点 region，已用 `# ponytail:` 注释标明上限。20 行实现 + 40 行测试，全量 **85 passed**（基线 84）。
+
+**主会话独立核对**（不轻信自报）：
+- 全仓 `TrackPoint(` 构造点仅 3 处，已逐一核验：`interpolation_service.py`（本次修复）、`live_recording_service.py:398`（已知限制 #1，实时记录模型无 region 列）、`overlay_renderer.py:759`（`create_sample_point()` 预览样例，返回对象**不入 session**，且内容硬编码为中国）；
+- 无 `bulk_insert_mappings` / `insert(TrackPoint)` / `add_all` 等旁路写库；
+- 测试第②条断言（锚点 `'cn'` 而行级 `'id'`）专门钉死「不得用 `tracks.region` 顶替」，用行级回填的实现在此变红；修复前实跑为 `assert {'cn'} == {'id'}`（左值为实际，证明默认值确曾静默生效）；
+- 单测由主会话复跑通过（`1 passed in 3.46s`）。
+
+### 文档漏项（3 处，已补）
+
+Task 14 的 13 项清单全部落位，但计划正文另有 3 处散落的「写入 Task 14 文档」要求被漏收（详见上方「修正记录 3」）。已补：`cc/changelog.md` 两处（`58b6396`）、`cc/features.md` 一处（`2d8890c`）。**教训**：跨任务的记录要求必须汇总到 Task 末尾清单，否则必漏。
+
+### 7 条「值得改进」的处置
+
+| # | 发现 | 处置 |
+|---|------|------|
+| 1 | 印尼盾牌省码的「地区文本查表」通道前端未接线：后端 `api/road_signs.py:34,38` 接受省名文本并查省码，但前端 `RoadSignRequest` 无 `province_id`、`renderNodeLabel` 从不发送省名 | **记录待补**。计划当时的裁定「色带省码在 API 请求链不可得（区域树道路节点无父级省文本）」**前提不准**——祖先省节点的 `names` 是可达的，属「可走通但未接线」。spec 标注该来源「可无」，故当前结果合法；要补需前端改动 + 测试，属独立议题 |
+| 2 | 字体缺失时 `test_indonesia_shield.py` / `test_road_sign_region.py` 硬失败而非 skip，新鲜 checkout 上 15+ 用例 error | **有意选择，不改**。字体是本仓库 gitignore 的**用户自备**资源（`.gitignore:91-92` 注明 user provided），断言带「先执行 Task 3 资源拷贝」的可操作提示——硬失败+指引优于静默跳过。已核验既有测试无字体依赖，故这是新引入的唯一一处，但方向正确 |
+| 3 | `road_sign_service` 把配置里的 `template`/`font_upper`/`font_lower` 直接 `base_dir / 文件名`，无目录约束 | **记录为可选加固**。已核验不可利用（配置写入仅 `get_current_admin_user` 可达、`/road-signs/generate` 不接受文件名参数、解析失败只 500 不外泄文件内容）。若要加固，一行 `Path(name).name == name` |
+| 4 | `region='id'` 但 provider 非 Nominatim 时静默产出错配数据 | **已写入已知限制**（`cc/features.md`，见 `2d8890c`）。这是本次唯一会静默填出整段错区数据的路径，且**可达**（默认 provider 即 `gdf`） |
+| 5 | 导入路径「无 region 列 → 不动点 region」与设计文档第 47 行表格「无列 → 用轨迹级默认」不符 | **记录**。实现是有意选择且有注释、有测试钉死（`test_empty_region_falls_back_to_track`），但与 spec 表格矛盾；**设计文档待标注此偏差**，否则后人「统一一下」会改坏 |
+| 6 | 016/017 的 `downgrade` 把 `province` 缩回 `String(10)`，遇已有 29 字符印尼省名时 MySQL 严格模式/PG 会失败 | **记录**（downgrade 属尽力而为；SQL 脚本本身只有 upgrade 方向，无此问题） |
+| 7 | `saveEdit` 换 CRS 成功后无条件再 `update`，第二次失败被 `catch` 静默吞掉 | 已复核属实（`TrackDetail.vue` 约 L2599-2620）。**记录**，属轻微提示语义问题；功能上比旧行为更正确（旧代码两分支互斥、换 CRS 时不保存名称） |
+
+### 审查未覆盖
+
+- **未能实跑 pytest**（审查者在本机找不到 conda 与 `.venv`），其测试结论均基于静态审查——实际的 **85 passed / 20 warnings** 由本会话在 `backend/` 下实跑得出。
+- `svg_gen.py` 中复用的既有「字体转路径」底层（本次未改动）未逐行重审；未与上游 `D:\code\gpxutil` 实际比对移植差异；未跑前端构建（TS 门禁崩溃为已知项）。
+
+### 审查确认无问题的关键点（节选）
+
+迁移 016+017 联合达到目标 schema 且幂等、三份 SQL 与 alembic 语义等价；region 写入路径六分支（gpx / csv-GPSLogger / csv-project / xlsx / kml / kmz）+ 导入覆盖 + fill + merge 均正确且有测试，非法值在创建与导入两条路径均抛 `ValueError`，外部输入被 API 的校验全挡在库外；缓存键含 region（同编号不同地区/路名不串样）；区域树 `(region, 文本)` 分组与 auth/no_auth 双入口等价；Nominatim 三语请求序列与字段映射有测试钉死、38 省表双键完整、`\btol\b` 词边界不误伤；前端无定时器/监听器泄漏、两视图实现逐字一致；diff 内无 SQL 拼接、无新增用户可控路径。
+
+---
+
 ## 计划自审记录
 
 - **Spec 覆盖核对**：spec §2 模型/迁移 → Task 2；§3 导入导出 → Task 8/9；§4 geocoding → Task 6；§5 图标/API/缓存 → Task 1/4/5；§6 区域树 → Task 10/11/12；§7 配置 → Task 3；§8 测试 → Task 1/4/5 + Task 13；§9 兼容 → 各任务 cn 分支保持；§10 顺序 → 任务序一致。
