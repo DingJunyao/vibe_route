@@ -1413,7 +1413,8 @@ class TrackService:
         """按时间顺序构建区域树（两个公共入口共用）
 
         分组键含 (region, 文本)：同文本不同地区分开成组；节点显示文本按
-        回退链 zh → id → en → 哨兵；names 记录组内首见的各语言非空值。
+        回退链 zh → id → en → 哨兵；names 取**建点那一点**的非空语言值（按 zh → id → en
+        去重），组内后续点不补全缺失语言。
         返回 (root_nodes, stats)。
 
         no_auth 版此前每点额外 own point_count++ 一次，随后被
@@ -1422,7 +1423,8 @@ class TrackService:
         root_nodes = []
         node_counter = [0]
 
-        # 统计各级区域数量（去重键 = (region, 显示文本)）
+        # 统计各级区域数量（去重键 = (region, 显示文本)；跨地区同文本计两次，
+        # 前端展示为「N 省级」即 N 个省级条目）
         province_set = set()
         city_set = set()
         district_set = set()
@@ -1436,7 +1438,10 @@ class TrackService:
             return '未知区域'
 
         def create_node(name: str, node_type: str, road_number: str = None,
-                        names: Optional[dict] = None, region: str = 'cn') -> dict:
+                        names: Optional[dict] = None, *, region: str) -> dict:
+            # region 是必填关键字参数（不给默认值）：漏传立刻 TypeError，不会静默落 'cn'，
+            # 而它决定前端按哪套渲染体系解析（点级 region 的默认值曾静默掩盖漏传，
+            # 见 test_region_propagation.py 文件头）。放 * 之后是因为它前面两个参数有默认值。
             """创建一个新节点（names 为各语言代表文本，非空才出现）"""
             node_counter[0] += 1
             return {
@@ -1698,9 +1703,6 @@ class TrackService:
         )
         points = list(result.scalars().all())
 
-        if not points:
-            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
-
         root_nodes, stats = await self._build_region_tree(points)
         return {'regions': root_nodes, 'stats': stats}
 
@@ -1729,9 +1731,6 @@ class TrackService:
             .order_by(TrackPoint.time, TrackPoint.created_at)
         )
         points = list(result.scalars().all())
-
-        if not points:
-            return {'regions': [], 'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
 
         root_nodes, stats = await self._build_region_tree(points)
         return {'regions': root_nodes, 'stats': stats}

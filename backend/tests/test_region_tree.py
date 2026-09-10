@@ -79,7 +79,6 @@ class TestBuildRegionTree:
         )])
 
         names = root[0]['names']
-        assert len(names.values()) == len(set(names.values())), names
         assert names == {'zh': 'Jawa Timur', 'en': 'East Java'}
 
     def test_display_fallback_chain(self):
@@ -96,6 +95,13 @@ class TestBuildRegionTree:
         root, _ = _build([_pt(0)])
         assert root[0]['name'] == '未知区域'
         assert root[0]['names'] == {}
+
+        # 无名道路节点：name 必须落 '（无名）' 而非 None（RegionNode.name 是 str，
+        # 到处炸的是 API 层，不是这里）—— 钉住建路时的 road_name 重赋值
+        road = root[0]['children'][0]
+        assert road['type'] == 'road'
+        assert road['name'] == '（无名）'
+        assert road['names'] == {}
 
     def test_region_grouping(self):
         """文本相同但 region 不同 → 不并组，各自成根节点、各自计数"""
@@ -157,8 +163,13 @@ class TestEntryPointsEquivalent:
                 pts[1].region = 'id'
                 await db.commit()
 
-                auth = await track_service.get_region_tree(db, track.id, user.id)
-                no_auth = await track_service.get_region_tree_no_auth(db, track.id)
+                # 丢掉 identity map：否则（expire_on_commit=False）两个入口的 select
+                # 返回的就是上面那几个 Python 对象本身，证明不了值经得起 DB 往返
+                track_id, user_id = track.id, user.id
+                db.expunge_all()
+
+                auth = await track_service.get_region_tree(db, track_id, user_id)
+                no_auth = await track_service.get_region_tree_no_auth(db, track_id)
 
                 # 非玩具树：省 > 市 > 区/路 至少两级，且 road 计数非 0
                 assert len(auth['regions']) == 1
@@ -169,7 +180,7 @@ class TestEntryPointsEquivalent:
                 assert auth['stats'] == no_auth['stats']
 
                 # auth 侧仍守权限（合并后薄壳不得把权限检查一起吞掉）
-                other = await track_service.get_region_tree(db, track.id, user.id + 999)
+                other = await track_service.get_region_tree(db, track_id, user_id + 999)
                 assert other == {'regions': [],
                                  'stats': {'province': 0, 'city': 0, 'district': 0, 'road': 0}}
 
