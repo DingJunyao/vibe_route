@@ -318,6 +318,19 @@ class TrackService:
 
         return round(bearing_deg, 2)
 
+    @staticmethod
+    def _export_speeds(points: list[TrackPoint]) -> list[float]:
+        """Fill missing export speeds without changing stored track points."""
+        filled: list[float] = []
+        last_speed = 0.0
+        for point in points:
+            if point.speed is None:
+                filled.append(last_speed)
+            else:
+                last_speed = float(point.speed)
+                filled.append(last_speed)
+        return filled
+
     async def create_from_gpx(
         self,
         db: AsyncSession,
@@ -425,8 +438,30 @@ class TrackService:
                 distance_from_prev = sqrt(horizontal_distance ** 2 + vertical_distance ** 2)
                 total_distance += distance_from_prev
 
-                # 计算速度
-                speed = self._calculate_speed(point_time, prev_point_data['time'], distance_from_prev)
+                # 计算速度。时间重复/乱序时，用当前点到下一个时间递增点的区间估算。
+                speed = None
+                if (
+                    point_time is not None
+                    and prev_point_data['time'] is not None
+                    and point_time <= prev_point_data['time']
+                ):
+                    for future_point in segment.points[idx + 1:]:
+                        if not future_point.time or not point.time:
+                            continue
+                        future_time = future_point.time.replace(tzinfo=None)
+                        if future_time > point_time:
+                            speed = self._calculate_speed(
+                                future_time,
+                                point_time,
+                                point.distance_3d(future_point),
+                            )
+                            break
+                else:
+                    speed = self._calculate_speed(
+                        point_time,
+                        prev_point_data['time'],
+                        distance_from_prev,
+                    )
 
                 # 计算方位角
                 bearing = self._calculate_bearing(
@@ -1786,6 +1821,8 @@ class TrackService:
         if not points:
             raise ValueError("轨迹没有数据点")
 
+        export_speeds = self._export_speeds(points)
+
         # CSV 内容行（首行为 BOM + 表头）
         csv_lines = []
 
@@ -1853,7 +1890,7 @@ class TrackService:
                 f"{point.elevation:.1f}" if point.elevation is not None else "",
                 f"{total_distance:.2f}",
                 f"{point.bearing:.2f}" if point.bearing is not None else "",
-                f"{point.speed:.2f}" if point.speed is not None else "",
+                f"{export_speeds[idx]:.2f}",
                 point.region or 'cn',
                 point.province or "",
                 point.province_id or "",
@@ -1929,6 +1966,8 @@ class TrackService:
         ws = wb.active
         ws.title = "轨迹点"
 
+        export_speeds = self._export_speeds(points)
+
         # 设置表头（与 CSV 导出保持一致的 30 列）
         headers = [
             "index", "time_date", "time_time", "time_microsecond", "elapsed_time",
@@ -1997,7 +2036,7 @@ class TrackService:
                 round(point.elevation, 1) if point.elevation is not None else None,
                 round(total_distance, 2),
                 round(point.bearing, 2) if point.bearing is not None else None,
-                round(point.speed, 2) if point.speed is not None else None,
+                round(export_speeds[row_idx - 2], 2),
                 point.region or 'cn',
                 point.province,
                 point.province_id,
@@ -2231,7 +2270,7 @@ class TrackService:
 
         # 创建时间到点的映射（用于时间匹配）
         # 使用 (time.timestamp(), 误差范围内) 的方式存储
-        points_by_time = {}
+        points_by_time: dict[float, list[TrackPoint]] = {}
         db_time_range = {"min": None, "max": None}
         for p in points:
             if p.time:
@@ -2241,7 +2280,7 @@ class TrackService:
                     ts = p.time.replace(tzinfo=dt_timezone.utc).timestamp()
                 else:
                     ts = p.time.timestamp()
-                points_by_time[ts] = p
+                points_by_time.setdefault(ts, []).append(p)
                 # 记录时间范围
                 if db_time_range["min"] is None or ts < db_time_range["min"]:
                     db_time_range["min"] = ts
@@ -2289,12 +2328,20 @@ class TrackService:
                 logger.info(f"find_point_by_time: file_time={parsed_time} -> target_ts={target_ts}")
 
             # 查找最接近的点（使用用户指定的误差范围，不含边界值）
-            for ts, p in points_by_time.items():
-                diff = abs(ts - target_ts)
-                if diff < time_tolerance:
-                    if row_count[0] < 3:
-                        logger.info(f"  Found match: ts={ts}, diff={diff:.3f}s")
-                    return p
+            exact_bucket = points_by_time.get(target_ts)
+            if exact_bucket:
+                return exact_bucket.pop(0)
+
+            candidates = [
+                (abs(ts - target_ts), bucket)
+                for ts, bucket in points_by_time.items()
+                if bucket and abs(ts - target_ts) < time_tolerance
+            ]
+            if candidates:
+                diff, bucket = min(candidates, key=lambda item: item[0])
+                if row_count[0] < 3:
+                    logger.info(f"  Found match: diff={diff:.3f}s")
+                return bucket.pop(0)
 
             return None
 

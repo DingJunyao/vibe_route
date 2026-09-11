@@ -11,6 +11,8 @@
 （本机 %TEMP%/pytest-of-* 不可访问）。
 """
 import asyncio
+import csv
+from datetime import datetime
 
 import pytest
 
@@ -31,6 +33,19 @@ _COLUMNS = NEW_HEADERS.split(',')
 def _row(**kw):
     """按 30 列顺序拼一行（未给的列留空）"""
     return ','.join(str(kw.get(col, '')) for col in _COLUMNS)
+
+
+def _gpx_duplicate_time():
+    points = (
+        '<trkpt lat="-7.280" lon="112.735"><ele>10</ele><time>2026-09-01T08:00:00Z</time></trkpt>',
+        '<trkpt lat="-7.281" lon="112.736"><ele>11</ele><time>2026-09-01T08:00:00Z</time></trkpt>',
+        '<trkpt lat="-7.282" lon="112.737"><ele>12</ele><time>2026-09-01T08:00:10Z</time></trkpt>',
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">'
+        f'<trk><name>t</name><trkseg>{"".join(points)}</trkseg></trk></gpx>'
+    )
 
 
 def _new_format_csv(region0='id', region1='cn'):
@@ -424,5 +439,86 @@ class TestRoundtrip:
                 for s, d in zip(src_pts, dst_pts):
                     assert tuple(getattr(d, f) for f in fields) == tuple(getattr(s, f) for f in fields)
                     assert d.region == 'id'  # 导出的点级 region 覆盖目标轨迹默认 'cn'
+
+        asyncio.run(case())
+
+
+class TestTimeImportDuplicateTimestamps:
+    def test_duplicate_file_times_update_distinct_points(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                track = await track_service.create_from_gpx(
+                    db, user, 'a.gpx', _gpx_duplicate_time(), 'a', region='cn'
+                )
+                points = await _track_points(db, track.id)
+                assert points[1].speed is not None and points[1].speed > 0
+                for offset, point in enumerate(points):
+                    point.created_at = datetime(2026, 9, 1, 8, 0, 0, offset)
+                await db.commit()
+
+                rows = '\n'.join(
+                    _row(
+                        index=i,
+                        time_date='2026/09/01',
+                        time_time='08:00:00' if i < 2 else '08:00:10',
+                        memo=f'duplicate-{i}',
+                    )
+                    for i in range(3)
+                )
+                result = await track_service.import_points_from_file(
+                    db,
+                    track.id,
+                    user.id,
+                    (NEW_HEADERS + '\n' + rows).encode('utf-8'),
+                    file_format='csv',
+                    match_mode='time',
+                    timezone='UTC',
+                )
+
+                imported = await _track_points(db, track.id)
+                assert result['updated'] == 3
+                assert [point.memo for point in imported] == [
+                    'duplicate-0',
+                    'duplicate-1',
+                    'duplicate-2',
+                ]
+
+        asyncio.run(case())
+
+
+class TestExportSpeedFill:
+    def test_csv_and_xlsx_fill_missing_speeds(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                track = await track_service.create_from_gpx(
+                    db, user, 'a.gpx', _gpx_duplicate_time(), 'a', region='cn'
+                )
+                points = await _track_points(db, track.id)
+                points[0].speed = None
+                points[1].speed = 12.34
+                points[2].speed = None
+                await db.commit()
+
+                _, csv_content = await track_service.export_points_to_csv(
+                    db, track.id, user.id
+                )
+                csv_speeds = [
+                    float(row['speed'])
+                    for row in csv.DictReader(csv_content.splitlines())
+                ]
+                assert csv_speeds == [0.0, 12.34, 12.34]
+
+                _, xlsx_content = await track_service.export_points_to_xlsx(
+                    db, track.id, user.id
+                )
+                from io import BytesIO
+                from openpyxl import load_workbook
+
+                ws = load_workbook(BytesIO(xlsx_content), read_only=True).active
+                xlsx_rows = list(ws.iter_rows(min_row=2, values_only=True))
+                assert [row[14] for row in xlsx_rows] == [0.0, 12.34, 12.34]
+
+                refreshed = await _track_points(db, track.id)
+                assert [point.speed for point in refreshed] == [None, 12.34, None]
 
         asyncio.run(case())

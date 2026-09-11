@@ -258,32 +258,40 @@
 
         <!-- 印尼 -->
         <template v-else>
-          <el-form-item label="道路编号">
+          <el-form-item label="道路类型">
+            <el-radio-group v-model="roadSignForm.indonesia_road_type">
+              <el-radio-button value="tol">收费道路</el-radio-button>
+              <el-radio-button value="national">国道</el-radio-button>
+              <el-radio-button value="other">其他</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+
+          <el-form-item label="地区/编号">
             <el-input
-              v-model="roadSignForm.code"
-              placeholder="如 3, 16-024, 16.17-024"
-            />
-            <div class="road-sign-tip">
-              1-2 位=国道/收费公路，3 位=省级公路；前缀可带省码(16-)或县市码(16.17-)
-            </div>
-          </el-form-item>
-
-          <el-form-item label="中文路名">
-            <el-input v-model="roadSignForm.name" placeholder="用于判定是否收费公路，如 泗水收费高速" clearable />
-          </el-form-item>
-
-          <el-form-item label="印尼路名">
-            <el-input v-model="roadSignForm.name_id" placeholder="如 Jalan Tol Surabaya" clearable />
-          </el-form-item>
-
-          <el-form-item label="省份">
-            <el-input v-model="roadSignForm.province" placeholder="如 Provinsi Jawa Timur 或 16" clearable />
-            <div class="road-sign-tip">中/英/印尼语省名或法规省码(1-34)；编号已含省码时可留空</div>
-          </el-form-item>
-
-          <el-form-item label="收费公路">
-            <el-checkbox v-model="roadSignForm.force_tol">强制按收费公路(TOL)生成</el-checkbox>
-            <div class="road-sign-tip">仅 1-2 位编号有效；3 位编号恒为省级公路</div>
+              v-model="roadSignForm.indonesia_code"
+              :maxlength="roadSignForm.indonesia_road_type === 'other' ? 3 : 2"
+              :placeholder="indonesiaCodePlaceholder"
+              @input="onIndonesiaCodeInput"
+            >
+              <template #prepend>
+                <el-select
+                  v-model="roadSignForm.province"
+                  class="indonesia-region-select"
+                  placeholder="地区"
+                  filterable
+                >
+                  <el-option
+                    v-for="region in indonesiaRegions"
+                    :key="region.code"
+                    :label="region.code"
+                    :value="region.code"
+                  >
+                    <span class="indonesia-region-code">{{ region.code }}</span>
+                    <span class="indonesia-region-name">{{ region.name }}</span>
+                  </el-option>
+                </el-select>
+              </template>
+            </el-input>
           </el-form-item>
         </template>
 
@@ -390,6 +398,12 @@ import { liveRecordingApi } from '@/api/liveRecording'
 import QRCode from 'qrcode'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 import { formatDistance, formatDuration, formatElevation } from '@/utils/format'
+import {
+  indonesiaRegions,
+  normalizeIndonesiaRoadCode,
+  validateIndonesiaRoadInput,
+  type IndonesiaRoadType,
+} from '@/utils/indonesiaRegions'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -484,14 +498,20 @@ const provinces = [
 const roadSignForm = reactive({
   region: 'cn' as 'cn' | 'id',
   sign_type: 'way',
+  indonesia_road_type: 'national' as IndonesiaRoadType,
+  indonesia_code: '',
   code: '',
   expwyCode: '',  // 高速公路编号部分（不含前缀）
   is_provincial: false,
   has_name: false,
   province: '',
   name: '',
-  name_id: '',
-  force_tol: false,
+})
+
+const indonesiaCodePlaceholder = computed(() => {
+  if (roadSignForm.indonesia_road_type === 'tol') return '收费道路编号，如 8'
+  if (roadSignForm.indonesia_road_type === 'other') return '道路编号，如 024'
+  return '国道编号，如 3'
 })
 
 // 实时记录对话框
@@ -509,10 +529,15 @@ const uploadQrCode = ref('')
 const copyButtonText = ref('复制')
 
 // 监听地区、道路类型或高速类型变化，清空编号和预览
-watch(() => [roadSignForm.region, roadSignForm.sign_type, roadSignForm.is_provincial], () => {
+watch(() => [roadSignForm.region, roadSignForm.sign_type, roadSignForm.is_provincial, roadSignForm.indonesia_road_type], () => {
   roadSignForm.code = ''
   roadSignForm.expwyCode = ''
+  roadSignForm.indonesia_code = ''
   generatedSvg.value = ''
+})
+
+watch(() => roadSignForm.region, () => {
+  roadSignForm.province = ''
 })
 
 // 监听省份变化，更新完整编号并清空预览
@@ -553,6 +578,10 @@ function onExpwyCodeInput(value: string) {
   }
   // 同时更新完整的 code（用于校验和提交）
   updateFullCode()
+}
+
+function onIndonesiaCodeInput(value: string) {
+  roadSignForm.indonesia_code = normalizeIndonesiaRoadCode(value)
 }
 
 // 更新完整的 code 值（仅国标高速；印尼编号由后端解析，不拼前缀）
@@ -634,11 +663,16 @@ async function generateRoadSign() {
   }
 
   if (roadSignForm.region === 'id') {
-    // 印尼编号格式由后端解析（parse_indonesia_road_num），此处只查非空
-    if (!roadSignForm.code.trim()) {
-      ElMessage.warning('请输入道路编号')
+    const validationError = validateIndonesiaRoadInput(
+      roadSignForm.indonesia_road_type,
+      roadSignForm.province,
+      roadSignForm.indonesia_code,
+    )
+    if (validationError) {
+      ElMessage.warning(validationError)
       return
     }
+    roadSignForm.code = normalizeIndonesiaRoadCode(roadSignForm.indonesia_code).trim()
   } else {
     // 校验道路编号
     const codeValidation = validateRoadCode(roadSignForm.code, roadSignForm.sign_type, roadSignForm.province)
@@ -662,18 +696,16 @@ async function generateRoadSign() {
 
   generating.value = true
   try {
+    const isIndonesia = roadSignForm.region === 'id'
     const response = await roadSignApi.generate({
-      sign_type: roadSignForm.region === 'id' ? 'way' : roadSignForm.sign_type,
+      sign_type: isIndonesia ? 'way' : roadSignForm.sign_type,
       code: roadSignForm.code.trim(),
-      province: roadSignForm.region === 'id'
-        ? (roadSignForm.province || undefined)
+      province: isIndonesia
+        ? roadSignForm.province
         : (roadSignForm.is_provincial ? roadSignForm.province : undefined),
-      name: roadSignForm.region === 'id'
-        ? (roadSignForm.name || undefined)
-        : (roadSignForm.has_name ? roadSignForm.name : undefined),
+      name: isIndonesia ? undefined : (roadSignForm.has_name ? roadSignForm.name : undefined),
       region: roadSignForm.region,
-      name_id: roadSignForm.region === 'id' ? roadSignForm.name_id || undefined : undefined,
-      force_tol: roadSignForm.region === 'id' && roadSignForm.force_tol,
+      force_tol: isIndonesia && roadSignForm.indonesia_road_type === 'tol',
     })
     generatedSvg.value = response.svg
     ElMessage.success(response.cached ? '从缓存加载' : '生成成功')
@@ -1329,6 +1361,30 @@ onUnmounted(() => {
 
 .prefix-separator {
   padding: 0 0 0 32px;
+}
+
+.indonesia-region-select {
+  width: 72px;
+}
+
+.indonesia-region-select :deep(.el-input__wrapper) {
+  padding-right: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+.indonesia-region-select :deep(.el-input__suffix) {
+  display: none;
+}
+
+.indonesia-region-code {
+  float: left;
+  color: var(--el-text-color-primary);
+}
+
+.indonesia-region-name {
+  float: right;
+  color: var(--el-text-color-secondary);
 }
 
 /* 统一 prepend 的背景色和文字颜色 */

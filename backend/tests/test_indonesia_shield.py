@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from app.gpxutil_wrapper.indonesia import IndonesiaRoadLevel
-from app.gpxutil_wrapper.svg_gen import generate_indonesia_shield
+from app.gpxutil_wrapper.svg_gen import (
+    calculate_centered_scaled_char_info,
+    generate_indonesia_shield,
+)
 
 # 颜色/字号断言用 spec 字面值而非实现常量，避免自比对（改了实现常量测试仍须失败）
 BANNER_RED = '#B5273C'       # spec §5：对齐 gpxutil 印尼配置
@@ -149,6 +152,31 @@ def test_text_heights(shield_config):
     banner_h = max(_height(e) for e in _paths_with_fill(root, '#FFFFFF'))
     assert abs(number_h - NUMBER_TEXT_HEIGHT) <= 1
     assert abs(banner_h - BANNER_TEXT_HEIGHT) <= 1
+
+
+def test_char_spacing_from_advance(shield_config):
+    """水平步进使用 hmtx advance，保留字体默认左右留白"""
+    paths = calculate_centered_scaled_char_info(
+        '35', 100.0, 100.0, 50.0, shield_config['lower'])
+    _, first_maxx, _, _ = paths[0].bbox()
+    second_minx, _, _, _ = paths[1].bbox()
+    assert first_maxx < second_minx
+
+
+def test_chars_centered_on_given_point(shield_config):
+    """含空格文本按合成 bbox 视觉居中，而非按 advance 总宽居中"""
+    code = '3 5'
+    center_x, center_y, height = 200.0, 100.0, 50.0
+    paths = calculate_centered_scaled_char_info(
+        code, center_x, center_y, height, shield_config['lower'])
+    assert len(paths) == len(code)
+    minx = min(path.bbox()[0] for path in paths)
+    maxx = max(path.bbox()[1] for path in paths)
+    miny = min(path.bbox()[2] for path in paths)
+    maxy = max(path.bbox()[3] for path in paths)
+    assert abs((minx + maxx) / 2 - center_x) < 0.5
+    assert abs((miny + maxy) / 2 - center_y) < 0.5
+    assert abs((maxy - miny) - height) < 0.5
 
 
 def test_upper_text_centered_on_head(shield_config):

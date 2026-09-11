@@ -778,9 +778,10 @@ def calculate_centered_scaled_char_info(
     height: float, font: str,
 ) -> list:
     """
-    按固定高度缩放一段文字，水平居中于 center_x、垂直居中于 center_y（无额外字距）。
-    空格无字形轮廓：按字体 ascent 比例换算其 advance 宽度占位排版，生成占位 path
-    保持与字符一一对应（不绘制像素），保证与字形 path 同样的绘制流程。
+    按固定高度缩放一段文字，水平居中于 center_x、垂直居中于 center_y。
+    水平步进采用字体 hmtx 的 advance width（含字形左右留白），字距即字体默认排版，
+    不额外增减字距。空格无字形轮廓：按字体 ascent 比例换算其 advance 宽度占位排版，
+    生成占位 path 保持与字符一一对应（不绘制像素），保证与字形 path 同样的绘制流程。
 
     :param code: 文字（可为含空格文本，如 'NASIONAL 35'）
     :param center_x: 文字水平中心 x
@@ -792,46 +793,46 @@ def calculate_centered_scaled_char_info(
     """
     if not code:
         raise ValueError('文字为空，无法生成字形 path')
-    font_obj = None
-    space_scale = 0.0
-    space_advance = 0.0
-    scaled_char_path_list = []
-    scaled_char_width_list = []
+    font_obj = TTFont(font)
+    cmap = font_obj.getBestCmap()
+    hmtx = font_obj['hmtx']
+    # 字形按各自轮廓 bbox 高度缩放到 height，其纵向跨度约为基线到字帽高度；
+    # ascent 与该跨度同一量级，空格无轮廓，以 ascent 作统一纵向基准把
+    # advance（字面宽）换算到像素。近似值，勿按 bug 修改。
+    space_scale = height / font_obj['hhea'].ascent
+    # 空格占位：零长度退化 path（M 0,0h0），只占排版位置、不绘制像素
+    space_placeholder = parse_path('M 0,0h0')
+    char_info_list = []  # (缩放后字形 path, 缩放后 advance, 缩放后 ymin)
     for char in code:
+        advance = hmtx[cmap[ord(char)]][0]
         if char == ' ':
-            if font_obj is None:
-                font_obj = TTFont(font)
-                # 字形按各自轮廓 bbox 高度缩放到 height，其纵向跨度约为基线到字帽高度；
-                # ascent 与该跨度同一量级，空格无轮廓，以 ascent 作统一纵向基准把
-                # advance（字面宽）换算到像素。近似值，勿按 bug 修改。
-                space_scale = height / font_obj['hhea'].ascent
-                space_glyph = font_obj.getBestCmap()[ord(' ')]
-                space_advance = font_obj['hmtx'][space_glyph][0]
-            scaled_char_width_list.append(space_advance * space_scale)
-            scaled_char_path_list.append(None)
+            char_info_list.append((space_placeholder, advance * space_scale, 0.0))
             continue
         paths_char = char_to_svg_path(font, char)
         char_minx, char_maxx, char_miny, char_maxy = paths_char.bbox()
         char_height = char_maxy - char_miny
         ratio = height / char_height
+        # advance 与轮廓同为字体单位，按同一比例缩放；缩放后字形保留其 xMin 偏移
+        # （即字体 lsb），步进时左留白自然生效，右留白包含在 advance 内
         scaled_path_char = paths_char.scaled(ratio)
-        scaled_char_minx, scaled_char_maxx, scaled_char_miny, scaled_char_maxy = scaled_path_char.bbox()
-        scaled_char_width = scaled_char_maxx - scaled_char_minx
-        scaled_path_char = scaled_path_char.translated(complex(-scaled_char_minx, -scaled_char_miny))
-        scaled_char_width_list.append(scaled_char_width)
-        scaled_char_path_list.append(scaled_path_char)
+        scaled_miny = scaled_path_char.bbox()[2]
+        char_info_list.append((scaled_path_char, advance * ratio, scaled_miny))
 
-    total_width = reduce(lambda x, y: x + y, scaled_char_width_list)
-    start_x = center_x - total_width / 2
+    total_advance = sum(info[1] for info in char_info_list)
+    # 视觉居中：按合成 bbox（首字符左留白内缘到尾字符右留白内缘）居中，
+    # 而非 advance 总宽居中，避免首尾字符 lsb/rsb 不等造成整体偏移
+    first_minx = char_info_list[0][0].bbox()[0]
+    last_path, last_advance, _ = char_info_list[-1]
+    last_rsb = last_advance - last_path.bbox()[1]
+    start_x = center_x - (first_minx + total_advance - last_rsb) / 2
     start_y = center_y - height / 2
-    char_x = start_x
     result = []
-    for path, width in zip(scaled_char_path_list, scaled_char_width_list):
-        if path is None:
-            # 空格占位：零长度退化 path，只占排版位置、不绘制像素
-            path = parse_path('M 0,0h0')
-        result.append(path.translated(complex(char_x, start_y)))
-        char_x += width
+    char_x = start_x
+    for path, advance, scaled_miny in char_info_list:
+        # 水平方向：步进起点即字形坐标系原点（lsb 已含在字形自身坐标中）；
+        # 垂直方向：把缩放后字形顶部对齐 start_y
+        result.append(path.translated(complex(char_x, start_y - scaled_miny)))
+        char_x += advance
     return result
 
 
