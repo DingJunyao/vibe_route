@@ -211,14 +211,17 @@ export async function cancelBackendExport(taskId: string): Promise<void> {
  * 下载文件
  *
  * 通过 fetch → Blob → 同源 URL 触发下载：
- * - 后端返回的相对路径（如 /exports/...）需拼上后端 origin，
+ * - 后端返回的受保护下载路径需拼上后端 origin，
  *   否则经前端 dev server 会被 SPA fallback 返回 HTML
  * - 跨域 URL 的 download 属性无效，且异步回调中的新标签打开会被弹窗拦截，
  *   blob 方案同源且无需新窗口
  */
 export async function downloadFile(url: string, filename: string) {
   const fullUrl = url.startsWith('/') ? getBackendOrigin() + url : url
-  const response = await fetch(fullUrl)
+  const token = localStorage.getItem('token')
+  const response = await fetch(fullUrl, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+  })
   if (!response.ok) {
     throw new Error(`下载失败: HTTP ${response.status}`)
   }

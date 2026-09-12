@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from typing import Optional
 from fastapi import BackgroundTasks
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -133,6 +134,7 @@ class AnimationExportService:
                     await db.commit()
 
         except Exception as e:
+            logger.exception(f"Animation export failed for task {task_id}: {e}")
             # 更新为失败状态
             async with async_session_maker() as db:
                 result = await db.execute(
@@ -141,7 +143,7 @@ class AnimationExportService:
                 task = result.scalar_one_or_none()
                 if task:
                     task.status = 'failed'
-                    task.error = str(e)
+                    task.error = "导出失败"
                     await db.commit()
             raise
 

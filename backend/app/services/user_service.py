@@ -42,6 +42,7 @@ class UserService:
         password: str,
         is_admin: bool = False,
         created_by: int = None,
+        commit: bool = True,
     ) -> User:
         """创建用户，如果用户名或邮箱已被软删除用户占用，则复用该记录"""
         # 检查是否有已删除的用户使用相同的用户名或邮箱
@@ -67,8 +68,11 @@ class UserService:
             deleted_user.updated_by = created_by
             deleted_user.created_at = datetime.now(timezone.utc).replace(tzinfo=None)
             deleted_user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
-            await db.commit()
-            await db.refresh(deleted_user)
+            if commit:
+                await db.commit()
+                await db.refresh(deleted_user)
+            else:
+                await db.flush()
             return deleted_user
 
         # 创建新用户
@@ -82,8 +86,11 @@ class UserService:
             is_valid=True,
         )
         db.add(user)
-        await db.commit()
-        await db.refresh(user)
+        if commit:
+            await db.commit()
+            await db.refresh(user)
+        else:
+            await db.flush()
         return user
 
     async def authenticate(

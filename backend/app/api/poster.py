@@ -3,7 +3,7 @@
 """
 
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from PIL import Image, ImageDraw, ImageFont
@@ -11,12 +11,13 @@ import io
 from typing import Optional, List
 from datetime import datetime
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user_optional
 from app.core.database import get_db
 from app.core.config import settings
 from app.models.user import User
 from app.services.config_service import config_service
 from app.services.poster_service import poster_service
+from app.services.track_service import track_service
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
@@ -26,10 +27,10 @@ router = APIRouter()
 class PosterConfig(BaseModel):
     """海报配置"""
     template: str = Field(default="minimal", description="模板类型: minimal, simple, rich, geo")
-    width: int = Field(default=1920, description="海报宽度")
-    height: int = Field(default=1080, description="海报高度")
+    width: int = Field(default=1920, ge=100, le=7680, description="海报宽度")
+    height: int = Field(default=1080, ge=100, le=4320, description="海报高度")
     show_watermark: bool = Field(default=True, description="是否显示水印")
-    map_scale: int = Field(default=100, description="地图缩放百分比，100-200")
+    map_scale: int = Field(default=100, ge=100, le=200, description="地图缩放百分比，100-200")
 
 
 class TrackData(BaseModel):
@@ -160,11 +161,13 @@ async def get_providers(db: AsyncSession = Depends(get_db)):
 
 @router.post("/generate")
 async def generate_poster(
+    request: Request,
     config: PosterConfig,
     track: TrackData,
     bounds: MapBounds,
     provider: str = "amap",
-    current_user: User = Depends(get_current_user),
+    share_token: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -176,9 +179,24 @@ async def generate_poster(
     try:
         logger.info(f"开始生成海报: provider={provider}, template={config.template}, size={config.width}x{config.height}")
 
+        if share_token:
+            from app.services.share_service import share_service
+
+            shared_track = await share_service.get_shared_track(db, share_token)
+            if not shared_track or shared_track.id != track.track_id:
+                raise HTTPException(status_code=404, detail="轨迹不存在或无权访问")
+        else:
+            if current_user is None:
+                raise HTTPException(status_code=401, detail="缺少认证凭据")
+            owned_track = await track_service.get_by_id(
+                db, track.track_id, current_user.id
+            )
+            if not owned_track:
+                raise HTTPException(status_code=404, detail="轨迹不存在或无权访问")
+
         # 获取地图配置
         api_key, security_code = await get_map_config(db, provider)
-        logger.info(f"地图 API Key: {api_key[:10]}...")
+        logger.info("已加载海报地图配置")
 
         # 计算中心和缩放级别
         center_lat, center_lon = get_bounds_center(bounds)
@@ -188,13 +206,16 @@ async def generate_poster(
         # 使用 Playwright 访问专用地图页面并截图（在线程池中运行同步函数）
         logger.info("正在使用 Playwright 访问地图专用页面并截图...")
 
-        # 获取 poster secret（从环境变量或使用默认值）
-        poster_secret = getattr(settings, 'POSTER_SECRET', 'vibe-route-poster-secret')
+        auth_token = ""
+        if not share_token:
+            authorization = request.headers.get("authorization") or ""
+            scheme, _, credentials = authorization.partition(" ")
+            auth_token = credentials.strip() if scheme.lower() == "bearer" else ""
+            if not auth_token:
+                raise HTTPException(status_code=401, detail="缺少认证凭据")
 
         # 从请求数据中获取 track_id（前端已传递）
-        track_id = track.track_id if hasattr(track, 'track_id') else (
-            track.points[0].get('id', 1) if track.points else 1
-        )
+        track_id = track.track_id
 
         map_image_bytes = await asyncio.to_thread(
             poster_service.generate_map_image,
@@ -203,8 +224,9 @@ async def generate_poster(
             security_code=security_code,
             track_id=track_id,
             track_name=track.name,
-            base_url="http://localhost:5173",
-            poster_secret=poster_secret,
+            base_url=settings.FRONTEND_URL.rstrip('/'),
+            auth_token=auth_token,
+            share_token=share_token,
             map_scale=config.map_scale,
             width=config.width,
             height=config.height
@@ -298,6 +320,8 @@ async def generate_poster(
         logger.info("海报生成完成")
         return StreamingResponse(output, media_type="image/png")
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"海报生成失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"海报生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="海报生成失败")

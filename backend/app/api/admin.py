@@ -1054,7 +1054,7 @@ async def test_upload(
         logger.error(f"创建临时目录失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"无法创建临时目录: {e}"
+            detail="无法创建临时目录"
         )
 
     test_path = temp_dir / "test.bin"
@@ -1065,7 +1065,7 @@ async def test_upload(
         logger.error(f"保存文件失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"无法保存文件: {e}"
+            detail="无法保存文件"
         )
 
     # 清理
@@ -1127,7 +1127,7 @@ async def import_bounds_data(
         logger.error(f"[边界导入] 创建临时目录失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"无法创建临时目录: {e}"
+            detail="无法创建临时目录"
         )
 
     # 生成安全的文件名（防止路径遍历）
@@ -1177,7 +1177,7 @@ async def import_bounds_data(
         logger.error(f"[边界导入] 上传失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"上传失败: {str(e)}"
+            detail="上传失败"
         )
 
 
@@ -1286,7 +1286,7 @@ async def _process_bounds_import_task(
             await task_service.update_task(
                 db, task_id,
                 status="failed",
-                error_message=str(e)
+                error_message="任务执行失败"
             )
 
         finally:
@@ -1629,7 +1629,7 @@ async def _process_datav_import_task(
             await task_service.update_task(
                 db, task_id,
                 status="failed",
-                error_message=str(e)
+                error_message="任务执行失败"
             )
 
 
@@ -1702,7 +1702,7 @@ async def import_admin_divisions_upload(
         logger.error(f"[DataV上传导入] 上传失败: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"上传失败: {str(e)}"
+            detail="上传失败"
         )
 
 
@@ -1763,7 +1763,7 @@ async def _process_datav_upload_task(
             await task_service.update_task(
                 db, task_id,
                 status="failed",
-                error_message=str(e)
+                error_message="任务执行失败"
             )
 
         finally:
@@ -1975,6 +1975,6 @@ async def _process_postgis_sync_task(task_id: int):
             await task_service.update_task(
                 db, task_id,
                 status="failed",
-                error_message=str(e)
+                error_message="任务执行失败"
             )
 

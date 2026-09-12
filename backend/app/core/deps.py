@@ -88,6 +88,17 @@ async def get_current_user(
     return user
 
 
+async def get_current_user_optional(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Optional[User]:
+    """获取当前用户；未提供或无效凭据时返回 None。"""
+    try:
+        return await get_current_user(request, db)
+    except HTTPException:
+        return None
+
+
 async def get_current_active_user(
     current_user: User = Depends(get_current_user),
 ) -> User:

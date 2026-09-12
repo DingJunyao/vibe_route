@@ -1,0 +1,222 @@
+{
+  "completeness": "partial",
+  "deferred": [
+    {
+      "id": "deferred-kml-parser",
+      "paths": [
+        "backend/app/services/track_service.py"
+      ],
+      "reason": "KML uses lxml default parser options; safe flags and entity/resource limits need runtime validation."
+    },
+    {
+      "id": "deferred-archive-budgets",
+      "paths": [
+        "backend/app/utils/archive_helper.py",
+        "backend/app/api/admin.py"
+      ],
+      "reason": "Admin ZIP/RAR imports lack uncompressed-size and file-count budgets; dependency-specific traversal behavior was not fully established."
+    },
+    {
+      "id": "deferred-invite-race",
+      "paths": [
+        "backend/app/services/config_service.py",
+        "backend/app/api/auth.py"
+      ],
+      "reason": "Invite-code validation and consumption are separate transactions; concurrency behavior requires database-specific reproduction."
+    },
+    {
+      "id": "deferred-full-inventory",
+      "paths": [
+        "backend/alembic/**",
+        "backend/tests/**",
+        "frontend/src/views/**",
+        "docs/**"
+      ],
+      "reason": "The inventory contains 406 files; this pass fully covered the runtime authentication, authorization, storage, file, logging, and rendering paths but not every documentation, asset, migration, and test file."
+    }
+  ],
+  "documentType": "codex-security.coverage",
+  "excludePaths": [],
+  "explicitExclusions": [
+    {
+      "pattern": "frontend/node_modules/**",
+      "reason": "Third-party dependencies are excluded by repository ignore rules."
+    },
+    {
+      "pattern": ".git/**",
+      "reason": "Version-control metadata is not application source."
+    },
+    {
+      "pattern": ".venv/** and .conda/**",
+      "reason": "Local Python environments are not application source."
+    },
+    {
+      "pattern": "frontend/node_modules/**",
+      "reason": "Dependencies excluded by repository ignore rules."
+    },
+    {
+      "pattern": ".git/**",
+      "reason": "Version-control metadata excluded."
+    }
+  ],
+  "includePaths": [
+    "."
+  ],
+  "inventoryStrategy": "repository",
+  "mode": "repository",
+  "openQuestions": [
+    {
+      "question": "Which deployment platform serves the public font endpoint? Windows path semantics make the traversal directly reachable; Linux behavior differs."
+    },
+    {
+      "question": "Are provider-side origin, IP, quota, and scope restrictions configured for map and geocoding keys?"
+    },
+    {
+      "question": "Does the selected database serialize concurrent invite-code consumption strongly enough to prevent a max_uses bypass?"
+    },
+    {
+      "question": "Do deployed lxml/gpxpy versions enforce entity-expansion and external-entity limits consistently?"
+    }
+  ],
+  "scanId": "6243ba17-df1e-4094-a40b-51d1345b9799",
+  "schemaVersion": "1.0",
+  "surfaces": [
+    {
+      "disposition": "reported",
+      "id": "auth.jwt",
+      "label": "JWT issuance and verification",
+      "notes": "Fixed signing default and direct subject trust permit administrator token forgery.",
+      "receiptRefs": [],
+      "riskArea": "Authentication"
+    },
+    {
+      "disposition": "reported",
+      "id": "files.public-font",
+      "label": "Public font file serving",
+      "notes": "Unauthenticated Windows path traversal reaches arbitrary readable files.",
+      "receiptRefs": [],
+      "riskArea": "Path traversal"
+    },
+    {
+      "disposition": "reported",
+      "id": "secrets.poster",
+      "label": "Poster capability and public track reads",
+      "notes": "Default capability gates arbitrary track metadata and coordinate reads.",
+      "receiptRefs": [],
+      "riskArea": "Credentials and authorization"
+    },
+    {
+      "disposition": "reported",
+      "id": "web.stored-xss",
+      "label": "Shared-track map tooltips",
+      "notes": "Imported point fields reach innerHTML and vendor HTML APIs without encoding.",
+      "receiptRefs": [],
+      "riskArea": "Cross-site scripting"
+    },
+    {
+      "disposition": "reported",
+      "id": "web.reflected-xss",
+      "label": "Live-recording placeholder response",
+      "notes": "Unvalidated path token is reflected into executable HTML before lookup.",
+      "receiptRefs": [],
+      "riskArea": "Cross-site scripting"
+    },
+    {
+      "disposition": "reported",
+      "id": "authz.interpolation",
+      "label": "Interpolation ownership",
+      "notes": "Track and interpolation IDs are not bound to the caller.",
+      "receiptRefs": [],
+      "riskArea": "Broken object authorization"
+    },
+    {
+      "disposition": "reported",
+      "id": "authz.overlay-export",
+      "label": "Overlay export ownership",
+      "notes": "Track and template IDs are loaded without owner predicates before rendering.",
+      "receiptRefs": [],
+      "riskArea": "Broken object authorization"
+    },
+    {
+      "disposition": "reported",
+      "id": "authz.poster",
+      "label": "Poster generation ownership",
+      "notes": "Authenticated track_id is rendered with the server-held secret without ownership checks.",
+      "receiptRefs": [],
+      "riskArea": "Broken object authorization"
+    },
+    {
+      "disposition": "reported",
+      "id": "authz.templates",
+      "label": "Private overlay template visibility",
+      "notes": "Direct detail, preview, export, and duplicate routes bypass the list visibility policy.",
+      "receiptRefs": [],
+      "riskArea": "Broken object authorization"
+    },
+    {
+      "disposition": "reported",
+      "id": "logs.relay",
+      "label": "Debug log relay",
+      "notes": "Public POST/WS endpoints can relay full live-recording tokens from frontend logs.",
+      "receiptRefs": [],
+      "riskArea": "Sensitive data exposure"
+    },
+    {
+      "disposition": "reported",
+      "id": "files.exports",
+      "label": "Generated export storage",
+      "notes": "Static /exports is unauthenticated and filenames use predictable ID and timestamp components.",
+      "receiptRefs": [],
+      "riskArea": "Sensitive file exposure"
+    },
+    {
+      "disposition": "rejected",
+      "id": "upload.user-font",
+      "label": "User font upload path handling",
+      "notes": "The path write lacks basename normalization, but the current API omits the required is_admin argument and fails before writing.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "rejected",
+      "id": "share.token",
+      "label": "Share token generation",
+      "notes": "random.choices is not preferred, but practical prediction or brute force was not established; use secrets for hardening.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "config.public-map-keys",
+      "label": "Public map-layer configuration",
+      "notes": "Map keys are intended for browser SDKs; provider-side restrictions are external. Geocoding config is not public.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "no_issue_found",
+      "id": "database.sql",
+      "label": "SQL construction",
+      "notes": "Spatial queries use bound parameters; dynamic table names come from a fixed internal level map.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "needs_follow_up",
+      "id": "auth.invite-code",
+      "label": "Invite-code consumption",
+      "notes": "Separate validate and consume transactions may permit a max_uses race.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "needs_follow_up",
+      "id": "parsing.kml",
+      "label": "KML and XML parsing",
+      "notes": "Default lxml parser options should be hardened and tested.",
+      "receiptRefs": []
+    },
+    {
+      "disposition": "needs_follow_up",
+      "id": "upload.archives",
+      "label": "Administrative archive imports",
+      "notes": "Uncompressed-size and file-count budgets are absent; traversal behavior is dependency-specific.",
+      "receiptRefs": []
+    }
+  ]
+}

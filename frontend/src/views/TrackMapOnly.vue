@@ -30,8 +30,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import axios from 'axios'
-import { type Track, type TrackPoint } from '@/api/track'
+import { trackApi, type Track, type TrackPoint } from '@/api/track'
+import { sharedApi } from '@/api/shared'
 import { useConfigStore } from '@/stores/config'
 import UniversalMap from '@/components/map/UniversalMap.vue'
 
@@ -46,7 +46,7 @@ const mapRef = ref()
 
 // 从 URL 参数获取配置
 const provider = ref<string>((route.query.provider as string) || configStore.defaultMapLayer || 'osm')
-const posterSecret = ref<string>((route.query.secret as string) || '')
+const shareToken = ref<string>((route.query.share_token as string) || '')
 const mapScale = ref<number>(parseInt(route.query.map_scale as string) || 100)
 // 获取显式指定的尺寸（用于 iframe 预览/导出）
 const targetWidth = ref<number>(parseInt(route.query.width as string) || 0)
@@ -78,19 +78,19 @@ async function loadData() {
       throw new Error('无效的轨迹 ID')
     }
 
-    // 如果没有提供 secret，使用默认值
-    if (!posterSecret.value) {
-      posterSecret.value = 'vibe-route-poster-secret'
+    if (shareToken.value) {
+      const shared = await sharedApi.getSharedTrack(shareToken.value)
+      track.value = shared.track
+      points.value = shared.points
+    } else {
+      const [trackData, pointsData] = await Promise.all([
+        trackApi.getDetail(trackId),
+        trackApi.getPoints(trackId, 'wgs84'),
+      ])
+
+      track.value = trackData
+      points.value = pointsData.points
     }
-
-    // 使用公开 API（带 secret 验证）
-    const [trackRes, pointsRes] = await Promise.all([
-      axios.get(`/api/tracks/${trackId}/public?secret=${posterSecret.value}`),
-      axios.get(`/api/tracks/${trackId}/points/public?secret=${posterSecret.value}`),
-    ])
-
-    track.value = trackRes.data
-    points.value = pointsRes.data.points
 
     // 确保配置已加载，以便验证 provider 是否有效
     await nextTick()

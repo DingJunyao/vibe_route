@@ -167,16 +167,36 @@ async def upload_track(
             from io import BytesIO
 
             try:
+                from app.utils.archive_helper import (
+                    MAX_ARCHIVE_FILES,
+                    MAX_UNCOMPRESSED_BYTES,
+                )
+
                 with zipfile.ZipFile(BytesIO(content)) as zf:
-                    # 查找 KML 文件
-                    kml_files = [f for f in zf.namelist() if f.endswith('.kml')]
+                    infos = [info for info in zf.infolist() if not info.is_dir()]
+                    if len(infos) > MAX_ARCHIVE_FILES:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="KMZ 文件包含过多条目",
+                        )
+
+                    total_size = sum(info.file_size for info in infos)
+                    if total_size > MAX_UNCOMPRESSED_BYTES:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="KMZ 文件解压后体积过大",
+                        )
+
+                    kml_files = [
+                        info for info in infos
+                        if info.filename.lower().endswith('.kml')
+                    ]
                     if not kml_files:
                         raise HTTPException(
                             status_code=status.HTTP_400_BAD_REQUEST,
                             detail="KMZ 文件中没有找到 KML 文件",
                         )
 
-                    # 读取第一个 KML 文件
                     kml_content = zf.read(kml_files[0]).decode('utf-8')
             except zipfile.BadZipFile:
                 raise HTTPException(
@@ -218,6 +238,8 @@ async def upload_track(
                 fill_geocoding=fill_geocoding,
                 region=region,
             )
+    except HTTPException:
+        raise
     except ValueError as e:
         logger.error(f"ValueError in upload_track for user {current_user.id}: {e}", exc_info=True)
         raise HTTPException(
@@ -228,7 +250,7 @@ async def upload_track(
         logger.exception(f"Exception in upload_track for user {current_user.id}, file {file.filename}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"处理轨迹时出错: {str(e)}",
+            detail="处理轨迹时出错",
         )
 
     return TrackResponse.model_validate(track)
@@ -919,7 +941,7 @@ async def export_track_points(
         logger.exception(f"Export failed for track {track_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"导出失败: {str(e)}",
+            detail="导出失败",
         )
 
 
@@ -1000,45 +1022,26 @@ async def import_track_points(
         logger.exception(f"Import failed for track {track_id}, user {current_user.id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"导入失败: {str(e)}",
+            detail="导入失败",
         )
 
 
-# ========== 公开 API 端点（用于海报生成） ==========
-
-POSTER_SECRET = settings.POSTER_SECRET if hasattr(settings, 'POSTER_SECRET') else "vibe-route-poster-secret"
-
+# ========== 海报生成 API（仅轨迹所有者） ==========
 
 @router.get("/{track_id}/public", response_model=TrackResponse)
 async def get_track_public(
     track_id: int,
-    secret: str = Query(..., description="海报生成密钥"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    公开获取轨迹详情（用于海报生成）
+    获取用于海报生成的轨迹详情。
 
-    需要提供 poster secret 进行验证
-    只返回轨迹基本信息，不包含用户敏感信息
+    仅允许轨迹所有者访问。
     """
-    # 验证密钥
-    if secret != POSTER_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的海报生成密钥"
-        )
-
-    # 获取轨迹（跳过用户权限检查）
-    from app.models.track import Track
-    from sqlalchemy.orm import selectinload
-
-    query = (
-        select(Track)
-        .options(selectinload(Track.live_recordings))
-        .where(Track.id == track_id, Track.is_valid == True)
+    track = await track_service.get_by_id(
+        db, track_id, current_user.id, load_recording=True
     )
-    result = await db.execute(query)
-    track = result.scalar_one_or_none()
 
     if not track:
         raise HTTPException(
@@ -1081,44 +1084,23 @@ async def get_track_public(
 @router.get("/{track_id}/points/public")
 async def get_track_points_public(
     track_id: int,
-    secret: str = Query(..., description="海报生成密钥"),
+    current_user: User = Depends(get_current_user),
     crs: str = Query("wgs84", pattern="^(wgs84|gcj02|bd09)$"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    公开获取轨迹点数据（用于海报生成）
+    获取用于海报生成的轨迹点。
 
-    需要提供 poster secret 进行验证
-    返回所有坐标系数据，方便地图切换
+    仅允许轨迹所有者访问。
     """
-    # 验证密钥
-    if secret != POSTER_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的海报生成密钥"
-        )
-
-    # 获取轨迹点（跳过用户权限检查）
-    from app.models.track import Track, TrackPoint
-
-    # 先检查轨迹是否存在
-    track_result = await db.execute(
-        select(Track).where(Track.id == track_id, Track.is_valid == True)
-    )
-    track = track_result.scalar_one_or_none()
+    track = await track_service.get_by_id(db, track_id, current_user.id)
     if not track:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="轨迹不存在"
         )
 
-    # 获取轨迹点
-    result = await db.execute(
-        select(TrackPoint)
-        .where(TrackPoint.track_id == track_id, TrackPoint.is_valid == True)
-        .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())
-    )
-    points = result.scalars().all()
+    points = await track_service.get_points(db, track_id, current_user.id, crs)
 
     # 返回所有坐标系数据
     points_data = []

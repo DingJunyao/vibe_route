@@ -531,6 +531,7 @@
       :points="points"
       :regions="regionTree"
       :map-ref="mapRef"
+      :share-token="String(route.params.token)"
     />
   </div>
 </template>

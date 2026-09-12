@@ -5,7 +5,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from sqlalchemy import select, and_, update
+from sqlalchemy import select, and_, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config, InviteCode
@@ -388,16 +388,36 @@ class ConfigService:
             return False
         return invite_code.is_usable
 
-    async def use_invite_code(self, db: AsyncSession, code: str, user_id: int) -> bool:
-        """使用邀请码"""
-        invite_code = await self.get_invite_code(db, code)
-        if not invite_code or not invite_code.is_usable:
-            return False
-
-        invite_code.used_count += 1
-        invite_code.updated_by = user_id
-        await db.commit()
-        return True
+    async def use_invite_code(
+        self,
+        db: AsyncSession,
+        code: str,
+        user_id: int,
+        commit: bool = True,
+    ) -> bool:
+        """原子消费邀请码，防止并发请求绕过 max_uses。"""
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        stmt = (
+            update(InviteCode)
+            .where(
+                InviteCode.code == code,
+                InviteCode.is_valid == True,
+                InviteCode.used_count < InviteCode.max_uses,
+                or_(
+                    InviteCode.expires_at.is_(None),
+                    InviteCode.expires_at >= now,
+                ),
+            )
+            .values(
+                used_count=InviteCode.used_count + 1,
+                updated_by=user_id,
+                updated_at=now,
+            )
+        )
+        result = await db.execute(stmt)
+        if commit:
+            await db.commit()
+        return result.rowcount == 1
 
     async def get_invite_codes(
         self,

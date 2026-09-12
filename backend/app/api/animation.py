@@ -1,9 +1,12 @@
 # backend/app/api/animation.py
 
+from pathlib import Path
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ..core.config import settings
 from ..core.database import get_db
 from ..core.deps import get_current_user
 from ..models.user import User
@@ -41,7 +44,8 @@ async def export_animation(
 
     # 提取 token（供 Playwright 注入页面复用登录会话）
     authorization = req.headers.get("authorization") or ""
-    token = authorization.removeprefix("Bearer ").strip()
+    scheme, _, credentials = authorization.partition(" ")
+    token = credentials.strip() if scheme.lower() == "bearer" else ""
 
     service = AnimationExportService()
 
@@ -58,7 +62,7 @@ async def export_animation(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="导出失败")
 
 
 @router.get("/animation/export/{task_id}", response_model=AnimationExportTaskSchema)
@@ -83,12 +87,54 @@ async def get_export_progress(
     if task.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="无权访问此任务")
 
+    download_url = (
+        f"/api/animation/export/{task.id}/download"
+        if task.status == 'completed' and task.download_url
+        else None
+    )
     return AnimationExportTaskSchema(
         task_id=task.id,
         status=task.status,
         progress=task.progress,
-        download_url=task.download_url,
+        download_url=download_url,
         error=task.error,
+    )
+
+
+@router.get("/animation/export/{task_id}/download")
+async def download_export(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """下载任务结果文件，并校验任务所有权。"""
+    from ..models.animation_task import AnimationExportTask
+
+    result = await db.execute(
+        select(AnimationExportTask).where(AnimationExportTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权访问此任务")
+    if task.status != 'completed' or not task.download_url:
+        raise HTTPException(status_code=400, detail="任务未完成或无结果文件")
+
+    relative = task.download_url.replace('\\', '/').lstrip('/')
+    if relative.startswith('exports/'):
+        relative = relative[len('exports/'):]
+    export_root = Path(settings.EXPORT_DIR).resolve()
+    file_path = (export_root / relative).resolve()
+
+    if not file_path.is_relative_to(export_root) or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="结果文件不存在")
+
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type="video/webm",
     )
 
 

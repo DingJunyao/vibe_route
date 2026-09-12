@@ -40,7 +40,7 @@ async def get_available_segments(
         可用区段列表
     """
     segments = await interpolation_service.get_available_segments(
-        db, track_id, min_interval
+        db, track_id, min_interval, current_user.id
     )
     return segments
 
@@ -55,7 +55,9 @@ async def preview_interpolation(
     预览插值结果（不保存）
     """
     try:
-        return await interpolation_service.preview_interpolation(db, request)
+        return await interpolation_service.preview_interpolation(
+            db, request, current_user.id
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -87,7 +89,9 @@ async def get_track_interpolations(
     """
     获取轨迹的所有插值配置
     """
-    interpolations = await interpolation_service.get_track_interpolations(db, track_id)
+    interpolations = await interpolation_service.get_track_interpolations(
+        db, track_id, current_user.id
+    )
     return interpolations
 
 
@@ -101,7 +105,9 @@ async def delete_interpolation(
     删除插值配置及关联的插值点
     """
     try:
-        await interpolation_service.delete_interpolation(db, interpolation_id)
+        await interpolation_service.delete_interpolation(
+            db, interpolation_id, current_user.id
+        )
         return {"message": "插值已删除"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

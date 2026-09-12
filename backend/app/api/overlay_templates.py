@@ -27,6 +27,8 @@ from app.services.overlay_template_service import (
     OverlayTemplateService,
     FontService,
     OverlayExportService,
+    resolve_contained_path,
+    safe_font_basename,
 )
 
 router = APIRouter(prefix="/overlay-templates", tags=["覆盖层模板"])
@@ -62,7 +64,7 @@ async def get_template(
 ):
     """获取单个覆盖层模板"""
     service = OverlayTemplateService(db)
-    template = await service.get_template(template_id)
+    template = await service.get_template(template_id, current_user.id)
     if not template:
         raise HTTPException(status_code=404, detail="模板不存在")
     return template
@@ -128,7 +130,7 @@ async def export_template(
 ):
     """导出模板为 YAML"""
     service = OverlayTemplateService(db)
-    yaml_content = await service.export_template_yaml(template_id)
+    yaml_content = await service.export_template_yaml(template_id, current_user.id)
 
     return Response(
         content=yaml_content,
@@ -169,7 +171,7 @@ async def preview_template(
 ):
     """生成模板预览图（使用模板配置中的画布尺寸）"""
     service = OverlayTemplateService(db)
-    image_bytes = await service.generate_preview(template_id)
+    image_bytes = await service.generate_preview(template_id, current_user.id)
 
     return Response(
         content=image_bytes,
@@ -222,6 +224,7 @@ async def upload_font(
     service = FontService(db)
     return await service.upload_user_font(
         user_id=current_user.id,
+        is_admin=False,
         filename=file.filename,
         file_content=content
     )
@@ -244,44 +247,45 @@ async def get_font_file(
     font_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """获取字体文件（用于前端加载）- 无需认证，字体文件非敏感资源"""
+    """获取字体文件（仅允许字体根目录内的文件）- 无需认证，字体文件非敏感资源"""
     from app.models.overlay_template import Font
     from sqlalchemy import select
-    from pathlib import Path
 
     result = await db.execute(
         select(Font).where(Font.id == font_id)
     )
     font = result.scalar_one_or_none()
 
-    # 数据库中不存在，尝试从管理员字体目录（FONTS_DIR）读取
-    if not font:
-        if font_id.startswith('admin_'):
-            from app.core.config import settings
+    admin_fonts_dir = (Path(settings.ROAD_SIGN_DIR).parent / 'fonts').resolve()
+    user_fonts_dir = (Path(settings.UPLOAD_DIR) / 'fonts' / 'user').resolve()
 
-            # 从 font_id 提取文件名（去掉 'admin_' 前缀）
-            filename = font_id[6:]  # 去掉 'admin_' 前缀
-            admin_fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'
-
-            # 尝试添加常见的字体扩展名
-            for ext in ['.ttf', '.otf', '.ttc', '.woff2']:
-                font_path = admin_fonts_dir / (filename + ext)
-                if font_path.exists():
-                    return _serve_font_file(font_path)
-
-            # 如果都不存在，尝试直接用文件名
-            font_path = admin_fonts_dir / filename
-            if font_path.exists():
+    if font:
+        for root in (admin_fonts_dir, user_fonts_dir):
+            font_path = resolve_contained_path(root, Path(font.file_path))
+            if font_path and font_path.is_file():
                 return _serve_font_file(font_path)
-
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "字体不存在")
-
-    # 读取字体文件
-    font_path = Path(font.file_path)
-    if not font_path.exists():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "字体文件不存在")
 
-    return _serve_font_file(font_path)
+    # 数据库中不存在，尝试从管理员字体目录（FONTS_DIR）读取
+    if font_id.startswith('admin_'):
+        try:
+            filename = safe_font_basename(font_id[6:])
+        except HTTPException:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "字体不存在")
+
+        for ext in ['.ttf', '.otf', '.ttc', '.woff2']:
+            font_path = resolve_contained_path(
+                admin_fonts_dir,
+                admin_fonts_dir / f"{filename}{ext}",
+            )
+            if font_path and font_path.is_file():
+                return _serve_font_file(font_path)
+
+        font_path = resolve_contained_path(admin_fonts_dir, admin_fonts_dir / filename)
+        if font_path and font_path.is_file():
+            return _serve_font_file(font_path)
+
+    raise HTTPException(status.HTTP_404_NOT_FOUND, "字体不存在")
 
 
 def _serve_font_file(font_path: Path):
@@ -508,6 +512,7 @@ async def export_overlay(
         output_path, frame_count = await service.export_overlay_sequence(
             track_id=track_id,
             template_id=template_id,
+            user_id=current_user.id,
             frame_rate=frame_rate,
             start_index=start_index,
             end_index=end_index,
@@ -534,4 +539,4 @@ async def export_overlay(
         raise
     except Exception as e:
         logger.error(f"导出覆盖层失败: {str(e)}")
-        raise HTTPException(500, f"导出失败: {str(e)}")
+        raise HTTPException(500, "导出失败")

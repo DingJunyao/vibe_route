@@ -2,7 +2,8 @@
 实时记录相关 API 路由
 """
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Response, Body
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, Body
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -492,7 +493,7 @@ async def upload_to_recording(
         logger.exception(f"Exception in create_from_gpx for user {recording.user_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"处理轨迹时出错: {str(e)}",
+            detail="处理轨迹时出错",
         )
 
     # 更新记录的轨迹计数
@@ -552,24 +553,11 @@ async def log_track_point(
         # 在开发环境，前端地址是 localhost:5173
         # 在生产环境，需要根据实际情况调整
         # 这里我们返回一个简单的 HTML 页面，带有重定向
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="0; url=/live-recordings/log/{token}">
-            <script>
-                // 立即重定向到前端引导页面
-                window.location.href = '/live-recordings/log/{token}';
-            </script>
-        </head>
-        <body>
-            <p>正在跳转到配置页面...</p>
-            <p>如果没有跳转，请点击：<a href="/live-recordings/log/{token}">配置 GPS Logger</a></p>
-        </body>
-        </html>
-        """
-        return Response(content=html_content, media_type="text/html")
+        from urllib.parse import quote
+        return RedirectResponse(
+            url=f"/live-recordings/log/{quote(token, safe='')}",
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+        )
 
     # 正常处理：验证必需参数
     if lat is None:
@@ -685,5 +673,5 @@ async def log_track_point(
         logger.exception(f"Exception in add_point_to_recording for recording {recording_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"添加轨迹点时出错: {str(e)}",
+            detail="添加轨迹点时出错",
         )

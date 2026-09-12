@@ -152,6 +152,7 @@ class AnimationDOMOverlay {
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { escapeHtml } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
@@ -185,9 +186,9 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
   const needLoad: ParsedRoadNumber[] = []
 
   // 行政区划
-  if (point.province) parts.push(point.province)
-  if (point.city && point.city !== point.province) parts.push(point.city)
-  if (point.district) parts.push(point.district)
+  if (point.province) parts.push(escapeHtml(point.province))
+  if (point.city && point.city !== point.province) parts.push(escapeHtml(point.city))
+  if (point.district) parts.push(escapeHtml(point.district))
 
   // 道路信息
   const roadParts: string[] = []
@@ -204,11 +205,11 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
         if (svg) {
           signContents.push(`<span class="road-sign-inline">${svg}</span>`)
         } else {
-          signContents.push(num)
+          signContents.push(escapeHtml(num))
           needLoad.push(parsed)
         }
       } else {
-        signContents.push(num)
+        signContents.push(escapeHtml(num))
       }
     }
 
@@ -217,7 +218,7 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
     }
   }
   if (point.road_name) {
-    roadParts.push(point.road_name)
+    roadParts.push(escapeHtml(point.road_name))
   }
 
   if (roadParts.length > 0) {
@@ -1248,7 +1249,7 @@ function buildTrackTooltipHtml(track: Track, showHint: boolean): string {
 
   return `
     <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+      <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
       <div style="color: #666;">时间: ${formatTimeRange()}</div>
       <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
       <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>

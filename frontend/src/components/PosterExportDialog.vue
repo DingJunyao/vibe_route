@@ -163,14 +163,14 @@ interface Props {
   track: Track | null
   points: TrackPoint[]
   mapRef?: any
-  posterSecret?: string  // 海报访问密钥，用于构建地图链接
+  shareToken?: string
 }
 
 const props = withDefaults(defineProps<Props>(), {
   visible: false,
   points: () => [],
   mapRef: undefined,
-  posterSecret: '',
+  shareToken: '',
 })
 
 const emit = defineEmits<{
@@ -274,6 +274,9 @@ const mapOnlyUrl = computed(() => {
   const params = new URLSearchParams({
     provider,
   })
+  if (props.shareToken) {
+    params.set('share_token', props.shareToken)
+  }
   return `${baseUrl}?${params.toString()}`
 })
 
@@ -374,7 +377,6 @@ async function generatePosterFrontend(): Promise<void> {
   }
 
   const size = getSizeConfig()
-  const secret = props.posterSecret || 'vibe-route-poster-secret'
 
   const frontendConfig: FrontendPosterConfig = {
     template: config.value.template as any,
@@ -396,11 +398,11 @@ async function generatePosterFrontend(): Promise<void> {
     frontendConfig,
     props.track.id,
     provider,
-    secret,
     trackData,
     (stage, message, percent) => {
       progress.value = { stage, message, percent }
-    }
+    },
+    props.shareToken || undefined
   )
 
   // 下载图片
@@ -450,6 +452,7 @@ async function generatePosterBackend(): Promise<void> {
       max_lon: bounds.maxLon,
     },
     provider,
+    share_token: props.shareToken || undefined,
   }
 
   const blob = await generatePoster(request)
@@ -503,10 +506,15 @@ async function handlePreview(): Promise<void> {
     }
 
     const size = getSizeConfig()
-    const secret = props.posterSecret || 'vibe-route-poster-secret'
 
     // 创建 iframe 并加载地图
-    const iframe = await loadMapInIframe(props.track.id, provider, secret, config.value.mapScale, size)
+    const iframe = await loadMapInIframe(
+      props.track.id,
+      provider,
+      config.value.mapScale,
+      size,
+      props.shareToken || undefined
+    )
 
     try {
       // 等待地图就绪
@@ -550,9 +558,9 @@ async function handlePreview(): Promise<void> {
 async function loadMapInIframe(
   trackId: number,
   provider: string,
-  secret: string,
   mapScale: number,
-  size: { width: number; height: number }
+  size: { width: number; height: number },
+  shareToken?: string
 ): Promise<HTMLIFrameElement> {
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe')
@@ -565,7 +573,10 @@ async function loadMapInIframe(
 
     // 百度地图统一使用 Legacy 版本（非 WebGL，避免截图问题）
     const mapProvider = provider === 'baidu' ? 'baidu_legacy' : provider
-    const url = `/tracks/${trackId}/map-only?provider=${mapProvider}&secret=${secret}&map_scale=${mapScale}&width=${size.width}&height=${size.height}`
+    const shareParam = shareToken
+      ? `&share_token=${encodeURIComponent(shareToken)}`
+      : ''
+    const url = `/tracks/${trackId}/map-only?provider=${mapProvider}&map_scale=${mapScale}&width=${size.width}&height=${size.height}${shareParam}`
 
     // 超时处理
     const timeout = setTimeout(() => {

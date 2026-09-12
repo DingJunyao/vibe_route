@@ -2,13 +2,14 @@
 覆盖层模板管理服务
 """
 import os
+import uuid
 import yaml
 from typing import Optional, List
 from pathlib import Path
 from io import BytesIO
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from fastapi import HTTPException, UploadFile
 
 from app.models.overlay_template import OverlayTemplate, Font
@@ -23,6 +24,38 @@ from app.schemas.overlay_template import (
 )
 from app.services.overlay_renderer import OverlayRenderer, create_sample_point
 from app.core.config import settings
+
+
+def safe_font_basename(filename: str) -> str:
+    """Return a basename-only font identifier or reject unsafe input."""
+    name = Path(filename).name
+    if (
+        not name
+        or name in {'.', '..'}
+        or name != filename
+        or any(ch in filename for ch in ('/', '\\', '\x00'))
+    ):
+        raise HTTPException(400, "字体文件名无效")
+    return name
+
+
+def safe_font_filename(filename: str) -> str:
+    """Return a safe font filename with a supported extension."""
+    name = safe_font_basename(filename)
+    if Path(name).suffix.lower() not in {'.ttf', '.otf', '.ttc', '.woff2'}:
+        raise HTTPException(400, "只支持 TTF/OTF/TTC/WOFF2 格式")
+    return name
+
+
+def resolve_contained_path(root: str | Path, candidate: str | Path) -> Optional[Path]:
+    """Resolve candidate and return it only when it stays under root."""
+    try:
+        root_path = Path(root).resolve()
+        candidate_path = Path(candidate).resolve()
+        candidate_path.relative_to(root_path)
+        return candidate_path
+    except (OSError, ValueError):
+        return None
 
 
 class OverlayTemplateService:
@@ -50,11 +83,22 @@ class OverlayTemplateService:
         await self.db.refresh(template)
         return template
 
-    async def get_template(self, template_id: int) -> Optional[OverlayTemplate]:
-        """获取单个模板"""
+    async def get_template(
+        self,
+        template_id: int,
+        user_id: int,
+    ) -> Optional[OverlayTemplate]:
+        """获取当前用户可见的单个模板"""
         result = await self.db.execute(
-            select(OverlayTemplate)
-            .where(OverlayTemplate.id == template_id)
+            select(OverlayTemplate).where(
+                OverlayTemplate.id == template_id,
+                OverlayTemplate.is_valid == True,
+                or_(
+                    OverlayTemplate.is_system == True,
+                    OverlayTemplate.is_public == True,
+                    OverlayTemplate.user_id == user_id,
+                ),
+            )
         )
         return result.scalar_one_or_none()
 
@@ -95,7 +139,7 @@ class OverlayTemplateService:
         user_id: int
     ) -> Optional[OverlayTemplate]:
         """更新模板"""
-        template = await self.get_template(template_id)
+        template = await self.get_template(template_id, user_id)
         if not template:
             return None
 
@@ -122,7 +166,7 @@ class OverlayTemplateService:
 
     async def delete_template(self, template_id: int, user_id: int) -> bool:
         """删除模板（软删除）"""
-        template = await self.get_template(template_id)
+        template = await self.get_template(template_id, user_id)
         if not template:
             return False
 
@@ -143,7 +187,7 @@ class OverlayTemplateService:
         user_id: int
     ) -> OverlayTemplate:
         """复制模板"""
-        original = await self.get_template(template_id)
+        original = await self.get_template(template_id, user_id)
         if not original:
             raise HTTPException(404, "模板不存在")
 
@@ -161,9 +205,9 @@ class OverlayTemplateService:
         await self.db.refresh(template)
         return template
 
-    async def export_template_yaml(self, template_id: int) -> str:
+    async def export_template_yaml(self, template_id: int, user_id: int) -> str:
         """导出模板为 YAML"""
-        template = await self.get_template(template_id)
+        template = await self.get_template(template_id, user_id)
         if not template:
             raise HTTPException(404, "模板不存在")
 
@@ -226,10 +270,11 @@ class OverlayTemplateService:
 
     async def generate_preview(
         self,
-        template_id: int
+        template_id: int,
+        user_id: int
     ) -> bytes:
         """生成模板预览图（使用模板配置中的画布尺寸）"""
-        template = await self.get_template(template_id)
+        template = await self.get_template(template_id, user_id)
         if not template:
             raise HTTPException(404, "模板不存在")
 
@@ -513,6 +558,8 @@ class FontService:
         if not settings.overlay_allow_user_fonts:
             raise HTTPException(403, "用户字体上传功能已关闭")
 
+        filename = safe_font_filename(filename)
+
         # 管理员上传时 type='admin'，普通用户上传时 type='user'
         font_type = 'admin' if is_admin else 'user'
 
@@ -547,11 +594,15 @@ class FontService:
                 f"已达到存储空间上限 ({settings.overlay_max_user_fonts_size_mb}MB)"
             )
 
-        # 保存文件
-        upload_dir = Path(settings.UPLOAD_DIR) / "fonts" / "user"
+        # 保存文件：按用户隔离目录，避免同名覆盖其他用户的字体
+        upload_root = Path(settings.UPLOAD_DIR) / "fonts" / "user"
+        upload_dir = upload_root / str(user_id)
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = upload_dir / filename
+        file_path = resolve_contained_path(upload_dir, upload_dir / filename)
+        if file_path is None:
+            raise HTTPException(400, "字体文件路径无效")
+
         with open(file_path, 'wb') as f:
             f.write(file_content)
 
@@ -611,7 +662,7 @@ class FontService:
 
         # 创建字体记录
         font = Font(
-            id=f"user_{user_id}_{filename}",
+            id=f"user_{user_id}_{uuid.uuid4().hex}",
             name=font_name,
             filename=filename,
             type=font_type,
@@ -659,6 +710,7 @@ class OverlayExportService:
         self,
         track_id: int,
         template_id: int,
+        user_id: int,
         frame_rate: int,
         start_index: int,
         end_index: int,
@@ -671,17 +723,29 @@ class OverlayExportService:
         Returns:
             (output_path, frame_count)
         """
-        # 获取轨迹
+        # 获取轨迹并校验所有者
         track_result = await self.db.execute(
-            select(Track).where(Track.id == track_id)
+            select(Track).where(
+                Track.id == track_id,
+                Track.user_id == user_id,
+                Track.is_valid == True,
+            )
         )
         track = track_result.scalar_one_or_none()
         if not track:
             raise HTTPException(404, "轨迹不存在")
 
-        # 获取模板
+        # 获取当前用户可见的模板
         template_result = await self.db.execute(
-            select(OverlayTemplate).where(OverlayTemplate.id == template_id)
+            select(OverlayTemplate).where(
+                OverlayTemplate.id == template_id,
+                OverlayTemplate.is_valid == True,
+                or_(
+                    OverlayTemplate.is_system == True,
+                    OverlayTemplate.is_public == True,
+                    OverlayTemplate.user_id == user_id,
+                ),
+            )
         )
         template = template_result.scalar_one_or_none()
         if not template:

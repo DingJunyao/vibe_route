@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Optional
 from loguru import logger
 
+MAX_ARCHIVE_FILES = 10_000
+MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+
 # 尝试导入 rarfile（可选依赖）
 try:
     import rarfile
@@ -75,19 +78,28 @@ class ArchiveExtractor:
                 if password:
                     zf.setpassword(password.encode('utf-8'))
 
+                infos = [info for info in zf.infolist() if not info.is_dir()]
+                if len(infos) > MAX_ARCHIVE_FILES:
+                    raise RuntimeError(
+                        f"ZIP 文件包含过多条目（最多 {MAX_ARCHIVE_FILES} 个）"
+                    )
+                total_size = sum(info.file_size for info in infos)
+                if total_size > MAX_UNCOMPRESSED_BYTES:
+                    raise RuntimeError("ZIP 文件解压后体积过大")
+
                 # 检查是否有加密文件
-                for info in zf.infolist():
+                for info in infos:
                     if info.flag_bits & 0x1:  # 加密标志
                         if not password:
                             raise ValueError("ZIP 文件已加密，需要密码")
 
+                root = extract_to.resolve()
                 # 提取文件
-                for info in zf.infolist():
-                    # 跳过目录
-                    if info.is_dir():
-                        continue
+                for info in infos:
+                    target = (extract_to / info.filename).resolve()
+                    if not target.is_relative_to(root):
+                        raise RuntimeError("ZIP 文件包含不安全的路径")
 
-                    # 提取文件
                     extracted_path = zf.extract(info, extract_to)
                     extracted_files.append(str(extracted_path))
 
@@ -96,6 +108,8 @@ class ArchiveExtractor:
 
         except zipfile.BadZipFile as e:
             raise RuntimeError(f"无效的 ZIP 文件: {e}")
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(f"提取 ZIP 文件失败: {e}")
 
@@ -123,18 +137,28 @@ class ArchiveExtractor:
                 # 检查是否有 unrar 工具
                 try:
                     rf.namelist()  # 测试是否能读取
-                except Exception as e:
+                except Exception:
                     raise RuntimeError(
                         "无法读取 RAR 文件。请确保安装了 UnRAR 工具:\n"
                         "  Windows: https://www.rarlab.com/rar_add.htm\n"
                         "  Linux: sudo apt-get install unrar"
                     )
 
-                # 提取文件
+                infos = [info for info in rf.infolist() if not info.is_dir()]
+                if len(infos) > MAX_ARCHIVE_FILES:
+                    raise RuntimeError(
+                        f"RAR 文件包含过多条目（最多 {MAX_ARCHIVE_FILES} 个）"
+                    )
+                total_size = sum(info.file_size for info in infos)
+                if total_size > MAX_UNCOMPRESSED_BYTES:
+                    raise RuntimeError("RAR 文件解压后体积过大")
+
+                root = extract_to.resolve()
                 extracted_files = []
-                for info in rf.infolist():
-                    if info.is_dir():
-                        continue
+                for info in infos:
+                    target = (extract_to / info.filename).resolve()
+                    if not target.is_relative_to(root):
+                        raise RuntimeError("RAR 文件包含不安全的路径")
 
                     extracted_path = rf.extract(info, extract_to, pwd=password)
                     extracted_files.append(str(extracted_path))
@@ -142,6 +166,8 @@ class ArchiveExtractor:
                 logger.info(f"RAR 文件提取完成: {len(extracted_files)} 个文件")
                 return extracted_files
 
+        except RuntimeError:
+            raise
         except Exception as e:
             raise RuntimeError(f"提取 RAR 文件失败: {e}")
 

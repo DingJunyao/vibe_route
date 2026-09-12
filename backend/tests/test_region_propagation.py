@@ -12,10 +12,18 @@ import zipfile
 import pytest
 from fastapi import HTTPException, UploadFile
 
-from app.api import shared, tracks
+from app.api import live_recordings, overlay_templates, shared, tracks
 from app.models.live_recording import LiveRecording
+from app.models.overlay_template import OverlayTemplate
+from app.models.user import User
 from app.schemas.interpolation import InterpolationCreateRequest
+from app.services.config_service import config_service
 from app.services.interpolation_service import interpolation_service
+from app.services.overlay_template_service import (
+    OverlayTemplateService,
+    resolve_contained_path,
+    safe_font_basename,
+)
 from app.services.track_service import track_service
 from conftest import _db_env, _gpx, _track_points
 
@@ -342,7 +350,7 @@ class TestSerializationRegion:
                 )
                 # 该端点直接返回手工 dict（response_model 仅在 FastAPI 线上生效）
                 detail = await tracks.get_track_public(
-                    track.id, secret=tracks.POSTER_SECRET, db=db
+                    track.id, current_user=user, db=db
                 )
                 assert detail['region'] == 'id'
 
@@ -416,5 +424,158 @@ class TestInterpolationRegion:
                     interp = [p for p in await _track_points(db, track.id) if p.is_interpolated]
                     assert len(interp) == 5, f'10s 区段 / 2s 间隔应为 5 点，实际 {len(interp)}'
                     assert {p.region for p in interp} == {expected}
+
+        asyncio.run(case())
+
+
+class TestSecurityRegressions:
+    """Focused guards for the security remediation patch."""
+
+    def test_font_path_helpers_reject_traversal(self, workdir):
+        with pytest.raises(HTTPException):
+            safe_font_basename(r'..\..\.env')
+
+        root = workdir / 'fonts'
+        root.mkdir()
+        assert resolve_contained_path(root, root / '..' / '..' / '.env') is None
+
+    def test_public_font_endpoint_rejects_traversal(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, _):
+                with pytest.raises(HTTPException) as exc:
+                    await overlay_templates.get_font_file(
+                        r'admin_..\..\.env', db=db
+                    )
+                assert exc.value.status_code == 404
+
+        asyncio.run(case())
+
+    def test_public_track_requires_owner(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                track = await track_service.create_from_gpx(
+                    db, user, 't.gpx', _gpx(), 't'
+                )
+                other = User(
+                    username='other',
+                    email='other@example.com',
+                    hashed_password='x',
+                )
+                db.add(other)
+                await db.commit()
+                await db.refresh(other)
+
+                with pytest.raises(HTTPException) as exc:
+                    await tracks.get_track_public(
+                        track.id, current_user=other, db=db
+                    )
+                assert exc.value.status_code == 404
+
+        asyncio.run(case())
+
+    def test_interpolation_rejects_other_owner(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                track = await track_service.create_from_gpx(
+                    db, user, 't.gpx', _gpx(), 't'
+                )
+                other = User(
+                    username='other',
+                    email='other@example.com',
+                    hashed_password='x',
+                )
+                db.add(other)
+                await db.commit()
+                await db.refresh(other)
+
+                with pytest.raises(ValueError):
+                    await interpolation_service.get_available_segments(
+                        db, track.id, 3.0, other.id
+                    )
+
+        asyncio.run(case())
+
+    def test_private_template_hidden_from_other_user(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                other = User(
+                    username='other',
+                    email='other@example.com',
+                    hashed_password='x',
+                )
+                db.add(other)
+                await db.commit()
+                await db.refresh(other)
+
+                template = OverlayTemplate(
+                    name='private',
+                    description='',
+                    config={},
+                    user_id=user.id,
+                    is_public=False,
+                    is_system=False,
+                )
+                db.add(template)
+                await db.commit()
+                await db.refresh(template)
+
+                service = OverlayTemplateService(db)
+                assert await service.get_template(template.id, other.id) is None
+                assert await service.get_template(template.id, user.id) is not None
+
+        asyncio.run(case())
+
+    def test_kmz_rejects_uncompressed_budget(self, workdir, monkeypatch):
+        import zipfile
+        from app.utils import archive_helper
+
+        monkeypatch.setattr(archive_helper, "MAX_UNCOMPRESSED_BYTES", 10)
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("doc.kml", "<kml>" + ("x" * 1000) + "</kml>")
+        buffer.seek(0)
+
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                with pytest.raises(HTTPException) as exc:
+                    await tracks.upload_track(
+                        file=UploadFile(filename="x.kmz", file=buffer),
+                        name="x",
+                        current_user=user,
+                        db=db,
+                    )
+                assert exc.value.status_code == 400
+
+        asyncio.run(case())
+
+    def test_live_placeholder_redirect_encodes_token(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, _):
+                response = await live_recordings.log_track_point(
+                    token='x";alert(1)//',
+                    lat='%LAT',
+                    db=db,
+                )
+                assert response.status_code == 307
+                location = response.headers['location']
+                assert '"' not in location
+                assert '<' not in location
+                assert '%22' in location
+
+        asyncio.run(case())
+
+    def test_invite_code_cannot_exceed_max_uses(self, workdir):
+        async def case():
+            async with _db_env(workdir) as (db, user):
+                await config_service.create_invite_code(
+                    db, 'once', 1, user.id
+                )
+                assert await config_service.use_invite_code(
+                    db, 'once', user.id
+                ) is True
+                assert await config_service.use_invite_code(
+                    db, 'once', user.id
+                ) is False
 
         asyncio.run(case())

@@ -160,3 +160,15 @@ export function formatBearing(bearing: number | null): string {
   const index = Math.round(bearing / 45) % 8
   return directions[index]
 }
+
+/**
+ * Escape text before inserting it into an HTML fragment.
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}

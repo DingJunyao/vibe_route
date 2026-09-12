@@ -44,6 +44,7 @@ export interface PosterGenerateRequest {
   track: PosterTrackData
   bounds: MapBounds
   provider?: string
+  share_token?: string
 }
 
 export interface PosterProvidersResponse {
@@ -61,6 +62,9 @@ export async function generatePoster(request: PosterGenerateRequest): Promise<Bl
   const params = new URLSearchParams()
   if (request.provider) {
     params.append('provider', request.provider)
+  }
+  if (request.share_token) {
+    params.append('share_token', request.share_token)
   }
 
   const response = await http.post<Blob>(

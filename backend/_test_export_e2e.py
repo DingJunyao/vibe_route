@@ -72,7 +72,7 @@ async def main() -> int:
             return 1
 
         url = final["download_url"]
-        r = await client.get(f"http://localhost:8000{url}")
+        r = await client.get(f"http://localhost:8000{url}", headers=headers)
         print(f"download check: HTTP {r.status_code} size={len(r.content)} bytes")
         return 0 if (r.status_code == 200 and len(r.content) > 1000) else 1
 

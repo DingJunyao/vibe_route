@@ -3286,7 +3286,13 @@ class TrackService:
 
         # 解析 KML
         try:
-            root = etree.fromstring(kml_content.encode('utf-8'))
+            parser = etree.XMLParser(
+                resolve_entities=False,
+                load_dtd=False,
+                no_network=True,
+                huge_tree=False,
+            )
+            root = etree.fromstring(kml_content.encode('utf-8'), parser=parser)
         except etree.ParseError as e:
             raise ValueError(f"无法解析 KML 文件: {e}")
 

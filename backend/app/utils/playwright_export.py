@@ -72,7 +72,7 @@ async def capture_animation_video(
         progress_callback: 进度回调（0-100）
 
     Returns:
-        下载 URL（相对路径，如 /exports/animation/xxx.webm）
+        下载路径（相对于 EXPORT_DIR，例如 animation/xxx.webm）
     """
     if sys.platform == 'win32':
         return await asyncio.to_thread(
@@ -258,4 +258,4 @@ async def _capture_impl(
         if result.returncode == 0 and trimmed_path.exists() and trimmed_path.stat().st_size > 1000:
             trimmed_path.replace(final_path)
 
-    return f'/exports/animation/{filename}'
+    return f'animation/{filename}'

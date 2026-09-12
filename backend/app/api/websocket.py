@@ -2,7 +2,7 @@
 WebSocket API 路由
 用于实时推送轨迹更新
 """
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Set
 from loguru import logger
 import json
@@ -24,9 +24,14 @@ class LiveTrackManager:
         # WebSocket -> 最后心跳时间
         self.last_heartbeat: Dict[WebSocket, datetime] = {}
 
-    async def connect_to_recording(self, websocket: WebSocket, recording_id: int):
+    async def connect_to_recording(
+        self,
+        websocket: WebSocket,
+        recording_id: int,
+        subprotocol: str | None = None,
+    ):
         """连接到实时记录"""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         if recording_id not in self.recording_connections:
             self.recording_connections[recording_id] = set()
         self.recording_connections[recording_id].add(websocket)
@@ -36,9 +41,14 @@ class LiveTrackManager:
         # 启动心跳检查任务
         asyncio.create_task(self._check_heartbeat(websocket, recording_id, "recording"))
 
-    async def connect_to_track(self, websocket: WebSocket, track_id: int):
+    async def connect_to_track(
+        self,
+        websocket: WebSocket,
+        track_id: int,
+        subprotocol: str | None = None,
+    ):
         """连接到轨迹"""
-        await websocket.accept()
+        await websocket.accept(subprotocol=subprotocol)
         if track_id not in self.track_connections:
             self.track_connections[track_id] = set()
         self.track_connections[track_id].add(websocket)
@@ -170,11 +180,16 @@ live_track_manager = LiveTrackManager()
 router = APIRouter(tags=["websocket"])
 
 
+def _get_websocket_bearer_token(websocket: WebSocket) -> str | None:
+    protocol_header = websocket.headers.get("sec-websocket-protocol", "")
+    protocols = [part.strip() for part in protocol_header.split(",") if part.strip()]
+    return protocols[1] if len(protocols) >= 2 and protocols[0] == "bearer" else None
+
+
 @router.websocket("/ws/live-recording/{recording_id}")
 async def websocket_live_recording(
     websocket: WebSocket,
     recording_id: int,
-    token: str = Query(..., description="认证 token"),
 ):
     """
     WebSocket 端点 - 实时记录更新推送
@@ -201,6 +216,11 @@ async def websocket_live_recording(
     from app.core.database import async_session_maker
     from app.services.live_recording_service import live_recording_service
 
+    token = _get_websocket_bearer_token(websocket)
+    if not token:
+        await websocket.close(code=1008, reason="Invalid token")
+        return
+
     async with async_session_maker() as db:
         recording = await live_recording_service.get_by_token(db, token)
         if not recording:
@@ -216,7 +236,9 @@ async def websocket_live_recording(
             return
 
     # 连接到管理器
-    await live_track_manager.connect_to_recording(websocket, recording_id)
+    await live_track_manager.connect_to_recording(
+        websocket, recording_id, subprotocol="bearer"
+    )
 
     # 发送连接成功消息
     await websocket.send_json({
@@ -245,7 +267,6 @@ async def websocket_live_recording(
 async def websocket_track(
     websocket: WebSocket,
     track_id: int,
-    token: str = Query(..., description="认证 token"),
 ):
     """
     WebSocket 端点 - 轨迹更新推送
@@ -258,6 +279,11 @@ async def websocket_track(
     from app.services.live_recording_service import live_recording_service
     from app.services.user_service import user_service
     from app.core.security import decode_token
+
+    token = _get_websocket_bearer_token(websocket)
+    if not token:
+        await websocket.close(code=1008, reason="Invalid token")
+        return
 
     try:
         payload = decode_token(token)
@@ -285,7 +311,9 @@ async def websocket_track(
         return
 
     # 连接到管理器
-    await live_track_manager.connect_to_track(websocket, track_id)
+    await live_track_manager.connect_to_track(
+        websocket, track_id, subprotocol="bearer"
+    )
 
     # 发送连接成功消息
     await websocket.send_json({

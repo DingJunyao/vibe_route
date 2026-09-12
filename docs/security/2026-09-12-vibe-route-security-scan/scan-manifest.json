@@ -1,0 +1,116 @@
+{
+  "documentType": "codex-security.scan-manifest",
+  "scan": {
+    "artifacts": [
+      {
+        "mediaType": "application/json",
+        "path": "findings.json",
+        "sha256": "2000fa4f1e6a65864362e4634c8eb5d5d527c95a3d1cd46c3a97257b1f15442e"
+      },
+      {
+        "mediaType": "application/json",
+        "path": "coverage.json",
+        "sha256": "923bec9d27728c92205b6ff6c438346fa90d9897dbbf7532d216e3a3c3f2da15"
+      }
+    ],
+    "completedAt": "2026-09-12T06:28:38.418156Z",
+    "coverageRef": "coverage.json",
+    "findingsRef": "findings.json",
+    "id": "6243ba17-df1e-4094-a40b-51d1345b9799",
+    "preservedSources": {
+      "checkpoints/8cf1c92a0768d098906e8036c0979840411bdcce476908f5316b3b93c8bf5c08.json": "4dce952b31e5a9a0d161294eb11b4fc9a251a670fb005e725db62c47dd13c03e",
+      "checkpoints/e45fe923220c72efc58d9a82db3289c5d808428e285bd7158a0c6a3ba4169f06.json": "50898c2deef8ed8065475aee16f988e2a1fb5f66051e33b34edc26fdf98bb95f",
+      "checkpoints/e7169e32653fa025c8365d182bc8753999b4221ebc13183e2c54894d75d0ce5d.json": "e7169e32653fa025c8365d182bc8753999b4221ebc13183e2c54894d75d0ce5d"
+    },
+    "producer": {
+      "name": "codex-security-plugin",
+      "version": "0.1.24"
+    },
+    "scope": {
+      "artifactsReviewed": [
+        "backend/app/core/config.py",
+        "backend/app/core/security.py",
+        "backend/app/core/deps.py",
+        "backend/app/api/auth.py",
+        "backend/app/api/admin.py",
+        "backend/app/api/tracks.py",
+        "backend/app/api/live_recordings.py",
+        "backend/app/api/logs.py",
+        "backend/app/api/interpolation.py",
+        "backend/app/api/overlay_templates.py",
+        "backend/app/api/poster.py",
+        "backend/app/api/shared.py",
+        "backend/app/services/interpolation_service.py",
+        "backend/app/services/overlay_template_service.py",
+        "backend/app/services/poster_service.py",
+        "backend/app/services/share_service.py",
+        "backend/app/services/track_service.py",
+        "backend/app/utils/playwright_export.py",
+        "frontend/src/components/map/GoogleMap.vue",
+        "frontend/src/components/map/TencentMap.vue",
+        "frontend/src/components/map/LeafletMap.vue",
+        "frontend/src/components/map/AMap.vue",
+        "frontend/src/components/map/BMap.vue",
+        "frontend/src/views/SharedTrack.vue",
+        "frontend/src/views/TrackDetail.vue",
+        "frontend/src/views/TrackMapOnly.vue",
+        "deploy/nginx/default.conf.template"
+      ],
+      "context": "HTTP and HTTPS must both remain supported; HTTPS is not required. Services were reported running, but the scan remained offline and did not use supplied credentials.",
+      "excludePaths": [],
+      "includePaths": [
+        "."
+      ],
+      "limitations": [
+        "Repository inventory contains 406 files; remaining documentation, assets, migrations, and tests are deferred.",
+        "Runtime reproduction of parser, concurrency, and deployment-specific behavior was not performed.",
+        "Font traversal is directly validated for Windows path semantics and differs on Linux."
+      ],
+      "runtimeStatus": "Running services reported by the user; no runtime requests were sent.",
+      "summary": "Repository-wide source-backed scan of the Vue 3 frontend and FastAPI backend across authentication, authorization, files, exports, rendering, logging, and deployment configuration.",
+      "validationMode": "source-backed static analysis with independent baseline, architecture, and focused reviews plus limited offline framework and path checks"
+    },
+    "sealedAt": "2026-09-12T06:28:38.418156Z",
+    "startedAt": "2026-09-12T04:33:30.134393Z",
+    "status": "completed",
+    "target": {
+      "displayName": "vibe_route",
+      "kind": "git_revision",
+      "revision": "b53e45285cb9ecf82f10aef2ba824e24a86c8c1c",
+      "targetId": "target_sha256_30397640cfdfd8bb16e2b7f48080fab1f21d750873864d2ae4787625b3868889"
+    },
+    "threatModel": {
+      "assets": [
+        "JWT bearer tokens in localStorage. [frontend/src/stores/auth.ts:9-26]",
+        "User identities, password hashes, active/admin state, and invite codes. [backend/app/models/user.py:12-29]",
+        "Track metadata and point histories including coordinates, timestamps, elevation, speed, and road or region fields. [backend/app/models/track.py:15-115]",
+        "Share and live-recording capability tokens. [backend/app/models/track.py:45-47; backend/app/models/live_recording.py:12-31]",
+        "Generated animation and overlay artifacts. [backend/app/main.py:388-391]"
+      ],
+      "assumptions": [
+        "HTTP and HTTPS must remain compatible and HTTPS is not forced. [deploy/nginx/default.conf.template:7-10]",
+        "Windows and common Linux deployments differ in backslash path semantics."
+      ],
+      "attackerCapabilities": [
+        "Unauthenticated clients can reach public routes, submit logs, and attempt registration or login. [backend/app/api/auth.py:20-175; backend/app/api/logs.py:53-108]",
+        "Authenticated non-owners can target integer IDs unless object authorization is checked. [backend/app/services/track_service.py:159-176]",
+        "Share and live-recording token holders can access the scoped capabilities those tokens represent. [backend/app/api/shared.py:20-185; backend/app/api/live_recordings.py:389-429]"
+      ],
+      "securityObjectives": [
+        "JWT signing material must be deployment-specific and private. [backend/app/core/config.py:31; backend/app/core/security.py:44]",
+        "Private tracks, interpolation records, templates, and generated media must remain owner-scoped. [backend/app/services/track_service.py:159-176]",
+        "User-controlled metadata must be text-rendered or encoded before HTML insertion. [frontend/src/components/map/GoogleMap.vue:183-227]",
+        "File serving and generated exports must remain inside an authorized root with scoped access. [backend/app/main.py:388-391; backend/app/api/overlay_templates.py:242-284]",
+        "HTTP and HTTPS deployments must both remain supported. [deploy/nginx/default.conf.template:7-10]"
+      ],
+      "summary": "Vibe Route is a Vue 3/Vite SPA plus FastAPI/async-SQLAlchemy service for ingesting, storing, editing, visualizing, exporting, and sharing GPX/CSV/XLSX/KML/KMZ tracks. It uses bearer JWTs in localStorage, owner-scoped track APIs, public share and poster capability routes, live-recording upload tokens, generated media under /exports, and SQLite by default with optional MySQL/PostgreSQL. HTTP is supported and HTTPS is an external deployment option. [frontend/src/stores/auth.ts:9-26; backend/app/main.py:371-391; backend/app/core/config.py:36-95]",
+      "trustBoundaries": [
+        "Anonymous clients reach registration, login, public config, shared tracks, poster-secret reads, live-token reads, debug logs, and /exports. [backend/app/api/auth.py:20-175; backend/app/api/shared.py:20-185; backend/app/main.py:388-391]",
+        "Authenticated users cross owner-scoped APIs; normal track and animation paths check ownership, while interpolation, overlay export, and poster generation do not. [backend/app/services/track_service.py:159-176; backend/app/api/animation.py:31-40]",
+        "Admin authority is enforced by get_current_admin_user but depends on JWT integrity. [backend/app/core/deps.py:114-134]",
+        "Backend storage covers the database, uploads, exports, and logs under host and container mount ACLs. [Dockerfile:45-77; docker-compose.example.yml:28-30]"
+      ]
+    }
+  },
+  "schemaVersion": "1.0"
+}

@@ -164,7 +164,7 @@ async def generate_road_sign(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"Exception in generate_road_sign for {request.sign_type}/{request.code}")
-        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="生成失败")
 
 
 class RoadSignListItem(BaseModel):

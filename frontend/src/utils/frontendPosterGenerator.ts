@@ -29,25 +29,25 @@ export class FrontendPosterGenerator {
   private config: PosterConfig
   private trackId: number
   private provider: string
-  private posterSecret: string
   private trackData: TrackData
   private onProgress: PosterProgressCallback
+  private shareToken?: string
 
   constructor(
     config: PosterConfig,
     trackId: number,
     provider: string,
-    posterSecret: string,
     trackData: TrackData,
-    onProgress: PosterProgressCallback
+    onProgress: PosterProgressCallback,
+    shareToken?: string
   ) {
     this.config = config
     this.trackId = trackId
     // 百度地图统一使用 Legacy 版本（非 WebGL，避免截图问题）
     this.provider = provider === 'baidu' ? 'baidu_legacy' : provider
-    this.posterSecret = posterSecret
     this.trackData = trackData
     this.onProgress = onProgress
+    this.shareToken = shareToken || undefined
   }
 
   /**
@@ -102,7 +102,10 @@ export class FrontendPosterGenerator {
       iframe.style.zIndex = '-1'
 
       // 构建 URL（provider 已在构造函数中转换）
-      const url = `/tracks/${this.trackId}/map-only?provider=${this.provider}&secret=${this.posterSecret}&map_scale=${this.config.mapScale}&width=${this.config.width}&height=${this.config.height}`
+      const shareParam = this.shareToken
+        ? `&share_token=${encodeURIComponent(this.shareToken)}`
+        : ''
+      const url = `/tracks/${this.trackId}/map-only?provider=${this.provider}&map_scale=${this.config.mapScale}&width=${this.config.width}&height=${this.config.height}${shareParam}`
 
       iframe.onload = () => resolve(iframe)
       iframe.onerror = reject
@@ -377,17 +380,17 @@ export async function generateFrontendPoster(
   config: PosterConfig,
   trackId: number,
   provider: string,
-  posterSecret: string,
   trackData: TrackData,
-  onProgress: PosterProgressCallback
+  onProgress: PosterProgressCallback,
+  shareToken?: string
 ): Promise<Blob> {
   const generator = new FrontendPosterGenerator(
     config,
     trackId,
     provider,
-    posterSecret,
     trackData,
-    onProgress
+    onProgress,
+    shareToken
   )
   return generator.generate()
 }

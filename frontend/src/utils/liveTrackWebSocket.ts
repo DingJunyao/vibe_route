@@ -144,7 +144,7 @@ export class LiveTrackWebSocket {
       throw new Error('必须提供 recordingId 或 trackId')
     }
 
-    const wsUrl = `${wsOrigin}${path}?token=${this.token}`
+    const wsUrl = `${wsOrigin}${path}`
     debugLog('URL', `最终 WebSocket URL: ${wsUrl}`)
     return wsUrl
   }
@@ -162,7 +162,7 @@ export class LiveTrackWebSocket {
     debugLog('Connect', `开始连接, url=${this.url}`)
 
     try {
-      this.ws = new WebSocket(this.url)
+      this.ws = new WebSocket(this.url, ['bearer', this.token])
       debugLog('Connect', `WebSocket 对象已创建, readyState=${readyStateName(this.ws)}`)
 
       this.ws.onopen = (event) => {

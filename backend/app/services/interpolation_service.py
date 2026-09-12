@@ -32,11 +32,30 @@ logger = logging.getLogger(__name__)
 class InterpolationService:
     """插值服务"""
 
+    async def _require_owned_track(
+        self,
+        db: AsyncSession,
+        track_id: int,
+        user_id: int,
+    ) -> Track:
+        result = await db.execute(
+            select(Track).where(
+                Track.id == track_id,
+                Track.user_id == user_id,
+                Track.is_valid == True,
+            )
+        )
+        track = result.scalar_one_or_none()
+        if not track:
+            raise ValueError("轨迹不存在或无权访问")
+        return track
+
     async def get_available_segments(
         self,
         db: AsyncSession,
         track_id: int,
         min_interval_seconds: float,
+        user_id: int,
         ignore_interpolated: bool = True
     ) -> List[AvailableSegment]:
         """
@@ -51,6 +70,8 @@ class InterpolationService:
         Returns:
             可用区段列表（包含已插值区段）
         """
+        await self._require_owned_track(db, track_id, user_id)
+
         # 构建查询条件
         conditions = [
             TrackPoint.track_id == track_id,
@@ -170,11 +191,14 @@ class InterpolationService:
     async def preview_interpolation(
         self,
         db: AsyncSession,
-        request: InterpolationPreviewRequest
+        request: InterpolationPreviewRequest,
+        user_id: int,
     ) -> InterpolationPreviewResponse:
         """
         生成插值预览
         """
+        await self._require_owned_track(db, request.track_id, user_id)
+
         # 获取起点和终点
         start_point_result = await db.execute(
             select(TrackPoint).where(
@@ -324,9 +348,11 @@ class InterpolationService:
         Returns:
             插值响应
         """
+        await self._require_owned_track(db, track_id, user_id)
+
         # 1. 验证区段
         segments = await self.get_available_segments(
-            db, track_id, min_interval_seconds=3.0
+            db, track_id, min_interval_seconds=3.0, user_id=user_id
         )
         valid_segment = None
         for seg in segments:
@@ -345,7 +371,7 @@ class InterpolationService:
             control_points=request.control_points,
             interpolation_interval_seconds=request.interpolation_interval_seconds
         )
-        preview = await self.preview_interpolation(db, preview_request)
+        preview = await self.preview_interpolation(db, preview_request, user_id)
 
         # 3. 创建插值记录
         control_points_data = [cp.dict() for cp in request.control_points]
@@ -477,7 +503,8 @@ class InterpolationService:
     async def delete_interpolation(
         self,
         db: AsyncSession,
-        interpolation_id: int
+        interpolation_id: int,
+        user_id: int,
     ) -> bool:
         """
         删除插值配置及关联的插值点
@@ -489,10 +516,14 @@ class InterpolationService:
         Returns:
             是否成功删除
         """
-        # 获取插值记录
+        # 获取插值记录，并校验所属轨迹所有者
         result = await db.execute(
-            select(TrackInterpolation).where(
-                TrackInterpolation.id == interpolation_id
+            select(TrackInterpolation)
+            .join(Track, Track.id == TrackInterpolation.track_id)
+            .where(
+                TrackInterpolation.id == interpolation_id,
+                Track.user_id == user_id,
+                Track.is_valid == True,
             )
         )
         interpolation = result.scalar_one_or_none()
@@ -523,7 +554,8 @@ class InterpolationService:
     async def get_interpolation_by_id(
         self,
         db: AsyncSession,
-        interpolation_id: int
+        interpolation_id: int,
+        user_id: int,
     ) -> Optional[InterpolationResponse]:
         """
         获取插值配置详情
@@ -536,8 +568,12 @@ class InterpolationService:
             插值响应
         """
         result = await db.execute(
-            select(TrackInterpolation).where(
-                TrackInterpolation.id == interpolation_id
+            select(TrackInterpolation)
+            .join(Track, Track.id == TrackInterpolation.track_id)
+            .where(
+                TrackInterpolation.id == interpolation_id,
+                Track.user_id == user_id,
+                Track.is_valid == True,
             )
         )
         interpolation = result.scalar_one_or_none()
@@ -564,7 +600,8 @@ class InterpolationService:
     async def get_track_interpolations(
         self,
         db: AsyncSession,
-        track_id: int
+        track_id: int,
+        user_id: int,
     ) -> List[InterpolationResponse]:
         """
         获取轨迹的所有插值配置
@@ -576,6 +613,8 @@ class InterpolationService:
         Returns:
             插值响应列表
         """
+        await self._require_owned_track(db, track_id, user_id)
+
         result = await db.execute(
             select(TrackInterpolation)
             .where(

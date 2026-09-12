@@ -1,0 +1,1988 @@
+{
+  "documentType": "codex-security.findings",
+  "findings": [
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The forged token is accepted as the referenced active user and admin dependency grants administrative access.",
+          "sink": "jwt.decode and admin dependency",
+          "source": "attacker-controlled token claims",
+          "summary": "claims -> jwt.encode with known key -> jwt.decode -> sub claim -> active administrator"
+        },
+        "impact": {
+          "level": "critical",
+          "why": "Full administrator API access without credentials."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "The signing key is a repository default and the workspace does not replace it."
+        },
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "Bearer-token endpoints, especially /api/admin/*",
+          "outcome": "administrator impersonation"
+        },
+        "summary": "Forge a token for an active administrator using the fixed default signing key."
+      },
+      "codeEvidence": [
+        {
+          "code": "encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)\nreturn encoded_jwt\n\ndef decode_access_token(token: str) -> Optional[dict]:\n    try:\n        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])\n        return payload",
+          "explanation": "Signing and verification use the same settings secret; a fixed public default makes signatures forgeable.",
+          "id": "jwt-key",
+          "label": "JWT key usage",
+          "path": "backend/app/core/security.py",
+          "role": "sink",
+          "startLine": 44
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The signing path is direct and the workspace environment does not override the fixed default; user ID 1 is an active administrator."
+      },
+      "findingId": "csf_22289a4c495fccd351d9e1aa",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:b972426341bd96a6b1fe809d601348ee83eb1a10f8407b908c0512f802b41e22"
+      },
+      "identity": {
+        "anchor": "fixed-jwt-secret-permits-administrator-token-forgery"
+      },
+      "locations": [
+        {
+          "path": "backend/app/core/config.py",
+          "role": "root_control",
+          "startLine": 31
+        },
+        {
+          "path": "backend/app/core/security.py",
+          "role": "sink",
+          "startLine": 44
+        },
+        {
+          "path": "backend/app/core/deps.py",
+          "role": "propagation",
+          "startLine": 58
+        },
+        {
+          "path": "backend/.env.example",
+          "role": "evidence",
+          "startLine": 11
+        },
+        {
+          "path": "backend/.env",
+          "role": "evidence",
+          "startLine": 7
+        }
+      ],
+      "occurrenceId": "occ_4c987e033008201fcc7e2f15",
+      "preventiveControls": [
+        "Reject placeholder or low-entropy signing keys at startup.",
+        "Use key identifiers and issuer/audience validation for rotation."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Require a high-entropy deployment-specific signing key, fail closed when it is missing or unchanged from the placeholder, rotate the key, and invalidate tokens issued under the weak key.",
+      "remediationTests": [
+        "Startup fails for missing or placeholder SECRET_KEY.",
+        "Tokens signed with the old default are rejected after rotation."
+      ],
+      "rootCause": "JWT integrity depends entirely on settings.SECRET_KEY; the repository supplies a fixed fallback, the workspace does not override it, and any correctly signed sub claim is trusted as the user identity.",
+      "ruleId": "hardcoded-jwt-secret.admin-token-forgery",
+      "severity": {
+        "changeConditions": "Rotating to an unknown high-entropy key eliminates the finding.",
+        "level": "critical",
+        "rationale": "An unauthenticated attacker can forge an active administrator token and invoke the full admin API."
+      },
+      "summary": "The fixed default signing key permits an unauthenticated attacker to forge a valid administrator bearer token.",
+      "taxonomy": {
+        "category": "hard-coded cryptographic key",
+        "cwe": [
+          "CWE-321",
+          "CWE-798"
+        ]
+      },
+      "title": "Fixed JWT secret permits administrator token forgery",
+      "validation": {
+        "assertions": [
+          "Signing and verification both use settings.SECRET_KEY.",
+          "The workspace environment does not override the fixed default.",
+          "User ID 1 is an active administrator."
+        ],
+        "counterEvidence": [
+          "Documentation tells operators to change the key, but code does not enforce replacement."
+        ],
+        "limitations": [
+          "No live token was minted."
+        ],
+        "method": "source trace plus offline workspace verification",
+        "summary": "Source and workspace state establish a practical administrator-token forgery path."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The response contains an arbitrary readable file instead of a font.",
+          "sink": "open(source_path, 'rb')",
+          "source": "attacker-controlled font_id",
+          "summary": "font_id -> prefix stripping -> unvalidated Path join -> exists -> file read"
+        },
+        "impact": {
+          "level": "critical",
+          "why": "backend/.env and other readable secrets can be disclosed."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Windows Path interprets encoded backslashes as separators."
+        },
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "GET /api/overlay-templates/fonts/{font_id}/file",
+          "outcome": "arbitrary readable-file disclosure"
+        },
+        "summary": "Traverse out of the font directory on Windows using encoded backslashes and read an arbitrary readable file."
+      },
+      "codeEvidence": [
+        {
+          "code": "filename = font_id[6:]\nadmin_fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'\n\nfor ext in ['.ttf', '.otf', '.ttc', '.woff2']:\n    font_path = admin_fonts_dir / (filename + ext)\n    if font_path.exists():\n        return _serve_font_file(font_path)\n\nfont_path = admin_fonts_dir / filename\nif font_path.exists():\n    return _serve_font_file(font_path)",
+          "explanation": "The remaining client path is joined directly to the font root without basename normalization or containment checks.",
+          "id": "font-path",
+          "label": "Unvalidated font path",
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "root_control",
+          "startLine": 263
+        },
+        {
+          "code": "if content is None:\n    print(f\"DEBUG: Reading and converting source file: {source_path}\")\n    with open(source_path, 'rb') as f:\n        content = f.read()",
+          "explanation": "The resolved path is opened and returned as the response body.",
+          "id": "font-read",
+          "label": "Font file read",
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "sink",
+          "startLine": 329
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The public route, unvalidated join, and file read are direct source evidence; offline checks confirmed encoded backslashes match the route and Windows Path escapes the font directory."
+      },
+      "findingId": "csf_e609daa24578a53dbabf6185",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:590d1d4cad8ff2d9f32ccc1adce785e2b8714a2f29e6272d2e6966162833ae18"
+      },
+      "identity": {
+        "anchor": "public-font-endpoint-permits-arbitrary-file-read-on-windows",
+        "instance": "public-font-endpoint-permits-arbitrary-file-read-on-windows"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 242
+        },
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "root_control",
+          "startLine": 263
+        },
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "sink",
+          "startLine": 329
+        }
+      ],
+      "occurrenceId": "occ_e56b6d6e3a6b3d4447407c0d",
+      "preventiveControls": [
+        "Centralize file serving behind a containment check.",
+        "Accept only server-generated font identifiers, never path fragments."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Resolve and verify that the font path remains under the configured root, reject separators and parent components, and use server-generated IDs for public font files.",
+      "remediationTests": [
+        "Encoded backslash traversal cannot read backend/.env.",
+        "A legitimate font identifier still returns the font."
+      ],
+      "rootCause": "The public endpoint treats the remainder of font_id as a filesystem path. On Windows, encoded backslashes become separators, allowing parent components to escape the font root before the file is opened and returned.",
+      "ruleId": "path-traversal.public-font-file-read",
+      "severity": {
+        "changeConditions": "A Linux-only deployment reduces this variant; any platform with client-controlled path fragments remains affected.",
+        "level": "critical",
+        "rationale": "Unauthenticated file read can expose backend/.env, cryptographic keys, and database credentials on the current Windows deployment."
+      },
+      "summary": "The public font endpoint can read arbitrary files on Windows through an unvalidated font_id path.",
+      "taxonomy": {
+        "category": "path traversal",
+        "cwe": [
+          "CWE-22"
+        ]
+      },
+      "title": "Public font endpoint permits arbitrary file read on Windows",
+      "validation": {
+        "assertions": [
+          "The route has no authentication dependency.",
+          "Client input is joined without normalization.",
+          "The resolved path is read without containment checks."
+        ],
+        "counterEvidence": [
+          "Linux does not treat backslash as a path separator."
+        ],
+        "limitations": [
+          "No live request was sent."
+        ],
+        "method": "source trace plus offline path validation",
+        "summary": "Source and Windows path behavior establish an unauthenticated arbitrary file-read path."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The caller receives metadata and full coordinates for tracks it does not own.",
+          "sink": "public track and point response",
+          "source": "known poster secret plus sequential track_id",
+          "summary": "known default -> public endpoints -> query by track_id -> full track response"
+        },
+        "impact": {
+          "level": "high",
+          "why": "Full location histories, timestamps, elevation, owner IDs, and filenames can be enumerated."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "The secret has a public default and the endpoints lack ownership checks and rate limits."
+        },
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "GET /api/tracks/{track_id}/public and GET /api/tracks/{track_id}/points/public",
+          "outcome": "private track disclosure"
+        },
+        "summary": "Use the public default poster secret to enumerate IDs and read complete track metadata and coordinates."
+      },
+      "codeEvidence": [
+        {
+          "code": "if secret != POSTER_SECRET:\n    raise HTTPException(\n        status_code=status.HTTP_401_UNAUTHORIZED,\n        detail=\"\u65e0\u6548\u7684\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"\n    )\n\ntrack_result = await db.execute(\n    select(Track).where(Track.id == track_id, Track.is_valid == True)\n)\n...\nresult = await db.execute(\n    select(TrackPoint)\n    .where(TrackPoint.track_id == track_id, TrackPoint.is_valid == True)\n    .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())\n)",
+          "explanation": "The only authorization is equality with a global secret; the query then selects any valid track by attacker-controlled ID and returns its points.",
+          "id": "poster-check",
+          "label": "Poster secret gate",
+          "path": "backend/app/api/tracks.py",
+          "role": "sink",
+          "startLine": 1094
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The shared default, missing ownership check, and sequential IDs are directly established."
+      },
+      "findingId": "csf_41f2f900ce7ecf1bb6325a52",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:6042bb34b7480a022f57a0103a525c03ebce26cf905cb9d7208a4309b40c9efd"
+      },
+      "identity": {
+        "anchor": "public-poster-secret-exposes-arbitrary-private-tracks"
+      },
+      "locations": [
+        {
+          "path": "backend/app/core/config.py",
+          "role": "root_control",
+          "startLine": 95
+        },
+        {
+          "path": "backend/app/api/tracks.py",
+          "role": "entrypoint",
+          "startLine": 1012
+        },
+        {
+          "path": "backend/app/api/tracks.py",
+          "role": "sink",
+          "startLine": 1094
+        },
+        {
+          "path": "frontend/src/views/TrackMapOnly.vue",
+          "role": "evidence",
+          "startLine": 81
+        }
+      ],
+      "occurrenceId": "occ_161a8a33e312d40717dbf064",
+      "preventiveControls": [
+        "Use short-lived per-track signed capabilities.",
+        "Never embed a shared capability secret in browser fallbacks."
+      ],
+      "provenance": {
+        "previousFindings": [
+          {
+            "attackPath": {
+              "dataflow": {
+                "evidenceRefs": [
+                  "poster-public-check",
+                  "poster-points-no-auth"
+                ],
+                "outcome": "The caller receives metadata and full coordinates for a track it does not own.",
+                "sink": "public track metadata and track-point response",
+                "source": "attacker-controlled sequential `track_id` and the known poster secret",
+                "summary": "known default secret -> `/public` and `/points/public` -> query by sequential `track_id` -> response"
+              },
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "impact": {
+                "level": "high",
+                "why": "Full location histories, timestamps, elevation, owner IDs, and filenames can be enumerated without authentication."
+              },
+              "likelihood": {
+                "level": "high",
+                "why": "The secret has a fixed repository and frontend fallback, is absent from the environment example, and the endpoints are not rate-limited."
+              },
+              "limitations": [
+                "The finding depends on the deployed secret remaining the repository default; configuring a strong secret mitigates this specific bypass."
+              ],
+              "reachability": {
+                "attacker": "unauthenticated network client",
+                "entrypoint": "GET /api/tracks/{track_id}/public and GET /api/tracks/{track_id}/points/public",
+                "outcome": "private track disclosure"
+              },
+              "summary": "Anyone who knows the public default poster secret can enumerate sequential track IDs and read complete track metadata and coordinates."
+            },
+            "codeEvidence": [
+              {
+                "code": "@router.get(\"/{track_id}/public\", response_model=TrackResponse)\nasync def get_track_public(\n    track_id: int,\n    secret: str = Query(..., description=\"\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"),\n    db: AsyncSession = Depends(get_db),\n):\n    ...\n    if secret != POSTER_SECRET:\n        raise HTTPException(\n            status_code=status.HTTP_401_UNAUTHORIZED,\n            detail=\"\u65e0\u6548\u7684\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"\n        )",
+                "endLine": 1029,
+                "explanation": "The public route checks only string equality against a global secret and has no user or ownership dependency.",
+                "id": "poster-public-check",
+                "label": "Public metadata endpoint checks only the poster secret",
+                "path": "backend/app/api/tracks.py",
+                "role": "root_control",
+                "startLine": 1012
+              },
+              {
+                "code": "if secret != POSTER_SECRET:\n    raise HTTPException(\n        status_code=status.HTTP_401_UNAUTHORIZED,\n        detail=\"\u65e0\u6548\u7684\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"\n    )\n\ntrack_result = await db.execute(\n    select(Track).where(Track.id == track_id, Track.is_valid == True)\n)\ntrack = track_result.scalar_one_or_none()\nif not track:\n    raise HTTPException(\n        status_code=status.HTTP_404_NOT_FOUND,\n        detail=\"\u8f68\u8ff9\u4e0d\u5b58\u5728\"\n    )\n\nresult = await db.execute(\n    select(TrackPoint)\n    .where(TrackPoint.track_id == track_id, TrackPoint.is_valid == True)\n    .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())\n)",
+                "endLine": 1121,
+                "explanation": "After the secret check, the query selects any valid track by attacker-controlled ID and returns its points; the code explicitly skips user permission checks.",
+                "id": "poster-points-no-auth",
+                "label": "Public points endpoint skips ownership authorization",
+                "path": "backend/app/api/tracks.py",
+                "role": "sink",
+                "startLine": 1094
+              }
+            ],
+            "confidence": {
+              "level": "high",
+              "rationale": "The secret check, missing ownership check, sequential track ID, and workspace configuration that does not override the default are all directly established."
+            },
+            "extensions": {},
+            "identity": {
+              "anchor": "public-poster-secret-exposes-arbitrary-private-tracks"
+            },
+            "locations": [
+              {
+                "path": "backend/app/core/config.py",
+                "role": "root_control",
+                "startLine": 95
+              },
+              {
+                "endLine": 1029,
+                "path": "backend/app/api/tracks.py",
+                "role": "entrypoint",
+                "startLine": 1012
+              },
+              {
+                "endLine": 1121,
+                "path": "backend/app/api/tracks.py",
+                "role": "sink",
+                "startLine": 1094
+              },
+              {
+                "path": "frontend/src/views/TrackMapOnly.vue",
+                "role": "evidence",
+                "startLine": 81
+              },
+              {
+                "path": "backend/.env.example",
+                "role": "expected_control",
+                "startLine": 1
+              }
+            ],
+            "preventiveControls": [
+              "Issue short-lived, scoped signed poster tokens instead of using one global static secret.",
+              "Keep poster capability issuance on the authenticated server side and never embed capability values in browser source."
+            ],
+            "provenance": {
+              "source": "local_plugin"
+            },
+            "remediation": "Remove the shared static poster secret, authorize poster requests against the authenticated user or issue short-lived per-track capabilities, and rotate the current value. Never ship a production capability secret in frontend fallbacks.",
+            "remediationTests": [
+              "Assert an unauthenticated request with any static default cannot read any track.",
+              "Assert a token issued for one user and track is rejected for another user or track."
+            ],
+            "rootCause": {
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "summary": "The poster capability is a single shared value with a fixed default. The public endpoints skip normal ownership checks and trust possession of that value as sufficient authorization, while the frontend also falls back to the same value."
+            },
+            "ruleId": "hardcoded-poster-secret.track-disclosure",
+            "severity": {
+              "changeConditions": "Configuring an unknown high-entropy secret removes the default bypass, but the absence of per-track ownership checks would remain unless the endpoints are redesigned.",
+              "level": "high",
+              "rationale": "The disclosed data is precise private location history and the endpoint is unauthenticated, remotely reachable, and enumerable by sequential IDs.",
+              "scoringSystem": "CVSS:3.1"
+            },
+            "summary": "The public default poster secret is the only authorization check on endpoints that return arbitrary tracks and full coordinate sets.",
+            "taxonomy": {
+              "category": "hard-coded credential and broken object authorization",
+              "cwe": [
+                "CWE-798",
+                "CWE-639"
+              ]
+            },
+            "title": "Public poster secret exposes arbitrary private tracks",
+            "validation": {
+              "assertions": [
+                "The secret is a fixed repository default and is absent from the example environment file.",
+                "The workspace environment does not override the value.",
+                "The public endpoints query by track ID only and skip the normal ownership check."
+              ],
+              "counterEvidence": [
+                "An operator can manually configure a strong secret, but the repository does not require it and the frontend still contains a default fallback."
+              ],
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "limitations": [
+                "No live request was made; source and workspace configuration establish the bypass."
+              ],
+              "method": "source trace plus offline workspace verification",
+              "summary": "The default capability value is public and the endpoints authorize only by matching that value, not by the requesting user's ownership of the track."
+            }
+          },
+          {
+            "attackPath": {
+              "dataflow": {
+                "evidenceRefs": [
+                  "poster-public-check",
+                  "poster-points-no-auth"
+                ],
+                "outcome": "The caller receives metadata and full coordinates for a track it does not own.",
+                "sink": "public track metadata and track-point response",
+                "source": "attacker-controlled sequential `track_id` and the known poster secret",
+                "summary": "known default secret -> `/public` and `/points/public` -> query by sequential `track_id` -> response"
+              },
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "impact": {
+                "level": "high",
+                "why": "Full location histories, timestamps, elevation, owner IDs, and filenames can be enumerated without authentication."
+              },
+              "likelihood": {
+                "level": "high",
+                "why": "The secret has a fixed repository and frontend fallback, is absent from the environment example, and the endpoints are not rate-limited."
+              },
+              "limitations": [
+                "The finding depends on the deployed secret remaining the repository default; configuring a strong secret mitigates this specific bypass."
+              ],
+              "reachability": {
+                "attacker": "unauthenticated network client",
+                "entrypoint": "GET /api/tracks/{track_id}/public and GET /api/tracks/{track_id}/points/public",
+                "outcome": "private track disclosure"
+              },
+              "summary": "Anyone who knows the public default poster secret can enumerate sequential track IDs and read complete track metadata and coordinates."
+            },
+            "codeEvidence": [
+              {
+                "code": "@router.get(\"/{track_id}/public\", response_model=TrackResponse)\nasync def get_track_public(\n    track_id: int,\n    secret: str = Query(..., description=\"\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"),\n    db: AsyncSession = Depends(get_db),\n):\n    ...\n    if secret != POSTER_SECRET:\n        raise HTTPException(\n            status_code=status.HTTP_401_UNAUTHORIZED,\n            detail=\"\u65e0\u6548\u7684\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"\n        )",
+                "endLine": 1029,
+                "explanation": "The public route checks only string equality against a global secret and has no user or ownership dependency.",
+                "id": "poster-public-check",
+                "label": "Public metadata endpoint checks only the poster secret",
+                "path": "backend/app/api/tracks.py",
+                "role": "root_control",
+                "startLine": 1012
+              },
+              {
+                "code": "if secret != POSTER_SECRET:\n    raise HTTPException(\n        status_code=status.HTTP_401_UNAUTHORIZED,\n        detail=\"\u65e0\u6548\u7684\u6d77\u62a5\u751f\u6210\u5bc6\u94a5\"\n    )\n\ntrack_result = await db.execute(\n    select(Track).where(Track.id == track_id, Track.is_valid == True)\n)\ntrack = track_result.scalar_one_or_none()\nif not track:\n    raise HTTPException(\n        status_code=status.HTTP_404_NOT_FOUND,\n        detail=\"\u8f68\u8ff9\u4e0d\u5b58\u5728\"\n    )\n\nresult = await db.execute(\n    select(TrackPoint)\n    .where(TrackPoint.track_id == track_id, TrackPoint.is_valid == True)\n    .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())\n)",
+                "endLine": 1121,
+                "explanation": "After the secret check, the query selects any valid track by attacker-controlled ID and returns its points; the code explicitly skips user permission checks.",
+                "id": "poster-points-no-auth",
+                "label": "Public points endpoint skips ownership authorization",
+                "path": "backend/app/api/tracks.py",
+                "role": "sink",
+                "startLine": 1094
+              }
+            ],
+            "confidence": {
+              "level": "high",
+              "rationale": "The secret check, missing ownership check, sequential track ID, and workspace configuration that does not override the default are all directly established."
+            },
+            "extensions": {},
+            "locations": [
+              {
+                "path": "backend/app/core/config.py",
+                "role": "root_control",
+                "startLine": 95
+              },
+              {
+                "endLine": 1029,
+                "path": "backend/app/api/tracks.py",
+                "role": "entrypoint",
+                "startLine": 1012
+              },
+              {
+                "endLine": 1121,
+                "path": "backend/app/api/tracks.py",
+                "role": "sink",
+                "startLine": 1094
+              },
+              {
+                "path": "frontend/src/views/TrackMapOnly.vue",
+                "role": "evidence",
+                "startLine": 81
+              },
+              {
+                "path": "backend/.env.example",
+                "role": "expected_control",
+                "startLine": 1
+              }
+            ],
+            "preventiveControls": [
+              "Issue short-lived, scoped signed poster tokens instead of using one global static secret.",
+              "Keep poster capability issuance on the authenticated server side and never embed capability values in browser source."
+            ],
+            "provenance": {
+              "source": "local_plugin"
+            },
+            "remediation": "Remove the shared static poster secret, authorize poster requests against the authenticated user or issue short-lived per-track capabilities, and rotate the current value. Never ship a production capability secret in frontend fallbacks.",
+            "remediationTests": [
+              "Assert an unauthenticated request with any static default cannot read any track.",
+              "Assert a token issued for one user and track is rejected for another user or track."
+            ],
+            "rootCause": {
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "summary": "The poster capability is a single shared value with a fixed default. The public endpoints skip normal ownership checks and trust possession of that value as sufficient authorization, while the frontend also falls back to the same value."
+            },
+            "ruleId": "hardcoded-poster-secret.track-disclosure",
+            "severity": {
+              "changeConditions": "Configuring an unknown high-entropy secret removes the default bypass, but the absence of per-track ownership checks would remain unless the endpoints are redesigned.",
+              "level": "high",
+              "rationale": "The disclosed data is precise private location history and the endpoint is unauthenticated, remotely reachable, and enumerable by sequential IDs.",
+              "scoringSystem": "CVSS:3.1"
+            },
+            "summary": "The public default poster secret is the only authorization check on endpoints that return arbitrary tracks and full coordinate sets.",
+            "taxonomy": {
+              "category": "hard-coded credential and broken object authorization",
+              "cwe": [
+                "CWE-798",
+                "CWE-639"
+              ]
+            },
+            "title": "Public poster secret exposes arbitrary private tracks",
+            "validation": {
+              "assertions": [
+                "The secret is a fixed repository default and is absent from the example environment file.",
+                "The workspace environment does not override the value.",
+                "The public endpoints query by track ID only and skip the normal ownership check."
+              ],
+              "counterEvidence": [
+                "An operator can manually configure a strong secret, but the repository does not require it and the frontend still contains a default fallback."
+              ],
+              "evidenceRefs": [
+                "poster-public-check",
+                "poster-points-no-auth"
+              ],
+              "limitations": [
+                "No live request was made; source and workspace configuration establish the bypass."
+              ],
+              "method": "source trace plus offline workspace verification",
+              "summary": "The default capability value is public and the endpoints authorize only by matching that value, not by the requesting user's ownership of the track."
+            }
+          }
+        ],
+        "source": "local_plugin"
+      },
+      "remediation": "Remove the static poster secret, authorize reads against the user or a scoped per-track token, and rotate the current value.",
+      "remediationTests": [
+        "A static default cannot read any track.",
+        "A track-scoped token is rejected for another track or user."
+      ],
+      "rootCause": "One shared poster value is both capability and authorization. Public endpoints skip ownership checks, and the frontend contains a fallback to the same public default.",
+      "ruleId": "hardcoded-poster-secret.track-disclosure",
+      "severity": {
+        "changeConditions": "A strong configured secret removes the default bypass; per-track authorization remains required.",
+        "level": "high",
+        "rationale": "The endpoint discloses private location histories without authentication and is enumerable by sequential IDs."
+      },
+      "summary": "The public default poster secret exposes arbitrary track metadata and full coordinate sets.",
+      "taxonomy": {
+        "category": "hard-coded credential and broken object authorization",
+        "cwe": [
+          "CWE-798",
+          "CWE-639"
+        ]
+      },
+      "title": "Public poster secret exposes arbitrary private tracks",
+      "validation": {
+        "assertions": [
+          "The secret is a fixed repository default.",
+          "The workspace does not override it.",
+          "The endpoints query by track ID alone and skip ownership checks."
+        ],
+        "counterEvidence": [
+          "A manually configured strong secret mitigates the default-value path."
+        ],
+        "limitations": [
+          "No live request was made."
+        ],
+        "method": "source trace plus offline workspace verification",
+        "summary": "Source and workspace state establish the default capability bypass."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The browser executes attacker-controlled HTML in the origin and can read the localStorage JWT.",
+          "sink": "innerHTML and HTML-accepting map APIs",
+          "source": "attacker-controlled imported point fields",
+          "summary": "CSV/XLSX import -> TrackPoint fields -> public shared response -> tooltip HTML -> innerHTML"
+        },
+        "impact": {
+          "level": "high",
+          "why": "Same-origin script execution can steal the bearer token and act as the victim."
+        },
+        "likelihood": {
+          "level": "medium",
+          "why": "The victim must open the public link and hover or tap a point."
+        },
+        "reachability": {
+          "attacker": "authenticated track owner who enables sharing",
+          "entrypoint": "Public /s/{token} page",
+          "outcome": "same-origin script execution and token theft"
+        },
+        "summary": "Store HTML in imported point fields, enable sharing, and trigger execution when a victim hovers the shared track."
+      },
+      "codeEvidence": [
+        {
+          "code": "return {\n    id: track.value.id,\n    points: validPoints.map(p => ({\n      ...\n      province: p.province,\n      city: p.city,\n      district: p.district,\n      road_name: p.road_name,\n      road_number: p.road_number,\n    })),\n  }",
+          "explanation": "The public shared page copies raw point strings into the map object without encoding.",
+          "id": "shared-copy",
+          "label": "Shared point propagation",
+          "path": "frontend/src/views/SharedTrack.vue",
+          "role": "propagation",
+          "startLine": 650
+        },
+        {
+          "code": "if (point.province) parts.push(point.province)\nif (point.city && point.city !== point.province) parts.push(point.city)\nif (point.district) parts.push(point.district)\n...\nif (point.road_name) {\n  roadParts.push(point.road_name)\n}\n\nif (roadParts.length > 0) {\n  parts.push(roadParts.join(' '))\n}\n\nreturn { html: parts.join(' '), needLoad }",
+          "explanation": "Point fields are concatenated into an HTML string without escaping.",
+          "id": "tooltip-build",
+          "label": "Tooltip HTML construction",
+          "path": "frontend/src/components/map/GoogleMap.vue",
+          "role": "propagation",
+          "startLine": 183
+        },
+        {
+          "code": "<div style=\"color: #666;\">${locationResult.html ? `<div style=\"color: #666;\">${locationResult.html}</div>` : ''}</div>\n...\ncustomTooltip.value.innerHTML = htmlContent",
+          "explanation": "Generated HTML is assigned to innerHTML; equivalent sinks exist in GoogleMap, LeafletMap, AMap, and BMap.",
+          "id": "tooltip-sink",
+          "label": "Tooltip sink",
+          "path": "frontend/src/components/map/TencentMap.vue",
+          "role": "sink",
+          "startLine": 1154
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "Import, public response, field propagation, tooltip construction, and raw HTML sinks are all direct source paths with no sanitizer."
+      },
+      "findingId": "csf_7c977b196f888d6f9deff49e",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:eb7d24a2b3ed8547150f8615129e981c1165d3cd37dc00a84c9b6b76805d104f"
+      },
+      "identity": {
+        "anchor": "stored-xss-in-shared-track-map-tooltips"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/shared.py",
+          "role": "outcome",
+          "startLine": 63
+        },
+        {
+          "path": "frontend/src/views/SharedTrack.vue",
+          "role": "propagation",
+          "startLine": 650
+        },
+        {
+          "path": "frontend/src/components/map/GoogleMap.vue",
+          "role": "propagation",
+          "startLine": 183
+        },
+        {
+          "path": "frontend/src/components/map/TencentMap.vue",
+          "role": "sink",
+          "startLine": 1154
+        },
+        {
+          "path": "frontend/src/components/map/LeafletMap.vue",
+          "role": "sink",
+          "startLine": 2301
+        },
+        {
+          "path": "frontend/src/components/map/AMap.vue",
+          "role": "sink",
+          "startLine": 1021
+        },
+        {
+          "path": "frontend/src/components/map/BMap.vue",
+          "role": "sink",
+          "startLine": 906
+        }
+      ],
+      "occurrenceId": "occ_4cd9bc53a99f0511e7e7e64a",
+      "preventiveControls": [
+        "Build tooltips with text nodes or a context-aware HTML encoder.",
+        "Apply encoding to every map provider and asynchronous refresh path."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Encode or text-render all point-derived location fields before tooltip construction and remove raw innerHTML use for these values.",
+      "remediationTests": [
+        "An HTML element in a shared point renders as text.",
+        "The test passes for every map provider and hover path."
+      ],
+      "rootCause": "Imported point geography is stored and returned without encoding, then concatenated into HTML and written through innerHTML or vendor HTML APIs on a public page.",
+      "ruleId": "stored-xss.map-tooltip.location-fields",
+      "severity": {
+        "changeConditions": "A sanitizer or text-only rendering on every tooltip path removes the finding.",
+        "level": "high",
+        "rationale": "The payload is persistent, publicly linkable, and executes in an origin that stores the bearer JWT."
+      },
+      "summary": "A malicious track owner can persist HTML in imported point fields and execute script when a victim views the shared-track map tooltip.",
+      "taxonomy": {
+        "category": "stored cross-site scripting",
+        "cwe": [
+          "CWE-79"
+        ]
+      },
+      "title": "Stored XSS in shared-track map tooltips",
+      "validation": {
+        "assertions": [
+          "Imported point fields are returned by the public shared API.",
+          "They are copied without encoding.",
+          "Tooltip construction writes raw values to innerHTML."
+        ],
+        "counterEvidence": [
+          "The victim must hover or tap a point."
+        ],
+        "limitations": [
+          "No live browser payload was executed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes the persistent HTML-injection path."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The crafted token executes JavaScript in the application origin.",
+          "sink": "text/html response",
+          "source": "attacker-controlled token path segment",
+          "summary": "crafted token plus placeholder query -> raw interpolation -> text/html response"
+        },
+        "impact": {
+          "level": "high",
+          "why": "Same-origin script execution can steal the bearer JWT."
+        },
+        "likelihood": {
+          "level": "medium",
+          "why": "A crafted link must be delivered to a victim, but the route is unauthenticated and /api is same-origin in deployed configurations."
+        },
+        "reachability": {
+          "attacker": "unauthenticated link sender",
+          "entrypoint": "GET or POST /api/live-recordings/log/{token} with a placeholder query parameter",
+          "outcome": "reflected XSS and token theft"
+        },
+        "summary": "Send a crafted token and placeholder query value; the server reflects the token into executable HTML before validating it."
+      },
+      "codeEvidence": [
+        {
+          "code": "html_content = f\"\"\"\n<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n    <meta http-equiv=\"refresh\" content=\"0; url=/live-recordings/log/{token}\">\n    <script>\n        window.location.href = '/live-recordings/log/{token}';\n    </script>\n</head>\n...\nreturn Response(content=html_content, media_type=\"text/html\")",
+          "explanation": "The token is interpolated raw into URL, inline JavaScript, and attribute contexts before token validation.",
+          "id": "live-html",
+          "label": "Raw token reflection",
+          "path": "backend/app/api/live_recordings.py",
+          "role": "sink",
+          "startLine": 555
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The placeholder condition runs before lookup and the path token is interpolated without context-aware escaping."
+      },
+      "findingId": "csf_db7f87c8c4f03046d8d30b75",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:0923eb8503fa9b747678e951d62b8ab3200915a5317db8a60a2ab3d8e395c0ff"
+      },
+      "identity": {
+        "anchor": "reflected-xss-in-live-recording-placeholder-response"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/live_recordings.py",
+          "role": "sink",
+          "startLine": 544
+        },
+        {
+          "path": "backend/app/api/live_recordings.py",
+          "role": "expected_control",
+          "startLine": 645
+        },
+        {
+          "path": "deploy/nginx/default.conf.template",
+          "role": "propagation",
+          "startLine": 29
+        }
+      ],
+      "occurrenceId": "occ_971f1d9d46833aa2a9d8a8f7",
+      "preventiveControls": [
+        "Never interpolate user path values into inline JavaScript or HTML attributes.",
+        "Resolve tokens before rendering and return a fixed error page when invalid."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Remove raw token interpolation from the placeholder response, encode each output context separately, and carry the token only in a safely encoded redirect URL.",
+      "remediationTests": [
+        "A token containing quotes or script delimiters cannot alter the response structure.",
+        "An invalid token with a placeholder query does not execute script."
+      ],
+      "rootCause": "The placeholder branch checks query values before resolving the recording token, then substitutes the raw path token into URL, script, and attribute contexts in a text/html response.",
+      "ruleId": "reflected-xss.live-recording-log-token",
+      "severity": {
+        "changeConditions": "Moving token resolution before HTML construction or context-specific encoding removes the finding.",
+        "level": "high",
+        "rationale": "An unauthenticated crafted link can execute JavaScript in the origin that stores the bearer JWT."
+      },
+      "summary": "The unauthenticated GPS Logger redirect reflects an unvalidated token into executable HTML.",
+      "taxonomy": {
+        "category": "reflected cross-site scripting",
+        "cwe": [
+          "CWE-79"
+        ]
+      },
+      "title": "Reflected XSS in live-recording placeholder response",
+      "validation": {
+        "assertions": [
+          "The placeholder branch precedes token resolution.",
+          "The token is inserted into multiple executable contexts.",
+          "The response is text/html."
+        ],
+        "counterEvidence": [
+          "The attack requires a victim to open a crafted link."
+        ],
+        "limitations": [
+          "No live browser payload was executed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes a direct reflected-XSS path without a valid token."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The attacker reads, alters, or deletes another user's interpolation and point state.",
+          "sink": "TrackInterpolation and TrackPoint mutations",
+          "source": "attacker-controlled track_id or interpolation_id",
+          "summary": "authenticated request -> route -> service query by ID only -> read/mutate/delete"
+        },
+        "impact": {
+          "level": "high",
+          "why": "Cross-user metadata disclosure and track integrity corruption are possible."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Integer resource IDs are enumerable and no ownership check exists."
+        },
+        "reachability": {
+          "attacker": "authenticated non-owner",
+          "entrypoint": "GET/POST/DELETE /api/interpolation/*",
+          "outcome": "cross-user read and mutation"
+        },
+        "summary": "Supply another user's track or interpolation ID to read segments, preview coordinates, create interpolations, or delete records."
+      },
+      "codeEvidence": [
+        {
+          "code": "conditions = [\n    TrackPoint.track_id == track_id,\n    TrackPoint.is_valid == True\n]\n\nresult = await db.execute(\n    select(TrackPoint)\n    .where(and_(*conditions))\n    .order_by(TrackPoint.point_index)\n)\npoints = result.scalars().all()",
+          "explanation": "The service reads another track's points using only the caller-supplied track_id.",
+          "id": "interp-read",
+          "label": "Unscoped interpolation read",
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "root_control",
+          "startLine": 54
+        },
+        {
+          "code": "interpolation = TrackInterpolation(\n    track_id=track_id,\n    ...\n    created_by=user_id,\n    updated_by=user_id\n)\ndb.add(interpolation)\nawait db.flush()",
+          "explanation": "The caller identity is audit metadata only; the target track is never checked against the caller.",
+          "id": "interp-mutate",
+          "label": "Unscoped interpolation mutation",
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "sink",
+          "startLine": 350
+        },
+        {
+          "code": "result = await db.execute(\n    select(TrackInterpolation).where(\n        TrackInterpolation.id == interpolation_id\n    )\n)\ninterpolation = result.scalar_one_or_none()\n...\ninterpolation.is_valid = False\n\nfor point in interpolated_points:\n    point.is_valid = False",
+          "explanation": "The delete path selects by interpolation ID and mutates associated points without owner authorization.",
+          "id": "interp-delete",
+          "label": "Unscoped interpolation delete",
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "sink",
+          "startLine": 492
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "Every interpolation operation uses only the supplied resource ID and never resolves Track.user_id."
+      },
+      "findingId": "csf_1b2724cf691daaa861ff1bdb",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:486190cce8c599fb33bc49eb4a70632213d2f5ccb26ac51715a38e921bcd8d26"
+      },
+      "identity": {
+        "anchor": "interpolation-apis-allow-cross-user-track-reads-and-mutations"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/interpolation.py",
+          "role": "entrypoint",
+          "startLine": 25
+        },
+        {
+          "path": "backend/app/api/interpolation.py",
+          "role": "entrypoint",
+          "startLine": 63
+        },
+        {
+          "path": "backend/app/api/interpolation.py",
+          "role": "entrypoint",
+          "startLine": 94
+        },
+        {
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "root_control",
+          "startLine": 54
+        },
+        {
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "sink",
+          "startLine": 350
+        },
+        {
+          "path": "backend/app/services/interpolation_service.py",
+          "role": "sink",
+          "startLine": 492
+        }
+      ],
+      "occurrenceId": "occ_4c9e158717708d327991def8",
+      "preventiveControls": [
+        "Resolve every target track through a current-user-scoped helper.",
+        "Apply one shared object-authorization policy to sibling interpolation routes."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Require ownership of the target track before segment reads, previews, creation, or deletion and return 404 for non-owned resources.",
+      "remediationTests": [
+        "A second user's track ID returns no interpolation data.",
+        "A second user cannot create or delete interpolation state."
+      ],
+      "rootCause": "The route layer authenticates callers but passes resource IDs to a service that queries TrackPoint and TrackInterpolation by ID only, with no Track.user_id predicate.",
+      "ruleId": "idor.interpolation-track-operations",
+      "severity": {
+        "changeConditions": "Adding ownership predicates to all interpolation operations eliminates the finding.",
+        "level": "high",
+        "rationale": "A normal authenticated user can disclose private location metadata and corrupt another user's track sequence."
+      },
+      "summary": "Interpolation endpoints allow cross-user reads, coordinate previews, interpolation creation, and deletion.",
+      "taxonomy": {
+        "category": "broken object authorization",
+        "cwe": [
+          "CWE-639",
+          "CWE-862"
+        ]
+      },
+      "title": "Interpolation APIs allow cross-user track reads and mutations",
+      "validation": {
+        "assertions": [
+          "Routes require authentication.",
+          "Services query by track_id or interpolation_id only.",
+          "Create and delete mutate persisted rows."
+        ],
+        "counterEvidence": [
+          "The caller must supply an existing numeric ID."
+        ],
+        "limitations": [
+          "No live cross-user request was executed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes missing object authorization across the interpolation workflow."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The attacker receives rendered frames or a ZIP containing another user's track data.",
+          "sink": "rendered overlay image sequence",
+          "source": "attacker-controlled track_id and template_id",
+          "summary": "request -> export route -> load by ID -> load all points -> render"
+        },
+        "impact": {
+          "level": "high",
+          "why": "A custom template can render latitude, longitude, and other private point fields."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Track and template IDs are enumerable integer keys."
+        },
+        "reachability": {
+          "attacker": "authenticated non-owner",
+          "entrypoint": "POST /api/overlay-templates/tracks/{track_id}/export",
+          "outcome": "cross-user track rendering and disclosure"
+        },
+        "summary": "Supply another user's track and template IDs to render and receive their track data."
+      },
+      "codeEvidence": [
+        {
+          "code": "result = await db.execute(\n    select(Track).where(Track.id == track_id)\n)\ntrack = result.scalar_one_or_none()\n...\ntemplate_result = await db.execute(\n    select(OverlayTemplate).where(OverlayTemplate.id == template_id)\n)\ntemplate = template_result.scalar_one_or_none()",
+          "explanation": "Track and template lookups use only attacker-controlled IDs; ownership and visibility are not checked.",
+          "id": "overlay-load",
+          "label": "Unscoped overlay loading",
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "root_control",
+          "startLine": 674
+        },
+        {
+          "code": "points_result = await self.db.execute(\n    select(TrackPoint)\n    .where(TrackPoint.track_id == track_id)\n    .order_by(TrackPoint.time.asc(), TrackPoint.created_at.asc())\n)\nall_points = list(points_result.scalars().all())",
+          "explanation": "All points for the supplied track are loaded and rendered into returned media.",
+          "id": "overlay-render",
+          "label": "Track data rendering",
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "sink",
+          "startLine": 700
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The route passes attacker IDs to a service with no owner predicate, and the renderer can output coordinates."
+      },
+      "findingId": "csf_02543b1749290dcc1a9f01a6",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:e9320ee25faae98022642b5812311ac298f3d90ee78a713f6157377d82bb4ab8"
+      },
+      "identity": {
+        "anchor": "overlay-export-exposes-arbitrary-users-track-data"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 478
+        },
+        {
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "root_control",
+          "startLine": 674
+        },
+        {
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "sink",
+          "startLine": 700
+        }
+      ],
+      "occurrenceId": "occ_ed03cd367de72f844288e16b",
+      "preventiveControls": [
+        "Authorize track and template before loading rendering data.",
+        "Apply a shared owner-or-public template policy."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Require the authenticated user to own the target track and permit template use only when owned, public, or system-defined.",
+      "remediationTests": [
+        "A second user's track cannot export frames.",
+        "A private template from another user cannot be used."
+      ],
+      "rootCause": "The endpoint authenticates the caller but loads Track and OverlayTemplate by ID alone, then renders every point and returns the media.",
+      "ruleId": "idor.overlay-export-track-data",
+      "severity": {
+        "changeConditions": "Adding track and template ownership checks removes the finding.",
+        "level": "high",
+        "rationale": "The endpoint can reconstruct another user's private location history."
+      },
+      "summary": "Overlay export can request another user's track and private template by numeric ID.",
+      "taxonomy": {
+        "category": "broken object authorization",
+        "cwe": [
+          "CWE-639",
+          "CWE-862"
+        ]
+      },
+      "title": "Overlay export exposes arbitrary users' track data",
+      "validation": {
+        "assertions": [
+          "The route requires authentication.",
+          "The service selects track and template by ID only.",
+          "All points are rendered and returned."
+        ],
+        "counterEvidence": [
+          "A system or public template is shareable but does not authorize another user's track."
+        ],
+        "limitations": [
+          "No live export was performed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes a complete cross-user track rendering path."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The rendered poster can contain another user's actual track points.",
+          "sink": "Playwright screenshot returned to the caller",
+          "source": "authenticated caller's track_id",
+          "summary": "request -> poster route -> server-held secret -> map-only page -> public points -> screenshot"
+        },
+        "impact": {
+          "level": "high",
+          "why": "The caller obtains a visual disclosure of another user's route."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Any authenticated account can supply sequential track IDs."
+        },
+        "reachability": {
+          "attacker": "authenticated non-owner",
+          "entrypoint": "POST /api/poster/generate",
+          "outcome": "cross-user route disclosure"
+        },
+        "summary": "Send another user's track_id to the authenticated poster endpoint; the server supplies the capability secret and renders that track."
+      },
+      "codeEvidence": [
+        {
+          "code": "async def generate_poster(\n    config: PosterConfig,\n    track: TrackData,\n    bounds: MapBounds,\n    provider: str = \"amap\",\n    current_user: User = Depends(get_current_user),\n    db: AsyncSession = Depends(get_db)\n):\n    ...\n    track_id = track.track_id if hasattr(track, 'track_id') else (\n        track.points[0].get('id', 1) if track.points else 1\n    )\n\n    map_image_bytes = await asyncio.to_thread(\n        poster_service.generate_map_image,\n        ...\n        track_id=track_id,\n        ...\n        poster_secret=poster_secret,",
+          "explanation": "The route authenticates current_user but never authorizes track.track_id and injects the server poster secret on the caller's behalf.",
+          "id": "poster-route",
+          "label": "Poster route uses attacker track ID",
+          "path": "backend/app/api/poster.py",
+          "role": "root_control",
+          "startLine": 161
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The route's current_user is unused for authorization and downstream public endpoints skip ownership checks."
+      },
+      "findingId": "csf_190a64b2004be5361231ee91",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:93cc938362e68e60460effdf8bb1901424df1c52f3ee7ee9d154ece41a283bd4"
+      },
+      "identity": {
+        "anchor": "poster-generation-can-render-another-user-s-track"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/poster.py",
+          "role": "root_control",
+          "startLine": 161
+        },
+        {
+          "path": "backend/app/services/poster_service.py",
+          "role": "sink",
+          "startLine": 128
+        },
+        {
+          "path": "backend/app/api/tracks.py",
+          "role": "expected_control",
+          "startLine": 1094
+        }
+      ],
+      "occurrenceId": "occ_7923144fbedc8aaad02e76fa",
+      "preventiveControls": [
+        "Authorize every media generation request against the owning user.",
+        "Fetch points server-side under that authorization."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Reject poster requests when the requested track is not owned by current_user and render using data fetched under the same ownership check.",
+      "remediationTests": [
+        "A second user's track ID returns 403 or 404.",
+        "The poster uses only the authenticated owner's data."
+      ],
+      "rootCause": "The server-side poster route uses the caller-controlled track ID and the server secret to drive a public map page; authentication of the caller never authorizes the requested track.",
+      "ruleId": "idor.poster-generation-track-data",
+      "severity": {
+        "changeConditions": "Adding an owner check before generation removes the finding.",
+        "level": "high",
+        "rationale": "Authenticated users can obtain rendered private route data belonging to other accounts."
+      },
+      "summary": "An authenticated user can make the server render another user's track as a poster because generation never checks track ownership.",
+      "taxonomy": {
+        "category": "broken object authorization",
+        "cwe": [
+          "CWE-639",
+          "CWE-862"
+        ]
+      },
+      "title": "Poster generation can render another user's track",
+      "validation": {
+        "assertions": [
+          "The route requires a valid user but does not authorize track_id.",
+          "The supplied track_id reaches the map-only URL.",
+          "The public points endpoint skips ownership checks."
+        ],
+        "counterEvidence": [
+          "The server-held secret protects the internal flow but not the caller's right to the track."
+        ],
+        "limitations": [
+          "No live poster request was made."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes cross-user track rendering."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "The attacker can read, export, preview, or persistently clone another user's private template.",
+          "sink": "template response, YAML export, or cloned record",
+          "source": "attacker-controlled template_id",
+          "summary": "template_id -> ID-only lookup -> response/export/duplicate"
+        },
+        "impact": {
+          "level": "medium",
+          "why": "Private template configuration and reusable design data are disclosed."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Template IDs are sequential and direct routes require only authentication."
+        },
+        "reachability": {
+          "attacker": "authenticated non-owner",
+          "entrypoint": "GET/duplicate/export/preview /api/overlay-templates/{template_id}*",
+          "outcome": "private template disclosure"
+        },
+        "summary": "Enumerate template IDs and call detail, preview, export, or duplicate routes to access private templates."
+      },
+      "codeEvidence": [
+        {
+          "code": "result = await self.db.execute(\n    select(OverlayTemplate)\n    .where(OverlayTemplate.id == template_id)\n)\nreturn result.scalar_one_or_none()",
+          "explanation": "The shared lookup applies no user_id, is_public, or is_system predicate.",
+          "id": "template-lookup",
+          "label": "Visibility-blind template lookup",
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "root_control",
+          "startLine": 53
+        },
+        {
+          "code": "query = query.where(\n    (OverlayTemplate.is_system == True) |\n    (OverlayTemplate.is_public == True) |\n    (OverlayTemplate.user_id == user_id)\n)",
+          "explanation": "The list path documents the intended visibility policy that direct routes bypass.",
+          "id": "template-policy",
+          "label": "Intended visibility policy",
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "expected_control",
+          "startLine": 77
+        },
+        {
+          "code": "original = await self.get_template(template_id)\nif not original:\n    raise HTTPException(404, \"\u6a21\u677f\u4e0d\u5b58\u5728\")\n\ntemplate = OverlayTemplate(\n    name=f\"{original.name} (\u526f\u672c)\",\n    description=original.description,\n    config=original.config,\n    user_id=user_id,\n    is_public=False,\n    is_system=False,\n)",
+          "explanation": "The clone path copies any source template into the attacker's account without checking visibility.",
+          "id": "template-duplicate",
+          "label": "Unscoped template cloning",
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "sink",
+          "startLine": 145
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The direct lookup is visibility-blind and the list path proves the intended owner/public/system policy."
+      },
+      "findingId": "csf_16e0ae7676419914f31bc69a",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:28124ee4580d101a50a62fc081fc82c774aa9b40e7078cf7bbb303d68d9dc17e"
+      },
+      "identity": {
+        "anchor": "private-overlay-templates-are-exposed-by-direct-routes"
+      },
+      "locations": [
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 57
+        },
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 108
+        },
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 123
+        },
+        {
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 164
+        },
+        {
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "root_control",
+          "startLine": 53
+        },
+        {
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "expected_control",
+          "startLine": 77
+        },
+        {
+          "path": "backend/app/services/overlay_template_service.py",
+          "role": "sink",
+          "startLine": 145
+        }
+      ],
+      "occurrenceId": "occ_982225edf7c0aa8255a77d7b",
+      "preventiveControls": [
+        "Use one policy-aware lookup for every template read, export, preview, and clone.",
+        "Keep private templates accessible only through the owner-scoped list query."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Apply owner-or-public/system visibility checks before returning, rendering, exporting, or cloning any overlay template.",
+      "remediationTests": [
+        "A non-owner receives 404 or 403 for a private template.",
+        "Public and system templates remain cloneable."
+      ],
+      "rootCause": "The common template lookup filters only by ID. Direct detail, export, preview, and clone operations reuse it, bypassing the list query's owner-or-public-or-system policy.",
+      "ruleId": "idor.private-overlay-template-read",
+      "severity": {
+        "changeConditions": "Applying the list visibility policy to all direct template routes removes the finding.",
+        "level": "medium",
+        "rationale": "Private design configuration is exposed and can be persistently copied, though it is less sensitive than track data."
+      },
+      "summary": "Authenticated users can read, preview, export, or clone another user's private overlay templates by ID.",
+      "taxonomy": {
+        "category": "broken object authorization",
+        "cwe": [
+          "CWE-639",
+          "CWE-862"
+        ]
+      },
+      "title": "Private overlay templates are exposed by direct routes",
+      "validation": {
+        "assertions": [
+          "Detail, export, and preview use the ID-only lookup.",
+          "Duplicate copies any source config into the caller's account."
+        ],
+        "counterEvidence": [
+          "System and public templates are intentionally shared; private non-owner templates are not."
+        ],
+        "limitations": [
+          "No live template request was made."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes a complete bypass of the intended template visibility policy."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "A listener captures an active live-recording token and can inject track points.",
+          "sink": "unauthorized live-recording upload",
+          "source": "full token in a frontend console log",
+          "summary": "remote logging -> full token log -> POST /api/logs -> unauthenticated WS broadcast -> token capture"
+        },
+        "impact": {
+          "level": "medium",
+          "why": "Captured active tokens permit unauthenticated point injection."
+        },
+        "likelihood": {
+          "level": "medium",
+          "why": "Remote logging must be enabled and a live recording must be active, but the listener is unauthenticated."
+        },
+        "reachability": {
+          "attacker": "unauthenticated network listener",
+          "entrypoint": "POST /api/logs and WebSocket /api/ws/logs",
+          "outcome": "live-token theft and data injection"
+        },
+        "summary": "Listen to the unauthenticated log relay while a live-recording page logs its full token-bearing URL."
+      },
+      "codeEvidence": [
+        {
+          "code": "console.log(`[LiveUpdate] token=${token.substring(0, 16)}...`)\nconsole.log(`[LiveUpdate] \u9884\u671f WebSocket URL: ${wsOrigin}/api/ws/live-recording/${recordingId}?token=${token}`)",
+          "explanation": "The frontend logs the full token-bearing WebSocket URL; remote logging forwards console calls to the backend relay.",
+          "id": "token-log",
+          "label": "Full token logging",
+          "path": "frontend/src/views/TrackDetail.vue",
+          "role": "source",
+          "startLine": 2860
+        },
+        {
+          "code": "await manager.broadcast({\n    \"type\": \"log\",\n    \"data\": entry.model_dump()\n})\n\nreturn JSONResponse(content={\"status\": \"ok\"})",
+          "explanation": "The log receiver has no authentication dependency and broadcasts client messages to every viewer.",
+          "id": "log-broadcast",
+          "label": "Unauthenticated log broadcast",
+          "path": "backend/app/api/logs.py",
+          "role": "sink",
+          "startLine": 67
+        },
+        {
+          "code": "@router.websocket(\"/ws/logs\")\nasync def websocket_logs(websocket: WebSocket):\n    await manager.connect(websocket)",
+          "explanation": "Any client can connect and receive broadcast logs.",
+          "id": "log-websocket",
+          "label": "Unauthenticated log viewer",
+          "path": "backend/app/api/logs.py",
+          "role": "sink",
+          "startLine": 81
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "Full token logging, unauthenticated POST broadcast, and unauthenticated WebSocket receive are direct source paths."
+      },
+      "findingId": "csf_320dd304f138d464e67834c8",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:f4980c3171b600946213a0f36f47405e0a96841e3beef10a948bad5bda0bc852"
+      },
+      "identity": {
+        "anchor": "unauthenticated-log-relay-leaks-live-recording-tokens"
+      },
+      "locations": [
+        {
+          "path": "frontend/src/views/TrackDetail.vue",
+          "role": "source",
+          "startLine": 2858
+        },
+        {
+          "path": "backend/app/api/logs.py",
+          "role": "sink",
+          "startLine": 53
+        },
+        {
+          "path": "backend/app/api/logs.py",
+          "role": "sink",
+          "startLine": 81
+        }
+      ],
+      "occurrenceId": "occ_369e869579a5c5b88ecac39a",
+      "preventiveControls": [
+        "Never log capability tokens or token-bearing URLs.",
+        "Authenticate and environment-gate log ingestion and viewing."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Redact capability tokens and require authenticated access to log ingestion and viewing; disable the relay outside explicit development use.",
+      "remediationTests": [
+        "Token-bearing URLs never appear in logs.",
+        "Unauthenticated clients cannot post or read debug logs."
+      ],
+      "rootCause": "The frontend logs the full live-recording WebSocket URL while the backend log relay accepts and broadcasts messages without authentication, exposing the token to any listener.",
+      "ruleId": "sensitive-data-exposure.log-relay-live-token",
+      "severity": {
+        "changeConditions": "Token redaction or authenticated log transport removes the finding.",
+        "level": "medium",
+        "rationale": "Token theft enables unauthorized injection into an active recording but requires remote logging and an active session."
+      },
+      "summary": "The unauthenticated debug log relay can expose full live-recording tokens.",
+      "taxonomy": {
+        "category": "sensitive credential exposure",
+        "cwe": [
+          "CWE-200",
+          "CWE-522"
+        ]
+      },
+      "title": "Unauthenticated log relay leaks live-recording tokens",
+      "validation": {
+        "assertions": [
+          "TrackDetail logs the full token-bearing URL.",
+          "The log POST route has no authentication.",
+          "The log WebSocket has no authentication or environment gate."
+        ],
+        "counterEvidence": [
+          "The leak requires remote logging and an active recording."
+        ],
+        "limitations": [
+          "No live WebSocket capture was performed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes the token-to-log-to-listener path."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "outcome": "A guessed or leaked URL returns another user's generated route media.",
+          "sink": "StaticFiles response",
+          "source": "predictable track ID and timestamp filename",
+          "summary": "track ID + timestamp -> predictable filename -> unauthenticated /exports URL"
+        },
+        "impact": {
+          "level": "medium",
+          "why": "Generated media reveals precise movement traces."
+        },
+        "likelihood": {
+          "level": "medium",
+          "why": "The filename is predictable but requires timestamp knowledge or brute force because directory listing is disabled."
+        },
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "GET /exports/...",
+          "outcome": "generated artifact disclosure"
+        },
+        "summary": "Guess or obtain a track ID and timestamp, then request the generated export URL directly."
+      },
+      "codeEvidence": [
+        {
+          "code": "exports_dir = Path(settings.EXPORT_DIR)\nexports_dir.mkdir(parents=True, exist_ok=True)\napp.mount(\"/exports\", StaticFiles(directory=str(exports_dir)), name=\"exports\")",
+          "explanation": "The entire export tree is mounted without an authentication dependency or per-file authorization.",
+          "id": "exports-mount",
+          "label": "Public export mount",
+          "path": "backend/app/main.py",
+          "role": "root_control",
+          "startLine": 388
+        },
+        {
+          "code": "timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')\nfilename = f'track_{track_id}_animation_{timestamp}.webm'\nfinal_path = export_dir / filename\n...\nreturn f'/exports/animation/{filename}'",
+          "explanation": "The filename combines a sequential track ID with a second-resolution timestamp and is returned as a public URL.",
+          "id": "exports-name",
+          "label": "Predictable artifact naming",
+          "path": "backend/app/utils/playwright_export.py",
+          "role": "propagation",
+          "startLine": 241
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The public mount and predictable filename construction are direct source evidence."
+      },
+      "findingId": "csf_ee4753b29e94a1ba1cecec08",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:bde9722f320e16018c626e9fd90e991fe5f47017b15ca1d971128ccda9cabdfd"
+      },
+      "identity": {
+        "anchor": "generated-export-artifacts-are-publicly-reachable"
+      },
+      "locations": [
+        {
+          "path": "backend/app/main.py",
+          "role": "root_control",
+          "startLine": 388
+        },
+        {
+          "path": "backend/app/utils/playwright_export.py",
+          "role": "propagation",
+          "startLine": 241
+        },
+        {
+          "path": "deploy/nginx/default.conf.template",
+          "role": "propagation",
+          "startLine": 45
+        }
+      ],
+      "occurrenceId": "occ_18c6209ae2491aba0b0ab683",
+      "preventiveControls": [
+        "Store generated artifacts outside the public root.",
+        "Serve files through authenticated owner checks or short-lived signed URLs with high-entropy names."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Remove the unauthenticated static mount, store exports outside public paths, and serve them through owner-authorized endpoints or signed URLs.",
+      "remediationTests": [
+        "Unauthenticated access to a known export filename fails.",
+        "Owner access succeeds and other users receive 403 or 404."
+      ],
+      "rootCause": "StaticFiles serves the complete export directory without authorization, while generated filenames combine sequential track IDs with second-resolution timestamps.",
+      "ruleId": "unauthenticated-static-exports.track-artifact-disclosure",
+      "severity": {
+        "changeConditions": "A leaked URL or directory listing would raise likelihood; removing the public mount eliminates the finding.",
+        "level": "medium",
+        "rationale": "The media contains private movement traces but requires a guessed or leaked filename."
+      },
+      "summary": "Generated route media is exposed through an unauthenticated static directory with predictable filenames.",
+      "taxonomy": {
+        "category": "sensitive file exposure",
+        "cwe": [
+          "CWE-538",
+          "CWE-639"
+        ]
+      },
+      "title": "Generated export artifacts are publicly reachable",
+      "validation": {
+        "assertions": [
+          "The mount has no auth dependency.",
+          "Filenames use track ID and timestamp.",
+          "nginx proxies /exports without an authorization layer."
+        ],
+        "counterEvidence": [
+          "Directory listing is disabled."
+        ],
+        "limitations": [
+          "No timestamp brute force was performed."
+        ],
+        "method": "source trace",
+        "summary": "Source review establishes unauthenticated static access and predictable names."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "evidenceRefs": [
+            "jwt-sign",
+            "jwt-verify",
+            "subject-trusted"
+          ],
+          "outcome": "A forged token is accepted as the referenced user and admin dependency grants administrative authority.",
+          "sink": "jwt.encode and jwt.decode",
+          "source": "attacker-controlled JWT claims",
+          "summary": "attacker-crafted claims -> `jwt.encode` with known key -> `jwt.decode` -> `payload.get('sub')` -> active-user lookup -> admin endpoints"
+        },
+        "evidenceRefs": [
+          "jwt-sign",
+          "jwt-verify",
+          "subject-trusted"
+        ],
+        "impact": {
+          "level": "critical",
+          "why": "The attacker can mint a token for an active administrator and invoke the full admin API surface without a password."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "The signing material is a fixed repository default and the workspace configuration was verified not to override it."
+        },
+        "limitations": [
+          "No live token forgery was executed; validation is source-backed plus offline configuration and user-role checks."
+        ],
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "any bearer-token endpoint, especially `/api/admin/*`",
+          "outcome": "administrator impersonation"
+        },
+        "summary": "An unauthenticated attacker can sign an HS256 token with the fixed repository default and set `sub` to an active administrator ID."
+      },
+      "codeEvidence": [
+        {
+          "code": "def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:\n    to_encode = data.copy()\n    if expires_delta:\n        expire = datetime.now(timezone.utc) + expires_delta\n    else:\n        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)\n\n    to_encode.update({\"exp\": expire})\n    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)\n    return encoded_jwt",
+          "endLine": 45,
+          "explanation": "The application signs attacker-influenced claims with `settings.SECRET_KEY`; if that key is a fixed public default, signatures are forgeable.",
+          "id": "jwt-sign",
+          "label": "Token signing uses the settings secret",
+          "path": "backend/app/core/security.py",
+          "role": "sink",
+          "startLine": 26
+        },
+        {
+          "code": "def decode_access_token(token: str) -> Optional[dict]:\n    try:\n        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])\n        return payload\n    except JWTError:\n        return None",
+          "endLine": 60,
+          "explanation": "Verification trusts any signature made with the same fixed key and does not bind the token to a server-side session or key version.",
+          "id": "jwt-verify",
+          "label": "Token verification trusts the fixed key",
+          "path": "backend/app/core/security.py",
+          "role": "root_control",
+          "startLine": 48
+        },
+        {
+          "code": "token = parts[1]\npayload = decode_access_token(token)\n\nif payload is None:\n    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=\"\u65e0\u6548\u7684\u8ba4\u8bc1\u51ed\u636e\")\n\nuser_id: Optional[int] = payload.get(\"sub\")\nif user_id is None:\n    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=\"\u65e0\u6548\u7684\u8ba4\u8bc1\u51ed\u636e\")\n\ntry:\n    user_id = int(user_id)\nexcept (ValueError, TypeError):\n    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=\"\u65e0\u6548\u7684\u8ba4\u8bc1\u51ed\u636e\")\n\nfrom app.services.user_service import user_service\nuser = await user_service.get_by_id(db, user_id)",
+          "endLine": 75,
+          "explanation": "After signature validation, the server treats the `sub` claim as the authenticated user ID and loads that user.",
+          "id": "subject-trusted",
+          "label": "Subject claim is trusted as the user identity",
+          "path": "backend/app/core/deps.py",
+          "role": "propagation",
+          "startLine": 49
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The signing and verification path is direct; the workspace configuration was checked offline and does not replace the fixed default, and user ID 1 is an active administrator."
+      },
+      "extensions": {},
+      "findingId": "csf_20bc3835aad9e2f775494bcd",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:f12ca6803690f181711660c97d3ca7ea5b4c51ae803c8e5efac8f9bc7aff631e"
+      },
+      "identity": {
+        "anchor": "fixed-jwt-secret-forgery"
+      },
+      "locations": [
+        {
+          "endLine": 45,
+          "path": "backend/app/core/security.py",
+          "role": "sink",
+          "startLine": 26
+        },
+        {
+          "endLine": 75,
+          "path": "backend/app/core/deps.py",
+          "role": "propagation",
+          "startLine": 49
+        },
+        {
+          "endLine": 134,
+          "path": "backend/app/core/deps.py",
+          "role": "root_control",
+          "startLine": 114
+        },
+        {
+          "path": "backend/app/core/config.py",
+          "role": "root_control",
+          "startLine": 31
+        },
+        {
+          "path": "backend/.env.example",
+          "role": "evidence",
+          "startLine": 11
+        },
+        {
+          "path": "backend/.env",
+          "role": "evidence",
+          "startLine": 7
+        }
+      ],
+      "occurrenceId": "occ_fd9b0eebcfc0b6c4f3c01b5d",
+      "preventiveControls": [
+        "Add startup validation that rejects missing, placeholder, or low-entropy signing keys.",
+        "Use key identifiers and explicit issuer/audience validation to support rotation without trusting stale tokens."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Require a high-entropy deployment-specific signing key, fail startup when it is absent or still a documented placeholder, rotate the current key, and invalidate all tokens issued under the weak key.",
+      "remediationTests": [
+        "Assert startup fails when `SECRET_KEY` is missing or equal to the documented placeholder.",
+        "Assert a token signed with the old default is rejected after rotation."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "jwt-sign",
+          "jwt-verify",
+          "subject-trusted"
+        ],
+        "summary": "The JWT integrity boundary depends entirely on `settings.SECRET_KEY`. The settings module provides a fixed fallback, the current workspace environment file does not override it, and the decoder accepts any correctly signed `sub` claim as the authenticated user."
+      },
+      "ruleId": "hardcoded-jwt-secret.admin-token-forgery",
+      "severity": {
+        "changeConditions": "Raising confidence would require observing the same default in the active production process; rotating the key to unknown high entropy would eliminate the finding.",
+        "level": "critical",
+        "rationale": "The signing key is a repository default and the authenticated subject is trusted directly. Forging `sub` for an active administrator yields immediate full administrative compromise without credentials.",
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "The fixed default `SECRET_KEY` lets an unauthenticated attacker forge a valid bearer token for any active user, including an administrator.",
+      "taxonomy": {
+        "category": "hard-coded cryptographic key",
+        "cwe": [
+          "CWE-321",
+          "CWE-798"
+        ]
+      },
+      "title": "Fixed JWT secret permits administrator token forgery",
+      "validation": {
+        "assertions": [
+          "Token creation and verification both use `settings.SECRET_KEY`.",
+          "The current workspace environment file does not override the fixed default.",
+          "An offline check confirmed user ID 1 is an active administrator."
+        ],
+        "counterEvidence": [
+          "Deployment documentation tells operators to change the key, but the code does not enforce replacement."
+        ],
+        "evidenceRefs": [
+          "jwt-sign",
+          "jwt-verify",
+          "subject-trusted"
+        ],
+        "limitations": [
+          "No runtime token was minted during this scan."
+        ],
+        "method": "source trace plus offline workspace verification",
+        "summary": "The source trace and workspace configuration establish a practical token-forgery path; the only remaining prerequisite is the deployed key matching the repository default."
+      }
+    },
+    {
+      "attackPath": {
+        "dataflow": {
+          "evidenceRefs": [
+            "font-route-no-auth",
+            "font-id-join",
+            "font-read"
+          ],
+          "outcome": "The response contains the contents of an arbitrary readable file instead of a font.",
+          "sink": "open(source_path, 'rb')",
+          "source": "attacker-controlled `font_id` path parameter",
+          "summary": "`font_id` -> prefix stripping -> Path join with unvalidated relative components -> `font_path.exists()` -> `_serve_font_file()` -> `open(..., 'rb')`"
+        },
+        "evidenceRefs": [
+          "font-route-no-auth",
+          "font-id-join",
+          "font-read"
+        ],
+        "impact": {
+          "level": "critical",
+          "why": "The server can read files such as `backend/.env`, exposing signing keys, database credentials, and other deployment secrets to an unauthenticated client."
+        },
+        "likelihood": {
+          "level": "high",
+          "why": "Backslash-encoded path segments are captured by the route and interpreted as separators by Windows `Path`; the target files are ordinary readable workspace files."
+        },
+        "limitations": [
+          "The direct traversal is platform-dependent and was validated for the current Windows workspace; Linux deployments do not interpret backslashes as separators."
+        ],
+        "reachability": {
+          "attacker": "unauthenticated network client",
+          "entrypoint": "GET /api/overlay-templates/fonts/{font_id}/file",
+          "outcome": "arbitrary readable-file disclosure"
+        },
+        "summary": "An unauthenticated request can traverse out of the font directory on Windows and read arbitrary readable files, including deployment secrets."
+      },
+      "codeEvidence": [
+        {
+          "code": "@router.get(\"/fonts/{font_id}/file\")\nasync def get_font_file(\n    font_id: str,\n    db: AsyncSession = Depends(get_db),\n):",
+          "endLine": 247,
+          "explanation": "The route is public and does not require `get_current_user`; `font_id` is an unconstrained string path parameter.",
+          "id": "font-route-no-auth",
+          "label": "Public font route",
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 242
+        },
+        {
+          "code": "if font_id.startswith('admin_'):\n    from app.core.config import settings\n\n    filename = font_id[6:]\n    admin_fonts_dir = Path(settings.ROAD_SIGN_DIR).parent / 'fonts'\n\n    for ext in ['.ttf', '.otf', '.ttc', '.woff2']:\n        font_path = admin_fonts_dir / (filename + ext)\n        if font_path.exists():\n            return _serve_font_file(font_path)\n\n    font_path = admin_fonts_dir / filename\n    if font_path.exists():\n        return _serve_font_file(font_path)",
+          "endLine": 275,
+          "explanation": "The attacker-controlled remainder of `font_id` is joined directly to the font root without basename normalization or containment validation.",
+          "id": "font-id-join",
+          "label": "Unvalidated path join",
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "root_control",
+          "startLine": 258
+        },
+        {
+          "code": "if content is None:\n    print(f\"DEBUG: Reading and converting source file: {source_path}\")\n    with open(source_path, 'rb') as f:\n        content = f.read()",
+          "endLine": 332,
+          "explanation": "The resolved path is opened directly and returned to the caller as the response body.",
+          "id": "font-read",
+          "label": "File read sink",
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "sink",
+          "startLine": 329
+        }
+      ],
+      "confidence": {
+        "level": "high",
+        "rationale": "The public route, unvalidated join, and file-read sink are direct source evidence; offline checks confirmed percent-decoded backslashes match the route and Windows path resolution escapes the font directory."
+      },
+      "extensions": {},
+      "findingId": "csf_cdd95168ad1501419707b2a4",
+      "fingerprints": {
+        "algorithm": "codex-security/v1",
+        "primary": "codex-security/v1:sha256:52757659696fd560fe044974c0ff2db870292a2565867db0416716d1972fd0bc"
+      },
+      "identity": {
+        "anchor": "public-font-endpoint-permits-arbitrary-file-read-on-windows"
+      },
+      "locations": [
+        {
+          "endLine": 247,
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "entrypoint",
+          "startLine": 242
+        },
+        {
+          "endLine": 275,
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "root_control",
+          "startLine": 258
+        },
+        {
+          "endLine": 332,
+          "path": "backend/app/api/overlay_templates.py",
+          "role": "sink",
+          "startLine": 329
+        }
+      ],
+      "occurrenceId": "occ_908bdb4eb81a4da051957459",
+      "preventiveControls": [
+        "Centralize file serving behind a helper that resolves and verifies containment under an allowed root.",
+        "Allowlist font identifiers and never accept filesystem paths or separators from the client."
+      ],
+      "provenance": {
+        "source": "local_plugin"
+      },
+      "remediation": "Normalize and resolve the font path, reject any path that is not contained under the font directory, and accept only server-generated font identifiers rather than client-supplied path fragments.",
+      "remediationTests": [
+        "Assert `/api/overlay-templates/fonts/admin_..%5C..%5C.env/file` cannot read `backend/.env`.",
+        "Assert a valid Windows font identifier still returns the font file."
+      ],
+      "rootCause": {
+        "evidenceRefs": [
+          "font-route-no-auth",
+          "font-id-join",
+          "font-read"
+        ],
+        "summary": "The public font endpoint strips the `admin_` prefix but then uses the remaining client value as a filesystem path component. On Windows, encoded backslashes become separators, so `..` components escape the configured font directory before the file is read and returned."
+      },
+      "ruleId": "path-traversal.public-font-file-read",
+      "severity": {
+        "changeConditions": "A Linux-only deployment would lower exploitability of the backslash variant; direct path traversal under a supported separator would remain critical. Removing the client-controlled path fragment eliminates the finding.",
+        "level": "critical",
+        "rationale": "The endpoint is unauthenticated and its response can disclose `backend/.env` and other readable files on the current Windows deployment, giving direct access to cryptographic and database credentials.",
+        "scoringSystem": "CVSS:3.1"
+      },
+      "summary": "The public font-file endpoint joins an unvalidated `font_id` to the font directory and can read arbitrary files on Windows.",
+      "taxonomy": {
+        "category": "path traversal",
+        "cwe": [
+          "CWE-22"
+        ]
+      },
+      "title": "Public font endpoint permits arbitrary file read on Windows",
+      "validation": {
+        "assertions": [
+          "The route has no authentication dependency.",
+          "The remaining `font_id` is passed to `Path / filename` without normalization.",
+          "The resolved path is read and returned without a containment check."
+        ],
+        "counterEvidence": [
+          "The direct exploit is specific to Windows path handling; Linux deployments require a different separator path and the current deployment uses Windows."
+        ],
+        "evidenceRefs": [
+          "font-route-no-auth",
+          "font-id-join",
+          "font-read"
+        ],
+        "limitations": [
+          "No live request was sent to the running service; validation used source inspection plus an offline route-decoding and path-resolution check."
+        ],
+        "method": "source trace plus offline framework-aware path validation",
+        "summary": "The source path is sufficient to establish the traversal. Offline checks confirmed the route captures encoded backslashes and Windows `Path` resolves them outside the font directory."
+      }
+    }
+  ],
+  "scanId": "6243ba17-df1e-4094-a40b-51d1345b9799",
+  "schemaVersion": "1.0"
+}

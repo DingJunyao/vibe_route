@@ -91,8 +91,9 @@ async function sendLog(level: LogLevel, args: unknown[]) {
   if (!ENABLED) return
 
   const { tag, message } = parseLogMessage(args)
+  const token = localStorage.getItem('token')
+  if (!token) return
 
-  // 使用 sendBeacon 避免阻塞，fallback 到 fetch
   const payload = JSON.stringify({
     level,
     tag,
@@ -100,21 +101,17 @@ async function sendLog(level: LogLevel, args: unknown[]) {
     timestamp: Date.now()
   })
 
-  // 优先使用 sendBeacon（不会阻塞页面卸载）
-  if (navigator.sendBeacon) {
-    const blob = new Blob([payload], { type: 'application/json' })
-    navigator.sendBeacon(`${API_BASE}/logs`, blob)
-  } else {
-    // fallback 到 fetch（使用 keepalive）
-    fetch(`${API_BASE}/logs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload,
-      keepalive: true
-    }).catch(() => {
-      // 忽略错误，避免影响主流程
-    })
-  }
+  fetch(`${API_BASE}/logs`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: payload,
+    keepalive: true
+  }).catch(() => {
+    // 忽略错误，避免影响主流程
+  })
 }
 
 // 保存原始 console 方法
@@ -171,7 +168,7 @@ export function connectRemoteLogWebSocket(): { ws: WebSocket | null; cleanup: ()
 
   const connect = () => {
     try {
-      ws = new WebSocket(wsUrl)
+      ws = new WebSocket(wsUrl, getWebSocketAuthProtocols())
       debugLog('Connect', `WebSocket 对象已创建, readyState=${readyStateName(ws)}`)
 
       ws.onopen = (event) => {
@@ -257,8 +254,12 @@ export function connectRemoteLogWebSocket(): { ws: WebSocket | null; cleanup: ()
 // 获取 WebSocket URL（使用统一的 origin 工具）
 export function getWebSocketUrl(): string {
   const origin = getWebSocketOrigin()
-  debugLog('URL', `getWebSocketOrigin() 返回: ${origin}`)
   const url = `${origin}/api/ws/logs`
   debugLog('URL', `最终 WebSocket URL: ${url}`)
   return url
+}
+
+export function getWebSocketAuthProtocols(): string[] | undefined {
+  const token = localStorage.getItem('token')
+  return token ? ['bearer', token] : undefined
 }

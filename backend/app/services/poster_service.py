@@ -2,8 +2,10 @@
 海报生成服务 - 使用 Playwright 截取地图（同步版本，解决 Windows 子进程问题）
 """
 
+import json
 import threading
 from typing import Optional, Tuple
+from urllib.parse import quote
 from loguru import logger
 
 try:
@@ -74,7 +76,8 @@ class PosterService:
         track_id: int,
         track_name: str = "",
         base_url: str = "http://localhost:5173",  # 开发环境前端地址
-        poster_secret: str = "vibe-route-poster-secret",  # 海报生成密钥
+        auth_token: str = "",
+        share_token: Optional[str] = None,
         map_scale: int = 100,  # 地图缩放百分比
         center: Optional[Tuple[float, float]] = None,  # (lon, lat) - 保留兼容性
         zoom: int = 12,
@@ -91,7 +94,7 @@ class PosterService:
             provider: 地图提供商 (amap, baidu, tencent, osm, tianditu)
             track_id: 轨迹 ID
             base_url: 前端基础 URL
-            poster_secret: 海报生成密钥，用于验证公开 API 访问
+            auth_token: 当前用户的 Bearer token，用于注入地图页面会话
             map_scale: 地图缩放百分比（100-200）
 
         Note:
@@ -113,6 +116,11 @@ class PosterService:
             viewport={'width': width, 'height': height, 'device_scale_factor': 3}
         )
 
+        if auth_token:
+            context.add_init_script(
+                f"localStorage.setItem('token', {json.dumps(auth_token)});"
+            )
+
         # 创建页面
         page = context.new_page()
 
@@ -126,9 +134,11 @@ class PosterService:
         page.on('console', handle_console)
 
         try:
-            # 访问专用地图页面（带 provider、secret 和 map_scale 参数）
-            url = f"{base_url}/tracks/{track_id}/map-only?provider={provider}&secret={poster_secret}&map_scale={map_scale}"
-            logger.info(f"访问地图专用页面: {url}")
+            # 访问专用地图页面（认证 token 通过浏览器 localStorage 注入）
+            url = f"{base_url}/tracks/{track_id}/map-only?provider={provider}&map_scale={map_scale}"
+            if share_token:
+                url += f"&share_token={quote(share_token, safe='')}"
+            logger.info("访问地图专用页面")
 
             page.goto(url, wait_until='domcontentloaded', timeout=30000)
             logger.info("页面 DOM 加载完成")

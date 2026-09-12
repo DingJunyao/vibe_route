@@ -58,7 +58,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onUnmounted } from 'vue'
 import { HomeFilled } from '@element-plus/icons-vue'
-import { getWebSocketUrl } from '@/utils/remoteLog'
+import { getWebSocketAuthProtocols, getWebSocketUrl } from '@/utils/remoteLog'
 
 interface LogEntry {
   level: string
@@ -90,7 +90,7 @@ function connect() {
   const url = getWebSocketUrl()
   console.log('连接到日志服务器:', url)
 
-  ws.value = new WebSocket(url)
+  ws.value = new WebSocket(url, getWebSocketAuthProtocols())
 
   ws.value.onopen = () => {
     isConnected.value = true

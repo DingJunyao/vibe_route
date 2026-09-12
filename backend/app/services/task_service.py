@@ -2,6 +2,7 @@
 任务处理服务
 管理异步任务的创建、更新和执行
 """
+import logging
 import os
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +11,8 @@ from sqlalchemy import select, update
 from app.models.task import Task
 from app.models.track import Track
 from app.gpxutil_wrapper.overlay import OverlayGenerator, OverlayConfig
+
+logger = logging.getLogger(__name__)
 
 
 class TaskService:
@@ -130,11 +133,12 @@ class TaskService:
             return await TaskService.get_task(db, task.id)
 
         except Exception as e:
+            logger.exception(f"Overlay generation failed for task {task.id}: {e}")
             # 更新任务为失败
             await TaskService.update_task(
                 db, task.id,
                 status="failed",
-                error_message=str(e)
+                error_message="生成失败"
             )
             raise
 

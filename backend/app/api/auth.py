@@ -74,18 +74,28 @@ async def register(
     user_count = await user_service.count_all(db)
     is_admin = user_count == 0
 
-    # 创建用户
+    # 创建用户；需要邀请码时先在同一事务内创建，再原子消费邀请码
     user = await user_service.create(
         db,
         username=user_data.username,
         email=user_data.email,
         password=user_data.password,
         is_admin=is_admin,
+        commit=not invite_code_required,
     )
 
-    # 使用邀请码（用户创建后）
     if invite_code_required and user_data.invite_code:
-        await config_service.use_invite_code(db, user_data.invite_code, user.id)
+        used = await config_service.use_invite_code(
+            db, user_data.invite_code, user.id, commit=False
+        )
+        if not used:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="邀请码已被使用",
+            )
+        await db.commit()
+        await db.refresh(user)
 
     # 生成访问令牌
     access_token = create_access_token(data={"sub": str(user.id)})

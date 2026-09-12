@@ -2,11 +2,14 @@
 日志转发 API
 用于接收前端日志并通过 WebSocket 推送到查看器
 """
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List
 import json
+
+from app.core.deps import get_current_user
+from app.models.user import User
 
 router = APIRouter(tags=["logs"])
 
@@ -25,8 +28,8 @@ class LogViewerManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, subprotocol: str | None = None):
+        await websocket.accept(subprotocol=subprotocol)
         self.active_connections.append(websocket)
 
     def disconnect(self, websocket: WebSocket):
@@ -51,7 +54,10 @@ manager = LogViewerManager()
 
 
 @router.post("/logs")
-async def receive_log(entry: LogEntry):
+async def receive_log(
+    entry: LogEntry,
+    current_user: User = Depends(get_current_user),
+):
     """
     接收前端日志并广播到所有 WebSocket 查看器
 
@@ -89,7 +95,31 @@ async def websocket_logs(websocket: WebSocket):
         console.log(log.data);
     };
     """
-    await manager.connect(websocket)
+    from app.core.database import async_session_maker
+    from app.core.security import decode_token
+    from app.services.user_service import user_service
+
+    protocol_header = websocket.headers.get("sec-websocket-protocol", "")
+    protocols = [part.strip() for part in protocol_header.split(",") if part.strip()]
+    token = protocols[1] if len(protocols) >= 2 and protocols[0] == "bearer" else None
+
+    try:
+        payload = decode_token(token) if token else None
+        user_id = payload.get("sub") if payload else None
+        if not user_id:
+            await websocket.close(code=1008, reason="Invalid token")
+            return
+
+        async with async_session_maker() as db:
+            user = await user_service.get_by_id(db, int(user_id))
+            if not user or not user.is_active:
+                await websocket.close(code=1008, reason="User not found")
+                return
+    except Exception:
+        await websocket.close(code=1008, reason="Authentication failed")
+        return
+
+    await manager.connect(websocket, subprotocol="bearer")
 
     # 发送连接成功消息
     await websocket.send_json({

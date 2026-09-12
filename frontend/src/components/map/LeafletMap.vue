@@ -38,6 +38,7 @@
 
 <script setup lang="ts">
 import { ref, Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { escapeHtml } from '@/utils/format'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import 'proj4leaflet'
@@ -788,7 +789,7 @@ function initMap() {
 
       const content = `
         <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
           <div style="color: #666;">时间: ${formatTimeRange()}</div>
           <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
           <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -874,7 +875,7 @@ function initMap() {
 
         const content = `
           <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
             <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -990,7 +991,7 @@ function initMap() {
 
           const content = `
             <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
               <div style="color: #666;">时间: ${formatTimeRange()}</div>
               <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
               <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -1563,7 +1564,7 @@ function recreateMap() {
 
       const content = `
         <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+          <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
           <div style="color: #666;">时间: ${formatTimeRange()}</div>
           <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
           <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -1649,7 +1650,7 @@ function recreateMap() {
 
         const content = `
           <div style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6;">
-            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+            <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
             <div style="color: #666;">时间: ${formatTimeRange()}</div>
             <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
             <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -1765,7 +1766,7 @@ function recreateMap() {
 
           const content = `
             <div class="track-tooltip" data-track-id="${track.id}" style="padding: 8px 12px; background: rgba(255, 255, 255, 0.95); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; line-height: 1.6; cursor: pointer;">
-              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${track.name || '未命名轨迹'}</div>
+              <div style="font-weight: bold; color: #333; margin-bottom: 4px;">${escapeHtml(track.name || '未命名轨迹')}</div>
               <div style="color: #666;">时间: ${formatTimeRange()}</div>
               <div style="color: #666;">里程: ${formatDistance(track.distance)}</div>
               <div style="color: #666;">历时: ${formatDuration(track.duration)}</div>
@@ -1982,9 +1983,9 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
   const city = point.city ? String(point.city) : ''
   const district = point.district ? String(point.district) : ''
 
-  if (province) parts.push(province)
-  if (city && city !== province) parts.push(city)
-  if (district) parts.push(district)
+  if (province) parts.push(escapeHtml(province))
+  if (city && city !== province) parts.push(escapeHtml(city))
+  if (district) parts.push(escapeHtml(district))
 
   // 道路信息
   const roadParts: string[] = []
@@ -2004,11 +2005,11 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
           signContents.push(`<span class="road-sign-inline" style="display: inline-flex; align-items: center; vertical-align: middle; line-height: 1; margin: 0 1px;">${svg}</span>`)
         } else {
           // 显示文本并记录需要加载
-          signContents.push(num)
+          signContents.push(escapeHtml(num))
           needLoad.push(parsed)
         }
       } else {
-        signContents.push(num)
+        signContents.push(escapeHtml(num))
       }
     }
 
@@ -2017,7 +2018,7 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
     }
   }
   if (point.road_name) {
-    roadParts.push(String(point.road_name))
+    roadParts.push(escapeHtml(point.road_name))
   }
 
   if (roadParts.length > 0) {

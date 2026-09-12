@@ -91,7 +91,7 @@ async def generate_overlay(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.exception(f"Exception in generate_overlay for track {request.track_id}, user {current_user.id}")
-        raise HTTPException(status_code=500, detail=f"生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="生成失败")
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
