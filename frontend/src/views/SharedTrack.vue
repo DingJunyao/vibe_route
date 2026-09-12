@@ -666,7 +666,10 @@ const trackWithPoints = computed(() => {
       city: p.city,
       district: p.district,
       road_name: p.road_name,
+      road_name_id: p.road_name_id,
+      road_name_en: p.road_name_en,
       road_number: p.road_number,
+      region: p.region,
     })),
   }
 })

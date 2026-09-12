@@ -46,8 +46,7 @@ import 'leaflet.chinatmsproviders'
 import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
 import type { MapLayerConfig, CRSType } from '@/api/admin'
-import { roadSignApi } from '@/api/roadSign'
-import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import type { MarkerPosition } from '@/types/animation'
@@ -70,7 +69,10 @@ interface Point {
   city?: string | null
   district?: string | null
   road_name?: string | null
+  road_name_id?: string | null
+  road_name_en?: string | null
   road_number?: string | null
+  region?: string | null
 }
 
 interface Track {
@@ -182,9 +184,7 @@ let animationMarkerIcon: L.DivIcon | null = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
-// 道路标志 SVG 缓存
-const roadSignSvgCache = ref<Map<string, string>>(new Map())
-const loadingSigns = ref<Set<string>>(new Set())
+// 道路标志 SVG 缓存（渲染与加载见 tooltipRoadSign 共享模块）
 const currentTooltipPoint = ref<Point | null>(null)  // 当前 tooltip 显示的点（用于异步更新）
 const tooltipContentCache = ref<Map<number, string>>(new Map())  // 缓存每个点的 tooltip 内容
 
@@ -655,7 +655,7 @@ function initMap() {
           // 异步加载道路标志 SVG
           if (locationResult.needLoad.length > 0) {
             nextTick(async () => {
-              const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+              const loaded = await loadTooltipRoadSigns(locationResult.needLoad)
               if (loaded) {
                 // 清除缓存，下次会重新生成
                 tooltipContentCache.value.delete(nearestIndex)
@@ -1430,7 +1430,7 @@ function recreateMap() {
           // 异步加载道路标志 SVG
           if (locationResult.needLoad.length > 0) {
             nextTick(async () => {
-              const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+              const loaded = await loadTooltipRoadSigns(locationResult.needLoad)
               if (loaded) {
                 // 清除缓存，下次会重新生成
                 tooltipContentCache.value.delete(nearestIndex)
@@ -1937,46 +1937,9 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
   return [lat, lng]
 }
 
-// 清理 SVG 字符串
-function sanitizeSvg(svg: string): string {
-  // 只清理空白字符，不修改 SVG 结构
-  // SVG 的显示样式由外层 span 的内联样式控制
-  return svg.replace(/\s+/g, ' ').trim()
-}
-
-// 异步获取道路标志 SVG
-async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
-  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
-  const cached = roadSignSvgCache.value.get(cacheKey)
-  if (cached) {
-    // 确保缓存的值是字符串
-    return typeof cached === 'string' ? cached : null
-  }
-
-  try {
-    const response = await roadSignApi.generate({
-      sign_type: signType,
-      code: code,
-      ...(province && { province }),
-    })
-    const svg = response.svg
-    // 确保 svg 是字符串类型并清理
-    if (typeof svg === 'string') {
-      const cleanSvg = sanitizeSvg(svg)
-      roadSignSvgCache.value.set(cacheKey, cleanSvg)
-      return cleanSvg
-    } else {
-      return null
-    }
-  } catch {
-    return null
-  }
-}
-
 // 格式化地理信息显示
-function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadNumber[] } {
+function formatLocationInfo(point: Point): { html: string; needLoad: TooltipSignLoad[] } {
   const parts: string[] = []
-  const needLoad: ParsedRoadNumber[] = []  // 需要异步加载的道路编号
 
   // 行政区划 - 确保是字符串
   const province = point.province ? String(point.province) : ''
@@ -1987,35 +1950,11 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
   if (city && city !== province) parts.push(escapeHtml(city))
   if (district) parts.push(escapeHtml(district))
 
-  // 道路信息
+  // 道路信息（编号段按点级 region 分派，见 tooltipRoadSign；span 带内联样式用于 ECharts tooltip）
   const roadParts: string[] = []
-  if (point.road_number) {
-    const roadNumberStr = String(point.road_number)
-    const roadNumbers = roadNumberStr.split(',').map(s => s.trim())
-    const signContents: string[] = []
-
-    for (const num of roadNumbers) {
-      const parsed = parseRoadNumber(num)
-      if (parsed) {
-        const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
-        const svg = roadSignSvgCache.value.get(cacheKey)
-
-        if (svg && typeof svg === 'string') {
-          // 使用 span 包装 SVG，添加内联样式用于 ECharts tooltip
-          signContents.push(`<span class="road-sign-inline" style="display: inline-flex; align-items: center; vertical-align: middle; line-height: 1; margin: 0 1px;">${svg}</span>`)
-        } else {
-          // 显示文本并记录需要加载
-          signContents.push(escapeHtml(num))
-          needLoad.push(parsed)
-        }
-      } else {
-        signContents.push(escapeHtml(num))
-      }
-    }
-
-    if (signContents.length > 0) {
-      roadParts.push(signContents.join(' '))
-    }
+  const signResult = formatTooltipRoadSigns(point)
+  if (signResult.html) {
+    roadParts.push(signResult.html)
   }
   if (point.road_name) {
     roadParts.push(escapeHtml(point.road_name))
@@ -2027,36 +1966,7 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
 
   // 确保返回的 html 是字符串
   const html = parts.join(' ')
-  return { html: html || '', needLoad }
-}
-
-// 异步加载道路编号的 SVG
-async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<boolean> {
-  const config = configStore.config
-  const showSigns = config?.show_road_sign_in_region_tree ?? true
-  if (!showSigns || parsedList.length === 0) return false
-
-  let loaded = false
-  for (const parsed of parsedList) {
-    const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
-    if (loadingSigns.value.has(key)) continue
-
-    loadingSigns.value.add(key)
-    try {
-      const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
-      if (svg) {
-        // 存入缓存（getRoadSignSvg 内部已经存了，但这里确保一下）
-        if (!roadSignSvgCache.value.has(key)) {
-          roadSignSvgCache.value.set(key, svg)
-        }
-        loaded = true
-      }
-    } finally {
-      loadingSigns.value.delete(key)
-    }
-  }
-
-  return loaded
+  return { html: html || '', needLoad: signResult.needLoad }
 }
 
 // 计算两点距离
@@ -2160,7 +2070,7 @@ function updateTooltipForPoint(index: number, point: Point) {
   // 异步加载道路标志 SVG
   if (locationResult.needLoad.length > 0) {
     nextTick(async () => {
-      const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+      const loaded = await loadTooltipRoadSigns(locationResult.needLoad)
       // 如果加载成功且当前还在显示同一个点，则更新 tooltip
       if (loaded && currentTooltipPoint.value === point) {
         updateTooltipForPoint(index, point)

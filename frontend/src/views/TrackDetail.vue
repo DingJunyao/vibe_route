@@ -1326,7 +1326,7 @@ const editForm = ref({
   description: '',
   original_crs: 'wgs84',
   region: 'cn',
-  syncPointsRegion: true
+  syncPointsRegion: false
 })
 
 // 填充地理信息相关
@@ -1545,7 +1545,10 @@ const trackWithPoints = computed(() => {
       city: p.city,
       district: p.district,
       road_name: p.road_name,
+      road_name_id: p.road_name_id,
+      road_name_en: p.road_name_en,
       road_number: p.road_number,
+      region: p.region,
     })),
   }
 })
@@ -2571,7 +2574,7 @@ function showEditDialog() {
     editForm.value.description = track.value.description || ''
     editForm.value.original_crs = track.value.original_crs || 'wgs84'
     editForm.value.region = track.value.region || 'cn'
-    editForm.value.syncPointsRegion = true
+    editForm.value.syncPointsRegion = false
   }
   editDialogVisible.value = true
 }
@@ -2624,9 +2627,28 @@ async function saveEdit() {
       ElMessage.success('坐标系更改成功')
     }
 
-    // 地区变化且勾选同步时，才批量刷已有轨迹点的点级地区（点级是图标渲染的权威）
+    // 点级地区同步（点级是图标渲染的权威）：勾选即同步，不要求地区变化——
+    // 行级已对而点级错位时（如填充发生在旧代码上），勾选是唯一的修复入口。
+    // 未勾选但地区变了 → 弹框确认；选否仅保存轨迹本身，不中止保存。
     const regionChanged = editForm.value.region !== (track.value.region || 'cn')
-    const syncPointsRegion = regionChanged && editForm.value.syncPointsRegion
+    let syncPointsRegion = editForm.value.syncPointsRegion
+    if (!syncPointsRegion && regionChanged) {
+      try {
+        await ElMessageBox.confirm(
+          '检测到你更改了轨迹的地区，是否同时更改已有轨迹点的地区？',
+          '更改轨迹地区',
+          {
+            confirmButtonText: '同时更改轨迹点地区',
+            cancelButtonText: '仅更改轨迹信息',
+            type: 'warning',
+          }
+        )
+        syncPointsRegion = true
+        editForm.value.syncPointsRegion = true
+      } catch {
+        syncPointsRegion = false
+      }
+    }
 
     // 更新名称、描述与地区（无论是否换坐标系都保存）
     const updated = await trackApi.update(track.value.id, {

@@ -362,8 +362,7 @@ class AnimationDOMOverlay {
 import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { escapeHtml } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
-import { roadSignApi } from '@/api/roadSign'
-import { parseRoadNumber, type ParsedRoadNumber } from '@/utils/roadSignParser'
+import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { gcj02ToWgs84 } from '@/utils/coordTransform'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
@@ -386,45 +385,26 @@ interface Point {
   city?: string | null
   district?: string | null
   road_name?: string | null
+  road_name_id?: string | null
+  road_name_en?: string | null
   road_number?: string | null
+  region?: string | null
 }
 
 // 格式化地理信息显示
-function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadNumber[] } {
+function formatLocationInfo(point: Point): { html: string; needLoad: TooltipSignLoad[] } {
   const parts: string[] = []
-  const needLoad: ParsedRoadNumber[] = []
 
   // 行政区划
   if (point.province) parts.push(escapeHtml(point.province))
   if (point.city && point.city !== point.province) parts.push(escapeHtml(point.city))
   if (point.district) parts.push(escapeHtml(point.district))
 
-  // 道路信息
+  // 道路信息（编号段按点级 region 分派，见 tooltipRoadSign）
   const roadParts: string[] = []
-  if (point.road_number) {
-    const roadNumbers = point.road_number.split(',').map(s => s.trim())
-    const signContents: string[] = []
-
-    for (const num of roadNumbers) {
-      const parsed = parseRoadNumber(num)
-      if (parsed) {
-        const cacheKey = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
-        const svg = roadSignSvgCache.get(cacheKey)
-
-        if (svg) {
-          signContents.push(`<span class="road-sign-inline">${svg}</span>`)
-        } else {
-          signContents.push(escapeHtml(num))
-          needLoad.push(parsed)
-        }
-      } else {
-        signContents.push(escapeHtml(num))
-      }
-    }
-
-    if (signContents.length > 0) {
-      roadParts.push(signContents.join(' '))
-    }
+  const signResult = formatTooltipRoadSigns(point)
+  if (signResult.html) {
+    roadParts.push(signResult.html)
   }
   if (point.road_name) {
     roadParts.push(escapeHtml(point.road_name))
@@ -434,52 +414,7 @@ function formatLocationInfo(point: Point): { html: string; needLoad: ParsedRoadN
     parts.push(roadParts.join(' '))
   }
 
-  return { html: parts.join(' '), needLoad }
-}
-
-// 异步获取道路标志 SVG
-async function getRoadSignSvg(code: string, signType: 'way' | 'expwy', province?: string): Promise<string | null> {
-  const cacheKey = province ? `${signType}:${code}:${province}` : `${signType}:${code}`
-  const cached = roadSignSvgCache.get(cacheKey)
-  if (cached) return cached
-
-  try {
-    const response = await roadSignApi.generate({
-      sign_type: signType,
-      code: code,
-      ...(province && { province }),
-    })
-    const svg = response.svg
-    roadSignSvgCache.set(cacheKey, svg)
-    return svg
-  } catch {
-    return null
-  }
-}
-
-// 异步加载道路编号的 SVG
-async function loadRoadSignsForTooltip(parsedList: ParsedRoadNumber[]): Promise<boolean> {
-  const config = configStore.config
-  const showSigns = config?.show_road_sign_in_region_tree ?? true
-  if (!showSigns || parsedList.length === 0) return false
-
-  let loaded = false
-  for (const parsed of parsedList) {
-    const key = parsed.province ? `${parsed.sign_type}:${parsed.code}:${parsed.province}` : `${parsed.sign_type}:${parsed.code}`
-    if (loadingSigns.has(key)) continue
-
-    loadingSigns.add(key)
-    try {
-      const svg = await getRoadSignSvg(parsed.code, parsed.sign_type, parsed.province)
-      if (svg) {
-        loaded = true
-      }
-    } finally {
-      loadingSigns.delete(key)
-    }
-  }
-
-  return loaded
+  return { html: parts.join(' '), needLoad: signResult.needLoad }
 }
 
 // 定义 emit 事件
@@ -579,9 +514,6 @@ let lastHoverIndex = -1  // 上次悬停的点索引
 let isClickProcessing = false  // 防止移动端 touchend 和 click 重复触发
 let mouseDownPos: { x: number; y: number } | null = null  // 记录鼠标按下位置，用于区分点击和拖动
 
-// 道路标志 SVG 缓存
-const roadSignSvgCache = new Map<string, string>()
-const loadingSigns = new Set<string>()
 let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
 
 // 动画相关状态
@@ -1173,7 +1105,7 @@ function updateMarker(nearest: { point: Point; index: number; position: any }) {
     const savedIndex = index
     const savedPoint = point
     nextTick(async () => {
-      const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+      const loaded = await loadTooltipRoadSigns(locationResult.needLoad)
       if (loaded && currentTooltipPoint === savedPoint && customTooltip.value) {
         const newLocationResult = formatLocationInfo(savedPoint)
         const newTimeStr = savedPoint.time ? new Date(savedPoint.time).toLocaleTimeString('zh-CN') : '-'
@@ -1279,7 +1211,7 @@ function highlightPoint(index: number) {
     const savedIndex = index
     const savedPoint = point
     nextTick(async () => {
-      const loaded = await loadRoadSignsForTooltip(locationResult.needLoad)
+      const loaded = await loadTooltipRoadSigns(locationResult.needLoad)
       if (loaded && currentTooltipPoint === savedPoint && customTooltip.value) {
         const newLocationResult = formatLocationInfo(savedPoint)
         const newTimeStr = savedPoint.time ? new Date(savedPoint.time).toLocaleTimeString('zh-CN') : '-'

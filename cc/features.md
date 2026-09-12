@@ -79,11 +79,11 @@
 ### 地区贯通
 
 - **上传**: 上传对话框可选地区（中国 / 印尼），缺省 `cn`
-- **编辑**: 编辑对话框可改轨迹地区。默认**只改轨迹行级**（新填充/新导入点的默认值）；勾选「同时更新已有轨迹点地区（共 N 个点）」（`sync_points_region=true`，默认勾选）才批量刷点级 region。**仅当 region 实际变化时**前端才发该标志，故改名不会重写上万个点。点级是图标渲染的权威，未勾选时改地区**不会**让已有轨迹点换用新地区路牌
+- **编辑**: 编辑对话框可改轨迹地区。默认**只改轨迹行级**（新填充/新导入点的默认值）；勾选「同时更新已有轨迹点地区（共 N 个点）」（`sync_points_region=true`，**默认不勾选**）批量刷点级 region。**勾选即同步**，不要求地区变化——行级已对而点级错位时（如填充跑在旧代码上），勾选是唯一修复入口；未勾选但地区变了 → 保存时弹框确认（选「仅更改轨迹信息」不中止保存）。点级是图标渲染的权威，未同步时改地区**不会**让已有轨迹点换用新地区路牌
 - **填充地理编码**: `POST /api/tracks/{id}/fill-geocoding` 支持 `region` 参数，缺省回读轨迹自身 region
 - **CSV 行级 region**: 导入以文件内每行的 `region` 列为准（跨地区文件的主通道，一个文件可含多地区点）
 - **合并轨迹**: 逐点复制点级 region
-- **地图组件**: 本次**未改动**——多语文本由前端回退链（zh → id → en）处理，地图侧不感知 region；地区只影响区域树渲染与道路盾牌
+- **地图组件 tooltip（气泡）**: 与区域树同口径支持多地区——五个地图组件（AMap/BMap/Tencent/Leaflet/Google）共用 [`tooltipRoadSign.ts`](frontend/src/utils/tooltipRoadSign.ts)（模块级缓存五引擎共享），按**点级 region** 分派：cn 走 `parseRoadNumber` 国标解析；id 编号原样交后端判级，name 兜底链 road_name → road_name_id → road_name_en，nameId 传 road_name_id（TOL 判定）。数据流：详情页/分享页 `trackWithPoints` 映射透传 `region`/`road_name_id`/`road_name_en`（Point 接口已含）；**主页** `getPoints` 返回完整 TrackPoint 原样透传（`samplePoints` 仅采样不裁字段），气泡同样按点级 region 分派。多语显示文本仍由前端回退链处理（zh → id → en）
 
 ### 反向地理编码（多语）
 
