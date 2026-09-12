@@ -23,6 +23,11 @@ export interface RegisterRequest {
   invite_code?: string
 }
 
+export interface ChangePasswordRequest {
+  old_password: string
+  new_password: string
+}
+
 export interface AuthResponse {
   access_token: string
   token_type: string
@@ -56,6 +61,11 @@ export const authApi = {
   // 获取当前用户信息
   getCurrentUser(): Promise<User> {
     return http.get('/auth/me')
+  },
+
+  // 修改当前用户密码
+  changePassword(data: ChangePasswordRequest): Promise<{ message: string }> {
+    return http.post('/auth/change-password', data)
   },
 
   // 登出

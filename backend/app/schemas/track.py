@@ -315,3 +315,19 @@ class MergeTrackRequest(BaseModel):
     track_ids: List[int] = Field(..., min_length=2)
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
+
+
+class SplitSegmentRequest(BaseModel):
+    start_index: int = Field(..., ge=0)
+    end_index: int = Field(..., ge=0)
+    name: Optional[str] = Field(None, min_length=1, max_length=200)
+    description: Optional[str] = None
+
+
+class SplitTrackRequest(BaseModel):
+    segments: List[SplitSegmentRequest] = Field(..., min_length=1, max_length=100)
+
+
+class SplitTrackResponse(BaseModel):
+    source_track_id: int
+    tracks: List[TrackResponse]

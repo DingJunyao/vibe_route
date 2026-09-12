@@ -27,7 +27,7 @@ if sys.platform == 'win32':
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates, animation
+from app.api import auth, account, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates, animation
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -369,6 +369,7 @@ async def add_request_id_middleware(request: Request, call_next):
 
 # 注册路由
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(account.router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin.router, prefix=settings.API_V1_PREFIX)
 app.include_router(tracks.router, prefix=settings.API_V1_PREFIX)
 app.include_router(tasks.router, prefix=settings.API_V1_PREFIX)

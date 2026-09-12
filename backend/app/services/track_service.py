@@ -2073,6 +2073,7 @@ class TrackService:
         track_id: int,
         user_id: int,
         crs: Optional[str] = None,
+        kml_type: str = 'track',
     ) -> tuple[str, str]:
         """
         导出轨迹点为 KML 格式（两步路兼容格式）
@@ -2110,6 +2111,45 @@ class TrackService:
             target_crs = str(original_crs_value)
         else:
             target_crs = crs
+
+        if kml_type not in ('track', 'path'):
+            raise ValueError('kml_type must be track or path')
+
+        if kml_type == 'path':
+            coordinates = []
+            for point in points:
+                if target_crs == 'wgs84':
+                    lon, lat = point.longitude_wgs84, point.latitude_wgs84
+                elif target_crs == 'gcj02':
+                    lon, lat = point.longitude_gcj02, point.latitude_gcj02
+                elif target_crs == 'bd09':
+                    lon, lat = point.longitude_bd09, point.latitude_bd09
+                else:
+                    lon, lat = point.longitude_wgs84, point.latitude_wgs84
+                elev = point.elevation if point.elevation is not None else 0
+                coordinates.append(f'{lon},{lat},{elev}')
+            path_lines = [
+                '<?xml version=\\x221.0\\x22 encoding=\\x22UTF-8\\x22?>',
+                '<kml xmlns=\\x22http://www.opengis.net/kml/2.2\\x22>',
+                '  <Document>',
+                f'    <name>{track.name}</name>',
+                '    <Placemark>',
+                f'      <name>{track.name}</name>',
+                '      <LineString>',
+                '        <tessellate>1</tessellate>',
+                '        <altitudeMode>absolute</altitudeMode>',
+                '        <coordinates>',
+                f'          {chr(32).join(coordinates)}',
+                '        </coordinates>',
+                '      </LineString>',
+                '    </Placemark>',
+                '  </Document>',
+                '</kml>',
+            ]
+            original_crs_str = str(track.original_crs or 'wgs84')
+            target_crs_str = str(target_crs) if target_crs else 'wgs84'
+            crs_suffix = '' if target_crs_str == original_crs_str else f'_{target_crs_str.upper()}'
+            return f'{track.name}{crs_suffix}_path.kml', chr(10).join(path_lines)
 
         # 构建 KML 内容
         kml_lines = []
@@ -3785,6 +3825,43 @@ class TrackService:
 
         return round(total_distance, 2), round(elevation_gain, 2), round(elevation_loss, 2)
 
+    @staticmethod
+    def _track_point_copy_values(point: TrackPoint, track_id: int, point_index: int, user_id: int) -> dict:
+        return {
+            'track_id': track_id,
+            'point_index': point_index,
+            'time': point.time,
+            'latitude_wgs84': point.latitude_wgs84,
+            'longitude_wgs84': point.longitude_wgs84,
+            'latitude_gcj02': point.latitude_gcj02,
+            'longitude_gcj02': point.longitude_gcj02,
+            'latitude_bd09': point.latitude_bd09,
+            'longitude_bd09': point.longitude_bd09,
+            'elevation': point.elevation,
+            'speed': point.speed,
+            'bearing': point.bearing,
+            'province': point.province,
+            'city': point.city,
+            'district': point.district,
+            'province_en': point.province_en,
+            'city_en': point.city_en,
+            'district_en': point.district_en,
+            'road_name': point.road_name,
+            'road_number': point.road_number,
+            'road_name_en': point.road_name_en,
+            'province_id': point.province_id,
+            'city_id': point.city_id,
+            'district_id': point.district_id,
+            'road_name_id': point.road_name_id,
+            'region': point.region or 'cn',
+            'memo': point.memo,
+            'is_interpolated': bool(point.is_interpolated),
+            'interpolation_id': None,
+            'created_by': user_id,
+            'updated_by': user_id,
+            'is_valid': True,
+        }
+
     async def _build_merge_plan(self, db: AsyncSession, user_id: int, track_ids: List[int]) -> dict:
         """
         构建合并方案（预览与执行共用，保证所见即所得）
@@ -4075,6 +4152,97 @@ class TrackService:
         await db.commit()
         await db.refresh(track_obj)
         return track_obj
+
+    async def split_track(self, db: AsyncSession, user: User, track_id: int, segments: List) -> List[Track]:
+        track = await self.get_by_id(db, track_id, user.id, load_recording=True)
+        if not track:
+            raise ValueError('\u8f68\u8ff9\u4e0d\u5b58\u5728')
+
+        recording = next((r for r in (track.live_recordings or []) if r.is_valid), None)
+        if recording and recording.status == 'active':
+            raise ValueError('\u6b63\u5728\u8bb0\u5f55\u7684\u5b9e\u65f6\u8f68\u8ff9\u4e0d\u80fd\u62c6\u5206')
+
+        result = await db.execute(
+            select(TrackPoint)
+            .where(and_(TrackPoint.track_id == track_id, TrackPoint.is_valid == True))
+            .order_by(TrackPoint.time, TrackPoint.created_at)
+        )
+        points = list(result.scalars().all())
+        if len(points) < 2:
+            raise ValueError('\u8f68\u8ff9\u70b9\u4e0d\u8db3\uff0c\u65e0\u6cd5\u62c6\u5206')
+
+        normalized = []
+        previous_end = -1
+        for segment in segments:
+            start = segment.start_index
+            end = segment.end_index
+            if start > end:
+                raise ValueError('\u533a\u6bb5\u8d77\u70b9\u4e0d\u80fd\u665a\u4e8e\u7ec8\u70b9')
+            if start <= previous_end:
+                raise ValueError('\u533a\u6bb5\u8303\u56f4\u91cd\u53e0')
+            if end >= len(points):
+                raise ValueError('\u533a\u6bb5\u8d85\u51fa\u8f68\u8ff9\u70b9\u8303\u56f4')
+            segment_points = points[start:end + 1]
+            if len(segment_points) < 2:
+                raise ValueError('\u6bcf\u4e2a\u533a\u6bb5\u81f3\u5c11\u9700\u8981\u4e24\u4e2a\u8f68\u8ff9\u70b9')
+            normalized.append((segment, segment_points))
+            previous_end = end
+
+        source_name = (track.name or '').strip() or f'Track {track.id}'
+        created_tracks = []
+        for order, (segment, segment_points) in enumerate(normalized):
+            name = (segment.name or f'{source_name[:190]} ({order + 1})').strip()
+            if not name:
+                raise ValueError('\u65b0\u8f68\u8ff9\u540d\u79f0\u4e0d\u80fd\u4e3a\u7a7a')
+            description = segment.description if segment.description is not None else track.description
+            distance, elevation_gain, elevation_loss = self._calculate_merge_stats(segment_points)
+            start_time = next((p.time for p in segment_points if p.time is not None), None)
+            end_time = next((p.time for p in reversed(segment_points) if p.time is not None), None)
+            duration = int((end_time - start_time).total_seconds()) if start_time and end_time else 0
+            has_area_info = any(
+                p.province or p.city or p.district or p.province_en or p.city_en or p.district_en
+                or p.province_id or p.city_id or p.district_id
+                for p in segment_points
+            )
+            has_road_info = any(
+                p.road_number or p.road_name or p.road_name_en or p.road_name_id
+                for p in segment_points
+            )
+            track_obj = Track(
+                user_id=user.id,
+                name=name,
+                description=description,
+                original_filename=f'split:{track.id}:{segment.start_index}-{segment.end_index}',
+                original_crs=track.original_crs,
+                region=track.region or 'cn',
+                distance=distance,
+                duration=duration,
+                elevation_gain=elevation_gain,
+                elevation_loss=elevation_loss,
+                start_time=start_time,
+                end_time=end_time,
+                has_area_info=has_area_info,
+                has_road_info=has_road_info,
+                is_live_recording=False,
+                created_by=user.id,
+                updated_by=user.id,
+                is_valid=True,
+            )
+            db.add(track_obj)
+            await db.flush()
+            insert_values = [
+                self._track_point_copy_values(point, track_obj.id, idx, user.id)
+                for idx, point in enumerate(segment_points)
+            ]
+            batch_size = 500
+            for i in range(0, len(insert_values), batch_size):
+                await db.execute(TrackPoint.__table__.insert().values(insert_values[i:i + batch_size]))
+            created_tracks.append(track_obj)
+
+        await db.commit()
+        for created in created_tracks:
+            await db.refresh(created)
+        return created_tracks
 
 
 track_service = TrackService()

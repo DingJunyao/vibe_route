@@ -59,6 +59,14 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          <el-button type='primary' @click='openSplitDialog' class='desktop-only'>
+            <el-icon><Scissor /></el-icon>
+            拆分轨迹
+          </el-button>
+          <el-button v-if='isMobile' type='primary' @click='openSplitDialog'>
+            <el-icon><Scissor /></el-icon>
+            拆分轨迹
+          </el-button>
           <el-button type="primary" @click="showEditDialog" class="desktop-only">
             <el-icon><Edit /></el-icon>
             编辑
@@ -240,6 +248,9 @@
                       @position-changed="handleAnimationPositionChanged"
                     />
                     <UniversalMap
+                      :custom-overlays='splitDialogVisible ? splitMapOverlays : undefined'
+                      :disable-point-hover='splitDialogVisible'
+                      @map-click='handleSplitMapClick'
                       ref="mapRef"
                       :tracks="[trackWithPoints]"
                       :default-layer-id="exportLayerId || undefined"
@@ -472,6 +483,9 @@
                   />
                   <div ref="mapElementRef" class="normal-map-container">
                   <UniversalMap
+                    :custom-overlays='splitDialogVisible ? splitMapOverlays : undefined'
+                    :disable-point-hover='splitDialogVisible'
+                    @map-click='handleSplitMapClick'
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
                     :default-layer-id="exportLayerId || undefined"
@@ -842,7 +856,13 @@
             导出为 GPX 格式，可导入到各种 GPS 设备和软件。包含时间、坐标、海拔等信息。
           </template>
           <template v-else-if="exportFormat === 'kml'">
-            导出为 KML 格式，可导入到 Google Earth、两步路等应用。包含时间、坐标、海拔等信息。
+            <el-radio-group v-model='exportKmlType' class='kml-type-radio'>
+              <el-radio value='path'>路径 KML</el-radio>
+              <el-radio value='track'>轨迹 KML</el-radio>
+            </el-radio-group>
+            <div class='kml-type-hint'>
+              路径形式兼容网页版 Google Earth，但不保留逐点时间；轨迹形式保留逐点时间，适用于两步路等应用。
+            </div>
           </template>
           <template v-else-if="exportFormat === 'csv'">
             导出为 UTF-8 带 BOM 的 CSV 格式，可使用 Excel 等电子表格软件打开。可以编辑地理信息，然后重新导入。
@@ -857,6 +877,80 @@
         <el-button type="primary" :loading="exporting" @click="exportPoints">导出</el-button>
       </template>
     </el-dialog>
+
+    <!-- 拆分轨迹抽屉 -->
+    <el-drawer
+      v-model='splitDialogVisible'
+      title='拆分轨迹'
+      direction='rtl'
+      size='min(460px, 92vw)'
+      :modal='false'
+      :lock-scroll='false'
+      class='split-drawer'
+    >
+      <el-alert type='info' :closable='false' class='split-hint'>
+        点击地图上的轨迹或勾选下方轨迹点，表示从该点开始新的一段；地图点击会先二次确认。原轨迹不会被修改，只会创建勾选的新轨迹。
+      </el-alert>
+      <el-table :data='splitPointRows' class='split-point-table' height='360'>
+        <el-table-column label='切点' width='70' align='center'>
+          <template #default='{ row }'>
+            <el-checkbox
+              :model-value='splitCutIndices.includes(row.index)'
+              :disabled='row.index <= 0 || row.index >= points.length - 1'
+              @change='toggleSplitCut(row.index)'
+            />
+          </template>
+        </el-table-column>
+        <el-table-column label='点' width='80'>
+          <template #default='{ row }'>#{{ row.index + 1 }}</template>
+        </el-table-column>
+        <el-table-column label='时间' min-width='155'>
+          <template #default='{ row }'>{{ formatTime(row.point.time) }}</template>
+        </el-table-column>
+        <el-table-column label='坐标' min-width='180'>
+          <template #default='{ row }'>
+            {{ row.point.latitude?.toFixed(6) }}, {{ row.point.longitude?.toFixed(6) }}
+          </template>
+        </el-table-column>
+        <el-table-column label='海拔' width='90'>
+          <template #default='{ row }'>{{ row.point.elevation == null ? '-' : row.point.elevation.toFixed(1) + 'm' }}</template>
+        </el-table-column>
+        <el-table-column label='速度' width='95'>
+          <template #default='{ row }'>{{ row.point.speed == null ? '-' : row.point.speed.toFixed(2) + 'm/s' }}</template>
+        </el-table-column>
+        <el-table-column label='地区/道路' min-width='180'>
+          <template #default='{ row }'>
+            <span>{{ row.point.city || row.point.province || '-' }}</span>
+            <span v-if='row.point.road_name'> · {{ row.point.road_name }}</span>
+            <span v-else-if='row.point.road_number'> · {{ row.point.road_number }}</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-pagination
+        v-model:current-page='splitPage'
+        v-model:page-size='splitPageSize'
+        :page-sizes='[50, 100, 200]'
+        :total='points.length'
+        layout='total, prev, pager, next, sizes'
+        class='split-pagination'
+      />
+      <el-divider content-position='left'>待保存区段</el-divider>
+      <div v-if='splitSegments.length === 0' class='split-empty'>至少选择一个切点，才能生成可保存的区段。</div>
+      <div v-else class='split-segment-list'>
+        <div v-for='(segment, index) in splitSegments' :key='`${segment.start_index}-${segment.end_index}-${index}`' class='split-segment-item'>
+          <span class='split-segment-dot' :style='{ backgroundColor: splitSegmentColor(segment, index) }'></span>
+          <el-checkbox v-model='segment.selected'>区段 {{ index + 1 }}</el-checkbox>
+          <span class='split-segment-range'>点 {{ segment.start_index + 1 }} - {{ segment.end_index + 1 }}（{{ segment.end_index - segment.start_index + 1 }} 点）</span>
+          <el-input v-model='segment.name' placeholder='可选：新轨迹名称' class='split-name-input' />
+        </div>
+      </div>
+      <div class='split-drawer-actions'>
+        <el-button @click='splitDialogVisible = false'>取消</el-button>
+        <el-button type='primary' :loading='splittingTrack' :disabled='splitCutIndices.length === 0 || selectedSplitSegments.length === 0' @click='submitSplit'>
+          创建新轨迹
+        </el-button>
+      </div>
+    </el-drawer>
 
     <!-- 导入数据对话框 -->
     <el-dialog v-model="importDialogVisible" title="导入轨迹点数据" :width="isMobile ? '95%' : '500px'" class="responsive-dialog">
@@ -1080,6 +1174,7 @@ import {
   Picture,
   Share,
   Film,
+  Scissor,
 } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { trackApi, type Track, type TrackPoint, type FillProgressResponse, type RegionNode, type ShareStatus } from '@/api/track'
@@ -1099,6 +1194,7 @@ import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber } from '@/utils/roadSignParser'
 import { LiveTrackWebSocket, getCurrentToken, type PointAddedData } from '@/utils/liveTrackWebSocket'
 import { getWebSocketOrigin } from '@/utils/origin'
+import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
 import LiveRecordingDialog from '@/components/LiveRecordingDialog.vue'
 import PosterExportDialog from '@/components/PosterExportDialog.vue'
 import ShareDialog from '@/components/ShareDialog.vue'
@@ -1402,9 +1498,277 @@ const latestPointIndex = computed(() => {
 })
 
 // 导出相关
+interface SplitSegmentDraft {
+  start_index: number
+  end_index: number
+  selected: boolean
+  name: string
+}
+
+const splitDialogVisible = ref(false)
+const splittingTrack = ref(false)
+const splitCutIndices = ref<number[]>([])
+const splitSegments = ref<SplitSegmentDraft[]>([])
+const splitPage = ref(1)
+const splitPageSize = ref(100)
+
+const splitPointRows = computed(() => {
+  const start = (splitPage.value - 1) * splitPageSize.value
+  return points.value.slice(start, start + splitPageSize.value).map((point, offset) => ({
+    point,
+    index: start + offset,
+  }))
+})
+
+const selectedSplitSegments = computed(() => splitSegments.value.filter(segment => segment.selected))
+
+const SPLIT_SEGMENT_COLORS = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9b59b6', '#00bcd4']
+
+function splitSegmentColor(segment: SplitSegmentDraft, index: number): string {
+  return segment.selected ? SPLIT_SEGMENT_COLORS[index % SPLIT_SEGMENT_COLORS.length] : '#909399'
+}
+
+interface SplitOverlayPolyline {
+  type: 'polyline'
+  positions: Array<[number, number]>
+  positions_gcj02?: Array<[number, number]>
+  positions_bd09?: Array<[number, number]>
+  color?: string
+  weight?: number
+  opacity?: number
+}
+
+interface SplitOverlayMarker {
+  type: 'marker'
+  position: [number, number]
+  latitude_wgs84: number
+  longitude_wgs84: number
+  latitude_gcj02: number
+  longitude_gcj02: number
+  latitude_bd09: number
+  longitude_bd09: number
+  icon: {
+    type: 'circle'
+    radius: number
+    fillColor: string
+    fillOpacity: number
+    strokeColor: string
+    strokeWidth: number
+  }
+  label: string
+}
+
+type SplitMapOverlay = SplitOverlayPolyline | SplitOverlayMarker
+
+function splitPointGcj02(point: TrackPoint): [number, number] {
+  if (point.latitude_gcj02 != null && point.longitude_gcj02 != null) {
+    return [point.latitude_gcj02, point.longitude_gcj02]
+  }
+  const [lng, lat] = wgs84ToGcj02(point.longitude_wgs84, point.latitude_wgs84)
+  return [lat, lng]
+}
+
+function splitPointBd09(point: TrackPoint): [number, number] {
+  if (point.latitude_bd09 != null && point.longitude_bd09 != null) {
+    return [point.latitude_bd09, point.longitude_bd09]
+  }
+  const [lng, lat] = wgs84ToBd09(point.longitude_wgs84, point.latitude_wgs84)
+  return [lat, lng]
+}
+
+function makeSplitMarker(point: TrackPoint, label: string): SplitOverlayMarker {
+  const gcj02 = splitPointGcj02(point)
+  const bd09 = splitPointBd09(point)
+  return {
+    type: 'marker',
+    position: [point.latitude_wgs84, point.longitude_wgs84],
+    latitude_wgs84: point.latitude_wgs84,
+    longitude_wgs84: point.longitude_wgs84,
+    latitude_gcj02: gcj02[0],
+    longitude_gcj02: gcj02[1],
+    latitude_bd09: bd09[0],
+    longitude_bd09: bd09[1],
+    icon: {
+      type: 'circle',
+      radius: 9,
+      fillColor: '#f56c6c',
+      fillOpacity: 1,
+      strokeColor: '#ffffff',
+      strokeWidth: 2,
+    },
+    label,
+  }
+}
+
+const splitMapOverlays = computed<SplitMapOverlay[]>(() => {
+  if (!splitDialogVisible.value || splitSegments.value.length === 0) return []
+
+  const overlays: SplitMapOverlay[] = []
+  splitSegments.value.forEach((segment, index) => {
+    const segmentPoints = points.value.slice(segment.start_index, segment.end_index + 1)
+    if (segmentPoints.length < 2) return
+    overlays.push({
+      type: 'polyline',
+      positions: segmentPoints.map(point => [point.latitude_wgs84, point.longitude_wgs84]),
+      positions_gcj02: segmentPoints.map(splitPointGcj02),
+      positions_bd09: segmentPoints.map(splitPointBd09),
+      color: segment.selected ? SPLIT_SEGMENT_COLORS[index % SPLIT_SEGMENT_COLORS.length] : '#909399',
+      weight: 5,
+      opacity: 0.9,
+    })
+  })
+
+  splitCutIndices.value.forEach((pointIndex, index) => {
+    const point = points.value[pointIndex]
+    if (point) overlays.push(makeSplitMarker(point, `切${index + 1}`))
+  })
+
+  return overlays
+})
+
+function rebuildSplitSegments() {
+  const pointCount = points.value.length
+  const cuts = [...new Set(splitCutIndices.value)]
+    .filter(index => index > 0 && index < pointCount - 1)
+    .sort((a, b) => a - b)
+  splitCutIndices.value = cuts
+  if (cuts.length === 0) {
+    splitSegments.value = []
+    return
+  }
+
+  const existingNames = splitSegments.value.map(segment => segment.name)
+  const segments: SplitSegmentDraft[] = []
+  let start = 0
+  let segmentIndex = 0
+  for (const boundary of [...cuts, pointCount]) {
+    const end = boundary - 1
+    if (end - start + 1 >= 2) {
+      segments.push({
+        start_index: start,
+        end_index: end,
+        selected: true,
+        name: existingNames[segmentIndex] || '',
+      })
+      segmentIndex++
+    }
+    start = boundary
+  }
+  splitSegments.value = segments
+}
+
+function toggleSplitCut(index: number) {
+  splitCutIndices.value = splitCutIndices.value.includes(index)
+    ? splitCutIndices.value.filter(item => item !== index)
+    : [...splitCutIndices.value, index]
+  rebuildSplitSegments()
+}
+
+function measureSplitPointDistance(lng: number, lat: number, point: TrackPoint): number {
+  const latRad = ((lat + point.latitude_wgs84) / 2) * Math.PI / 180
+  const dx = (point.longitude_wgs84 - lng) * 111320 * Math.cos(latRad)
+  const dy = (point.latitude_wgs84 - lat) * 110540
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+function findNearestSplitPoint(lng: number, lat: number) {
+  let nearestIndex = -1
+  let nearestDistance = Infinity
+  points.value.forEach((point, index) => {
+    if (point.latitude_wgs84 == null || point.longitude_wgs84 == null) return
+    const distance = measureSplitPointDistance(lng, lat, point)
+    if (distance < nearestDistance) {
+      nearestDistance = distance
+      nearestIndex = index
+    }
+  })
+  return { index: nearestIndex, distance: nearestDistance }
+}
+
+function formatSplitDistance(distance: number): string {
+  return distance >= 1000 ? `${(distance / 1000).toFixed(2)} 公里` : `${Math.round(distance)} 米`
+}
+
+async function handleSplitMapClick(lng: number, lat: number) {
+  if (!splitDialogVisible.value) return
+  const nearest = findNearestSplitPoint(lng, lat)
+  if (nearest.index <= 0 || nearest.index >= points.value.length - 1) {
+    ElMessage.warning('该位置无法形成两个有效区段，请点击轨迹中段')
+    return
+  }
+  if (splitCutIndices.value.includes(nearest.index)) {
+    ElMessage.info('该位置已经是切点')
+    return
+  }
+
+  const point = points.value[nearest.index]
+  try {
+    await ElMessageBox.confirm(
+      `将在地图点击处最近的轨迹点 #${nearest.index + 1}（${formatTime(point.time)}）开始新的一段，` +
+      `点击位置距该点约 ${formatSplitDistance(nearest.distance)}。是否确认添加切点？`,
+      '确认添加切点',
+      {
+        confirmButtonText: '确认拆分',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  splitCutIndices.value = [...splitCutIndices.value, nearest.index].sort((a, b) => a - b)
+  rebuildSplitSegments()
+}
+
+function openSplitDialog() {
+  if (!track.value || points.value.length === 0) {
+    ElMessage.warning('轨迹点尚未加载完成')
+    return
+  }
+  if (track.value.is_live_recording && track.value.live_recording_status === 'active') {
+    ElMessage.warning('正在记录的实时轨迹不能拆分')
+    return
+  }
+  if (points.value.length < 4) {
+    ElMessage.warning('至少需要 4 个轨迹点才能拆分为两个有效区段')
+    return
+  }
+  splitCutIndices.value = []
+  splitSegments.value = []
+  splitPage.value = 1
+  splitDialogVisible.value = true
+}
+
+async function submitSplit() {
+  if (splitCutIndices.value.length === 0 || selectedSplitSegments.value.length === 0) {
+    ElMessage.warning('请先选择切点并勾选要保存的区段')
+    return
+  }
+
+  splittingTrack.value = true
+  try {
+    const response = await trackApi.splitTracks(
+      trackId.value,
+      selectedSplitSegments.value.map(segment => ({
+        start_index: segment.start_index,
+        end_index: segment.end_index,
+        name: segment.name.trim() || undefined,
+      })),
+    )
+    splitDialogVisible.value = false
+    ElMessage.success(`已创建 ${response.tracks.length} 条新轨迹`)
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    splittingTrack.value = false
+  }
+}
+
 const exportPointsDialogVisible = ref(false)
 const exportFormat = ref<'gpx' | 'kml' | 'csv' | 'xlsx'>('gpx')
 const exportCRS = ref('original')
+const exportKmlType = ref<'track' | 'path'>('path')
 const exporting = ref(false)
 
 // 导入相关
@@ -2691,9 +3055,8 @@ async function exportPoints() {
       url = trackApi.download(trackId.value, exportCRS.value)
       defaultFilename = `track_${trackId.value}.gpx`
     } else if (exportFormat.value === 'kml') {
-      // KML 需要 crs 参数
-      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value)
-      defaultFilename = `track_${trackId.value}.kml`
+      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value, exportKmlType.value)
+      defaultFilename = `track_${trackId.value}${exportKmlType.value === 'path' ? '_path' : ''}.kml`
     } else {
       // CSV 和 XLSX
       url = trackApi.exportPoints(trackId.value, exportFormat.value)
@@ -4265,6 +4628,77 @@ onUnmounted(() => {
 :deep(.el-dialog__footer) {
   padding: 12px 20px;
 }
+.split-hint {
+  margin-bottom: 12px;
+}
+
+.split-pagination {
+  margin-top: 12px;
+  justify-content: flex-end;
+}
+
+.split-empty {
+  padding: 18px 0;
+  color: var(--el-text-color-secondary);
+  text-align: center;
+}
+
+.split-segment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.split-segment-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 110px 220px minmax(180px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding-left: 18px;
+}
+
+.split-segment-dot {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.split-segment-range {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.split-drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.kml-type-radio {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.kml-type-hint {
+  color: var(--el-text-color-regular);
+  line-height: 1.5;
+}
+
+@media (max-width: 768px) {
+  .split-segment-item {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
 </style>
 
 <style>

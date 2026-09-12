@@ -237,6 +237,19 @@ export interface MergePreviewResponse {
   points: MergePreviewPoint[]
 }
 
+// 轨迹拆分相关类型
+export interface SplitTrackSegmentInput {
+  start_index: number
+  end_index: number
+  name?: string
+  description?: string
+}
+
+export interface SplitTrackResponse {
+  source_track_id: number
+  tracks: Track[]
+}
+
 // API 方法
 export const trackApi = {
   // 上传轨迹
@@ -349,10 +362,13 @@ export const trackApi = {
   },
 
   // 导出轨迹点
-  exportPoints(trackId: number, format: 'csv' | 'xlsx' | 'kml' = 'csv', crs?: string): string {
+  exportPoints(trackId: number, format: 'csv' | 'xlsx' | 'kml' = 'csv', crs?: string, kmlType?: 'track' | 'path'): string {
     let url = `/api/tracks/${trackId}/export?format=${format}`
     if (crs) {
       url += `&crs=${crs}`
+    }
+    if (format === 'kml' && kmlType) {
+      url += `&kml_type=${kmlType}`
     }
     return url
   },
@@ -397,6 +413,11 @@ export const trackApi = {
       name,
       description: description || null,
     })
+  },
+
+  // 拆分轨迹（创建新轨迹，原轨迹保留）
+  splitTracks(trackId: number, segments: SplitTrackSegmentInput[]): Promise<SplitTrackResponse> {
+    return http.post(`/tracks/${trackId}/split`, { segments })
   },
 
   // ========== 分享相关 API ==========

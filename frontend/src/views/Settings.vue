@@ -25,6 +25,27 @@
               </el-descriptions-item>
             </el-descriptions>
           </el-card>
+          <el-card class='password-card'>
+            <template #header>
+              <span>修改密码</span>
+            </template>
+            <el-form label-width='90px' class='password-form' @submit.prevent>
+              <el-form-item label='当前密码'>
+                <el-input v-model='oldPassword' type='password' show-password autocomplete='current-password' />
+              </el-form-item>
+              <el-form-item label='新密码'>
+                <el-input v-model='newPassword' type='password' show-password autocomplete='new-password' />
+              </el-form-item>
+              <el-form-item label='确认密码'>
+                <el-input v-model='confirmPassword' type='password' show-password autocomplete='new-password' />
+              </el-form-item>
+              <el-form-item>
+                <el-button type='primary' :loading='changingPassword' @click='submitPasswordChange'>
+                  修改密码
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </el-card>
         </el-tab-pane>
 
         <!-- 地图设置选项卡 -->
@@ -199,6 +220,11 @@ const configStore = useConfigStore()
 // 当前选项卡
 const activeTab = ref('profile')
 
+const oldPassword = ref('')
+const newPassword = ref('')
+const confirmPassword = ref('')
+const changingPassword = ref(false)
+
 // 用户配置
 const userConfig = ref<{
   map_provider: string | null
@@ -346,6 +372,34 @@ async function loadUserConfig() {
 }
 
 // 格式化日期
+async function submitPasswordChange() {
+  if (!oldPassword.value || !newPassword.value || !confirmPassword.value) {
+    ElMessage.warning('请填写完整的密码信息')
+    return
+  }
+  if (newPassword.value.length < 6) {
+    ElMessage.warning('新密码至少需要 6 位')
+    return
+  }
+  if (newPassword.value !== confirmPassword.value) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+
+  changingPassword.value = true
+  try {
+    await authStore.changePassword(oldPassword.value, newPassword.value)
+    oldPassword.value = ''
+    newPassword.value = ''
+    confirmPassword.value = ''
+    ElMessage.success('密码修改成功')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    changingPassword.value = false
+  }
+}
+
 function formatDate(dateStr: string | undefined): string {
   if (!dateStr) return '-'
   return new Date(dateStr).toLocaleString('zh-CN')
@@ -403,6 +457,15 @@ defineExpose({
 /* 用户信息卡片 */
 .profile-card {
   max-width: 600px;
+}
+
+.password-card {
+  max-width: 600px;
+  margin-top: 16px;
+}
+
+.password-form {
+  max-width: 420px;
 }
 
 /* 地图设置卡片 */

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
-import type { User, LoginRequest, RegisterRequest } from '@/api/auth'
+import type { User, LoginRequest, RegisterRequest, ChangePasswordRequest } from '@/api/auth'
 import { hashPassword } from '@/utils/crypto'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -49,6 +49,14 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  async function changePassword(oldPassword: string, newPassword: string) {
+    const data: ChangePasswordRequest = {
+      old_password: await hashPassword(oldPassword),
+      new_password: await hashPassword(newPassword),
+    }
+    return authApi.changePassword(data)
+  }
+
   function logout() {
     token.value = null
     user.value = null
@@ -67,6 +75,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     login,
     register,
+    changePassword,
     fetchCurrentUser,
     logout,
   }

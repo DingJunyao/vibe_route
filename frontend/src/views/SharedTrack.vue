@@ -508,7 +508,13 @@
             导出为 GPX 格式，可导入到各种 GPS 设备和软件。包含时间、坐标、海拔等信息。
           </template>
           <template v-else-if="exportFormat === 'kml'">
-            导出为 KML 格式，可导入到 Google Earth、两步路等应用。包含时间、坐标、海拔等信息。
+            <el-radio-group v-model='exportKmlType' class='kml-type-radio'>
+              <el-radio value='path'>路径 KML</el-radio>
+              <el-radio value='track'>轨迹 KML</el-radio>
+            </el-radio-group>
+            <div class='kml-type-hint'>
+              路径形式兼容网页版 Google Earth，但不保留逐点时间；轨迹形式保留逐点时间，适用于两步路等应用。
+            </div>
           </template>
           <template v-else-if="exportFormat === 'csv'">
             导出为 UTF-8 带 BOM 的 CSV 格式，可使用 Excel 等电子表格软件打开。可以编辑地理信息，然后重新导入。
@@ -629,6 +635,7 @@ const highlightedSegment = ref<{ start: number; end: number; nodeName: string } 
 const exportPointsDialogVisible = ref(false)
 const exportFormat = ref<'gpx' | 'kml' | 'csv' | 'xlsx'>('gpx')
 const exportCRS = ref('original')
+const exportKmlType = ref<'track' | 'path'>('path')
 const exporting = ref(false)
 
 // 海报导出相关
@@ -1270,9 +1277,8 @@ async function exportPoints() {
       url = trackApi.download(trackId.value, exportCRS.value)
       defaultFilename = `track_${trackId.value}.gpx`
     } else if (exportFormat.value === 'kml') {
-      // KML 需要 crs 参数
-      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value)
-      defaultFilename = `track_${trackId.value}.kml`
+      url = trackApi.exportPoints(trackId.value, exportFormat.value, exportCRS.value, exportKmlType.value)
+      defaultFilename = `track_${trackId.value}${exportKmlType.value === 'path' ? '_path' : ''}.kml`
     } else {
       // CSV 和 XLSX
       url = trackApi.exportPoints(trackId.value, exportFormat.value)
@@ -2539,6 +2545,16 @@ onUnmounted(() => {
 :deep(.el-dialog__footer) {
   padding: 12px 20px;
 }
+.kml-type-radio {
+  display: flex;
+  margin-bottom: 8px;
+}
+
+.kml-type-hint {
+  color: var(--el-text-color-regular);
+  line-height: 1.5;
+}
+
 </style>
 
 <style>

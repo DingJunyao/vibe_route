@@ -59,6 +59,8 @@ export interface SystemConfig {
 
 // 字体配置
 export interface FontConfig {
+  id_upper?: string
+  id_lower?: string
   font_a?: string
   font_b?: string
   font_c?: string

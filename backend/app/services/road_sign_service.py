@@ -34,6 +34,7 @@ class RoadSignService:
         name_id: Optional[str] = None,
         province_id: Optional[str] = None,
         force_tol: bool = False,
+        asset_signature: str = '',
     ) -> str:
         """生成缓存键（含 region，不同地区的同编号不串样）
 
@@ -41,6 +42,8 @@ class RoadSignService:
         """
         key_data = (f"{region}:{sign_type}:{code}:{province or ''}:{name or ''}:"
                     f"{name_id or ''}:{province_id or ''}")
+        if asset_signature:
+            key_data += f':{asset_signature}'
         if force_tol:
             key_data += ':force'
         return hashlib.md5(key_data.encode()).hexdigest()
@@ -78,8 +81,27 @@ class RoadSignService:
         Returns:
             (SVG 内容, 是否是缓存)
         """
+        configs = await config_service.get_all_configs(db)
+        font_config = configs.get('font_config') or {}
+        id_cfg = configs.get('indonesia_road_sign') or {}
+        layout_version = 'hmtx-v1'
+        if region == 'id':
+            asset_signature = ':'.join([
+                layout_version,
+                id_cfg.get('template') or 'id_sheild.svg',
+                id_cfg.get('font_upper') or 'ClearviewHwy1W.ttf',
+                id_cfg.get('font_lower') or 'ClearviewHwy2W.ttf',
+            ])
+        else:
+            asset_signature = ':'.join([
+                layout_version,
+                font_config.get('font_a') or '',
+                font_config.get('font_b') or '',
+                font_config.get('font_c') or '',
+            ])
         cache_key = self._generate_cache_key(
-            sign_type, code, province, name, region, name_id, province_id, force_tol)
+            sign_type, code, province, name, region, name_id, province_id, force_tol,
+            asset_signature)
         svg_path = self._get_svg_path(cache_key)
 
         # 检查缓存
@@ -96,9 +118,6 @@ class RoadSignService:
             except Exception as e:
                 logger.warning(f"Failed to read cached sign {cache_key}: {e}")
 
-        # 获取配置
-        configs = await config_service.get_all_configs(db)
-        font_config = configs.get('font_config')
 
         # 印尼配置：文件名解析为 DATA_DIR 下的资源路径（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
         indonesia_config = None

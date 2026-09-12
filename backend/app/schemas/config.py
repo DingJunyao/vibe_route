@@ -49,6 +49,8 @@ class GeocodingProvider(str):
 # ========== 道路标志字体配置 ==========
 
 class FontConfig(BaseModel):
+    id_upper: Optional[str] = None
+    id_lower: Optional[str] = None
     """字体配置 schema"""
     font_a: Optional[str] = Field(None, description="A 型字体路径（中文标题）")
     font_b: Optional[str] = Field(None, description="B 型字体路径（主数字）")

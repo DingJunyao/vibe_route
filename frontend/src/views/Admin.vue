@@ -822,6 +822,39 @@
                     字体未完整配置，道路标志生成功能将被禁用
                   </el-alert>
                 </el-card>
+                <el-card shadow='never' style='margin-bottom: 16px;'>
+                  <template #header>
+                    <span>印尼道路标志字体</span>
+                  </template>
+                  <el-row :gutter='16'>
+                    <el-col :xs='24' :sm='12'>
+                      <div class='font-selector-item'>
+                        <div class='font-selector-label'>色带小字</div>
+                        <div class='font-selector-desc'>Clearview 上半区编号字体</div>
+                        <el-select :model-value='activeFonts.id_upper' @change='setActiveUpperFont'
+                          placeholder='选择色带小字字体' style='width: 100%'>
+                          <el-option v-for='font in fonts' :key='font.filename' :label='font.filename'
+                            :value='font.filename' />
+                        </el-select>
+                      </div>
+                    </el-col>
+                    <el-col :xs='24' :sm='12'>
+                      <div class='font-selector-item'>
+                        <div class='font-selector-label'>白色区大字</div>
+                        <div class='font-selector-desc'>Clearview 下半区道路编号字体</div>
+                        <el-select :model-value='activeFonts.id_lower' @change='setActiveLowerFont'
+                          placeholder='选择白色区大字字体' style='width: 100%'>
+                          <el-option v-for='font in fonts' :key='font.filename' :label='font.filename'
+                            :value='font.filename' />
+                        </el-select>
+                      </div>
+                    </el-col>
+                  </el-row>
+                  <el-alert v-if='!activeFonts.id_upper || !activeFonts.id_lower' type='warning'
+                    :closable='false' style='margin-top: 12px;'>
+                    印尼字体未完整配置，印尼道路标志生成功能将被禁用
+                  </el-alert>
+                </el-card>
               </template>
 
               <!-- 字体文件列表 -->
@@ -2114,16 +2147,25 @@ async function loadFonts() {
 }
 
 // 设置激活字体
-async function setActiveFont(fontType: 'a' | 'b' | 'c', filename: string) {
+async function setActiveFont(fontType: 'a' | 'b' | 'c' | 'id_upper' | 'id_lower', filename: string) {
   try {
     await adminApi.setActiveFont(fontType, filename)
-    activeFonts.value[`font_${fontType}`] = filename
+    const configKey = fontType.startsWith('id_') ? fontType : `font_${fontType}`
+    ;(activeFonts.value as any)[configKey] = filename
     // 刷新配置，使主页能及时更新按钮显示状态
     await configStore.refreshConfig()
     ElMessage.success('字体设置成功')
   } catch (error) {
     // 错误已在拦截器中处理
   }
+}
+
+function setActiveUpperFont(filename: string) {
+  return setActiveFont('id_upper', filename)
+}
+
+function setActiveLowerFont(filename: string) {
+  return setActiveFont('id_lower', filename)
 }
 
 // 处理字体上传

@@ -27,6 +27,8 @@ from app.schemas.track import (
     MergePreviewRequest,
     MergePreviewResponse,
     MergeTrackRequest,
+    SplitTrackRequest,
+    SplitTrackResponse,
 )
 from app.services.track_service import track_service
 from app.services.share_service import share_service
@@ -868,6 +870,7 @@ async def get_track_regions(
 @router.get("/{track_id}/export")
 async def export_track_points(
     track_id: int,
+    kml_type: str = Query('track', pattern='^(track|path)$'),
     format: str = Query("csv", pattern="^(csv|xlsx|kml)$"),
     crs: Optional[str] = Query(None, description="坐标系 (仅用于 kml 格式)"),
     current_user: User = Depends(get_current_user),
@@ -878,8 +881,9 @@ async def export_track_points(
 
     - format: 导出格式 (csv、xlsx 或 kml)
     - crs: 坐标系 (仅用于 kml 格式，可选 original/wgs84/gcj02/bd09)
+    - kml_type: KML 形式，track=gx:Track 保留时间，path=LineString 兼容网页版 Google Earth
     - CSV 格式使用 UTF-8 编码带 BOM，确保 Excel 正确显示中文
-    - KML 格式使用 Google gx:Track 扩展，支持两步路导入
+    - 路径 KML 不保留逐点时间；轨迹 KML 保留时间但不兼容网页版 Google Earth
     - 导出文件包含所有轨迹点的详细数据，便于编辑行政区划和道路信息
     """
     from fastapi.responses import Response
@@ -921,7 +925,7 @@ async def export_track_points(
             )
         else:  # kml
             filename, content = await track_service.export_points_to_kml(
-                db, track_id, current_user.id, crs
+                db, track_id, current_user.id, crs, kml_type
             )
             logger.info(f"KML export successful: {filename}")
             return Response(
@@ -1160,6 +1164,20 @@ async def create_share(
         share_token=track.share_token,
         share_url=share_url
     )
+
+
+@router.post('/{track_id}/split', response_model=SplitTrackResponse)
+async def split_track(
+    track_id: int,
+    request: SplitTrackRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        tracks = await track_service.split_track(db, current_user, track_id, request.segments)
+        return SplitTrackResponse(source_track_id=track_id, tracks=tracks)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/{track_id}/share", response_model=ShareStatusResponse)

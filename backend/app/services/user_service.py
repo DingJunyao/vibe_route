@@ -107,6 +107,21 @@ class UserService:
             return None
         return user
 
+    async def change_password(
+        self,
+        db: AsyncSession,
+        user: User,
+        old_password: str,
+        new_password: str,
+    ) -> bool:
+        if not verify_password(old_password, user.hashed_password):
+            return False
+        user.hashed_password = get_password_hash(new_password)
+        user.updated_by = user.id
+        await db.commit()
+        await db.refresh(user)
+        return True
+
     async def count_all(self, db: AsyncSession) -> int:
         """获取所有用户数量"""
         from sqlalchemy import func

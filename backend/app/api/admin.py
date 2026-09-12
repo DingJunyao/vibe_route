@@ -609,7 +609,15 @@ async def get_fonts(
         import json
         font_config = json.loads(font_config)
 
-    active_fonts = FontConfig(**font_config) if font_config else FontConfig()
+    id_config = configs.get('indonesia_road_sign') or {}
+    if isinstance(id_config, str):
+        import json
+        id_config = json.loads(id_config)
+    active_fonts = FontConfig(
+        **(font_config or {}),
+        id_upper=id_config.get('font_upper') or 'ClearviewHwy1W.ttf',
+        id_lower=id_config.get('font_lower') or 'ClearviewHwy2W.ttf',
+    )
 
     return {
         "fonts": fonts,
@@ -624,6 +632,19 @@ async def set_active_font(
     current_admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
+    if font_type in ('id_upper', 'id_lower'):
+        filename = Path(filename).name
+        file_path = FONTS_DIR / filename
+        if not file_path.exists() or not file_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='字体文件不存在')
+        configs = await config_service.get_all_configs(db)
+        id_config = configs.get('indonesia_road_sign') or {}
+        if isinstance(id_config, str):
+            import json
+            id_config = json.loads(id_config)
+        id_config['font_upper' if font_type == 'id_upper' else 'font_lower'] = filename
+        await config_service.update_config(db, {'indonesia_road_sign': id_config}, current_admin.id)
+        return {'message': '字体设置成功'}
     """
     设置激活的字体文件
     font_type: a (A型), b (B型), c (C型)
@@ -739,6 +760,16 @@ async def delete_font(
             if isinstance(font_config, str):
                 import json
                 font_config = json.loads(font_config)
+
+            id_config = configs.get('indonesia_road_sign') or {}
+            if isinstance(id_config, str):
+                import json
+                id_config = json.loads(id_config)
+            if id_config.get('font_upper') == filename:
+                id_config.pop('font_upper', None)
+            if id_config.get('font_lower') == filename:
+                id_config.pop('font_lower', None)
+            await config_service.update_config(db, {'indonesia_road_sign': id_config}, current_admin.id)
 
             # 检查是否为激活字体，是则清除
             if font_config.get("font_a") == filename:
@@ -1977,4 +2008,3 @@ async def _process_postgis_sync_task(task_id: int):
                 status="failed",
                 error_message="任务执行失败"
             )
-
