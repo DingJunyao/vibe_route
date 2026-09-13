@@ -29,7 +29,6 @@
           <UniversalMap
             ref="mapRef"
             :custom-overlays="mapOverlays"
-            :disable-point-hover="true"
             :highlight-track-id="track.id"
             :tracks="[trackWithPoints]"
             mode="detail"
@@ -50,6 +49,10 @@
               <span class="legend-dot candidate-dot"></span>
               <span>当前切点</span>
             </div>
+            <div class="legend-item">
+              <span class="legend-dot change-dot"></span>
+              <span>变化点</span>
+            </div>
           </div>
 
           <div class="map-hint">点击地图任意位置会立即添加切点；切点会吸附到完整原始点序列中的最近点</div>
@@ -65,7 +68,7 @@
               </div>
             </div>
 
-            <el-select v-model="referenceMode" class="dimension-select">
+            <el-select v-model="referenceMode" class="dimension-select" @change="aggregateQuery = ''">
               <el-option label="行政区划：省 / 州" value="province" />
               <el-option label="行政区划：市 / 县" value="city" />
               <el-option label="行政区划：区" value="district" />
@@ -73,9 +76,9 @@
               <el-option label="道路名称" value="roadName" />
             </el-select>
 
-            <div class="rule-summary">
+            <div class="reference-summary">
               <span>{{ filteredAggregates.length }} 个值</span>
-              <span>{{ referenceRuns.length }} 个出现区间</span>
+              <span>共 {{ referenceRuns.length }} 个出现区间</span>
               <span>{{ manualCuts.length }} 个手动切点</span>
             </div>
 
@@ -110,7 +113,7 @@
                 >
                   <span class="run-range">
                     #{{ run.startIndex + 1 }} - #{{ run.endIndex + 1 }} ·
-                    {{ run.pointCount }} 点 · {{ formatDistance(run.distanceMeters) }}
+                    {{ formatNumber(run.pointCount) }} 点 · {{ formatDistance(run.distanceMeters) }}
                   </span>
                   <el-button
                     v-if="run.startIndex > 0 && run.startIndex < points.length - 1"
@@ -739,6 +742,14 @@ const mapOverlays = computed<SplitOverlay[]>(() => {
     }
   }
 
+  if (showChangeMarkers.value) {
+    for (const run of referenceRuns.value) {
+      if (run.startIndex > 0 && !segmentBoundaryStarts.value.has(run.startIndex)) {
+        overlays.push(makeMarker(validPoints.value[run.startIndex], '', '#0891b2', 5))
+      }
+    }
+  }
+
   if (candidatePoint.value) {
     overlays.push(makeMarker(
       candidatePoint.value,
@@ -924,6 +935,10 @@ onMounted(loadData)
   background: #f97316;
 }
 
+.change-dot {
+  background: #0891b2;
+}
+
 .map-hint {
   position: absolute;
   top: 14px;
@@ -973,27 +988,7 @@ onMounted(loadData)
   width: 100%;
 }
 
-.rules-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.minimum-points {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-
-.minimum-points :deep(.el-input-number) {
-  width: 104px;
-}
-
-.rule-summary,
-.selection-actions,
+.reference-summary,
 .candidate-row,
 .candidate-actions {
   display: flex;
@@ -1001,14 +996,13 @@ onMounted(loadData)
   gap: 8px;
 }
 
-.rule-summary {
+.reference-summary {
   flex-wrap: wrap;
   margin-top: 10px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
-.selection-actions,
 .candidate-actions {
   justify-content: flex-end;
   margin-top: 10px;
