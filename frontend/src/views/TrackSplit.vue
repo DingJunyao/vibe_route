@@ -317,7 +317,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
@@ -333,13 +333,14 @@ import UniversalMap from '@/components/map/UniversalMap.vue'
 import { trackApi, type Track, type TrackPoint } from '@/api/track'
 import {
   addManualCut,
+  aggregateRuns,
   buildContiguousSegments,
+  buildSegmentsFromCuts,
   findNearestSplitPoint,
-  mergeShortSegments,
   moveManualCut,
-  refineSegmentsWithCuts,
   type ContiguousSplitSegment,
   type SplitGroupMode,
+  type SplitValueAggregate,
 } from '@/utils/trackSplitSegments'
 import { formatDateTime, formatDistance, formatTimeRange } from '@/utils/format'
 import { wgs84ToBd09, wgs84ToGcj02 } from '@/utils/coordTransform'
@@ -351,15 +352,6 @@ interface SplitSegmentView extends ContiguousSplitSegment {
   savable: boolean
   startTime: string | null
   endTime: string | null
-}
-
-interface SplitGroupView {
-  key: string
-  label: string
-  runCount: number
-  pointCount: number
-  distanceMeters: number
-  segments: SplitSegmentView[]
 }
 
 interface SplitOverlayPolyline {
@@ -414,14 +406,12 @@ const loading = ref(false)
 const splitting = ref(false)
 const createdTracks = shallowRef<Track[]>([])
 
-const autoGroup = ref(true)
-const groupMode = ref<SplitGroupMode>('province')
-const minimumSegmentPoints = ref(5)
-const disabledAutoBoundaries = ref<Set<number>>(new Set())
+const referenceMode = ref<SplitGroupMode>('province')
+const showChangeMarkers = ref(true)
 const manualCuts = ref<number[]>([])
 const selectedSegmentIds = ref<Set<string>>(new Set())
 const segmentNames = reactive<Record<string, string>>({})
-const groupQuery = ref('')
+const aggregateQuery = ref('')
 const focusedSegmentId = ref<string | null>(null)
 const candidateIndex = ref<number | null>(null)
 const candidateDistance = ref(0)
@@ -434,26 +424,11 @@ const trackWithPoints = computed(() => {
   return { ...track.value, points: validPoints.value }
 })
 
-const automaticSegments = computed(() => {
-  if (!autoGroup.value || validPoints.value.length === 0) return []
-  const contiguousSegments = buildContiguousSegments(validPoints.value, groupMode.value)
-  return mergeShortSegments(
-    contiguousSegments,
-    validPoints.value,
-    minimumSegmentPoints.value,
-    groupMode.value,
-  )
-})
+const workingSegments = computed<ContiguousSplitSegment[]>(() =>
+  buildSegmentsFromCuts(manualCuts.value, validPoints.value, referenceMode.value),
+)
 
-const activeAutomaticSegments = computed(() => automaticSegments.value.filter(segment =>
-  segment.startIndex === 0 || !disabledAutoBoundaries.value.has(segment.startIndex)
-))
-
-const workingSegments = computed<ContiguousSplitSegment[]>(() => {
-  if (validPoints.value.length === 0) return []
-  const baseSegments = autoGroup.value ? activeAutomaticSegments.value : []
-  return refineSegmentsWithCuts(baseSegments, manualCuts.value, validPoints.value, groupMode.value)
-})
+const referenceRuns = computed(() => buildContiguousSegments(validPoints.value, referenceMode.value))
 
 const segmentBoundaryStarts = computed(() =>
   new Set(workingSegments.value.map(segment => segment.startIndex))
@@ -479,33 +454,12 @@ const selectedSegments = computed(() => segmentViews.value.filter(segment => seg
 const selectedPointCount = computed(() => selectedSegments.value.reduce((sum, segment) => sum + segment.pointCount, 0))
 const selectedDistance = computed(() => selectedSegments.value.reduce((sum, segment) => sum + segment.distanceMeters, 0))
 
-const filteredGroups = computed<SplitGroupView[]>(() => {
-  const query = groupQuery.value.trim().toLowerCase()
-  const groups: SplitGroupView[] = []
-  const groupMap = new Map<string, SplitGroupView>()
+const referenceAggregates = computed<SplitValueAggregate[]>(() => aggregateRuns(referenceRuns.value))
 
-  for (const segment of segmentViews.value) {
-    if (query && !segment.label.toLowerCase().includes(query) && !`${segment.sequence}`.includes(query)) continue
-    let group = groupMap.get(segment.key)
-    if (!group) {
-      group = {
-        key: segment.key,
-        label: segment.label,
-        runCount: 0,
-        pointCount: 0,
-        distanceMeters: 0,
-        segments: [],
-      }
-      groupMap.set(segment.key, group)
-      groups.push(group)
-    }
-    group.runCount += 1
-    group.pointCount += segment.pointCount
-    group.distanceMeters += segment.distanceMeters
-    group.segments.push(segment)
-  }
-
-  return groups
+const filteredAggregates = computed<SplitValueAggregate[]>(() => {
+  const query = aggregateQuery.value.trim().toLowerCase()
+  if (!query) return referenceAggregates.value
+  return referenceAggregates.value.filter(aggregate => aggregate.label.toLowerCase().includes(query))
 })
 
 const candidatePoint = computed(() => {
@@ -525,14 +479,12 @@ const isSegmentBoundary = computed(() => {
 
 const candidateStatusLabel = computed(() => {
   if (!candidatePoint.value) return ''
-  if (isManualCut.value) return '手动切点'
-  return isSegmentBoundary.value ? '自动边界' : '未设切点'
+  return isManualCut.value ? '手动切点' : '未设切点'
 })
 
 const candidateMarkerLabel = computed(() => {
   if (!candidatePoint.value) return ''
-  if (isManualCut.value) return '切点'
-  return isSegmentBoundary.value ? '边界' : '当前点'
+  return isManualCut.value ? '切点' : '当前点'
 })
 
 const candidateMarkerColor = computed(() => isManualCut.value ? '#f97316' : '#1f2937')
@@ -568,7 +520,6 @@ function defaultSegmentName(segment: SplitSegmentView): string {
 }
 
 function resetSegments() {
-  disabledAutoBoundaries.value = new Set()
   manualCuts.value = []
   focusedSegmentId.value = null
   Object.keys(segmentNames).forEach(key => delete segmentNames[key])
@@ -673,23 +624,16 @@ function removeSelectedCut() {
 
 function mergeIntoPrevious(segment: SplitSegmentView) {
   if (segment.startIndex <= 0) return
-  const manualIndex = manualCuts.value.indexOf(segment.startIndex)
-  if (manualIndex >= 0) {
-    manualCuts.value = manualCuts.value.filter((_, index) => index !== manualIndex)
-  } else {
-    const next = new Set(disabledAutoBoundaries.value)
-    next.add(segment.startIndex)
-    disabledAutoBoundaries.value = next
-  }
+  manualCuts.value = manualCuts.value.filter(cut => cut !== segment.startIndex)
   selectSavableSegments()
 }
 
-function segmentBounds(segment: SplitSegmentView) {
+function rangeBounds(startIndex: number, endIndex: number) {
   let minLat = Infinity
   let maxLat = -Infinity
   let minLon = Infinity
   let maxLon = -Infinity
-  for (const point of validPoints.value.slice(segment.startIndex, segment.endIndex + 1)) {
+  for (const point of validPoints.value.slice(startIndex, endIndex + 1)) {
     minLat = Math.min(minLat, point.latitude_wgs84)
     maxLat = Math.max(maxLat, point.latitude_wgs84)
     minLon = Math.min(minLon, point.longitude_wgs84)
@@ -700,8 +644,30 @@ function segmentBounds(segment: SplitSegmentView) {
 
 function focusSegment(segment: SplitSegmentView) {
   focusedSegmentId.value = segment.id
-  const bounds = segmentBounds(segment)
-  mapRef.value?.fitToBounds?.(bounds, 25)
+  mapRef.value?.fitToBounds?.(rangeBounds(segment.startIndex, segment.endIndex), 25)
+}
+
+function focusRun(run: ContiguousSplitSegment) {
+  mapRef.value?.fitToBounds?.(rangeBounds(run.startIndex, run.endIndex), 25)
+}
+
+function isCutAt(index: number): boolean {
+  return segmentBoundaryStarts.value.has(index)
+}
+
+function addCutAtRunStart(run: ContiguousSplitSegment) {
+  if (validPoints.value.length === 0) return
+  const nextCuts = addManualCut(
+    manualCuts.value,
+    run.startIndex,
+    validPoints.value.length,
+    [...segmentBoundaryStarts.value],
+  )
+  if (nextCuts === manualCuts.value) return
+  manualCuts.value = nextCuts
+  candidateIndex.value = run.startIndex
+  selectSavableSegments()
+  ElMessage.success('已添加切点')
 }
 
 function pointGcj02(point: TrackPoint): [number, number] {
@@ -831,10 +797,6 @@ function goBack() {
 function handleProviderChanged() {
   setTimeout(() => mapRef.value?.fitBounds?.(), 600)
 }
-
-watch(autoGroup, () => resetSegments())
-watch(groupMode, () => resetSegments())
-watch(minimumSegmentPoints, () => resetSegments())
 
 onMounted(loadData)
 </script>

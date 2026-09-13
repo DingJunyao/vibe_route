@@ -171,7 +171,7 @@ export function buildSegmentsFromCuts(
   if (points.length === 0) return []
 
   const orderedCuts = [...new Set(cuts)]
-    .filter(cut => cut > 0 && cut < points.length)
+    .filter(cut => isValidCut(cut, points.length))
     .sort((a, b) => a - b)
 
   const segments: ContiguousSplitSegment[] = []

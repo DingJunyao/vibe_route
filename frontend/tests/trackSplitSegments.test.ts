@@ -175,3 +175,11 @@ test('buildSegmentsFromCuts ignores invalid cut indices', () => {
   equal(segments[0].startIndex, 0)
   equal(segments[0].endIndex, 2)
 })
+
+test('buildSegmentsFromCuts tolerates empty points and duplicate cuts', () => {
+  deepEqual(buildSegmentsFromCuts([2, 2], [], 'province'), [])
+  const points = [point({ index: 0 }), point({ index: 1 }), point({ index: 2 })]
+  const segments = buildSegmentsFromCuts([1, 1], points, 'province')
+  equal(segments.length, 2)
+  deepEqual(segments.map(segment => [segment.startIndex, segment.endIndex]), [[0, 0], [1, 2]])
+})
