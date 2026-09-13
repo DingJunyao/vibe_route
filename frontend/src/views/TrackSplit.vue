@@ -79,7 +79,7 @@
 
             <div class="reference-summary">
               <span>{{ filteredAggregates.length }} 个值</span>
-              <span>共 {{ referenceRuns.length }} 个出现区间</span>
+              <span>{{ filteredRunCount }} 个出现区间</span>
               <span>{{ manualCuts.length }} 个手动切点</span>
             </div>
 
@@ -241,7 +241,7 @@
                       <strong>区段 {{ segment.sequence }}</strong>
                       <span>
                         #{{ segment.startIndex + 1 }} - #{{ segment.endIndex + 1 }} ·
-                        {{ segment.pointCount }} 点 · {{ formatDistance(segment.distanceMeters) }}
+                        {{ formatNumber(segment.pointCount) }} 点 · {{ formatDistance(segment.distanceMeters) }}
                       </span>
                       <span class="segment-summary">{{ segment.label }}</span>
                       <span>{{ formatTimeRange(segment.startTime, segment.endTime) }}</span>
@@ -477,6 +477,10 @@ const filteredAggregates = computed<SplitValueAggregate[]>(() => {
   return referenceAggregates.value.filter(aggregate => aggregate.label.toLowerCase().includes(query))
 })
 
+const filteredRunCount = computed(() =>
+  filteredAggregates.value.reduce((sum, aggregate) => sum + aggregate.runCount, 0),
+)
+
 const candidatePoint = computed(() => {
   if (candidateIndex.value === null) return null
   return validPoints.value[candidateIndex.value] || null
@@ -577,12 +581,7 @@ function handleMapClick(longitude: number, latitude: number) {
     validPoints.value.length,
     [...segmentBoundaryStarts.value],
   )
-  if (nextCuts === manualCuts.value) {
-    if (!manualCuts.value.includes(nearest.index)) {
-      ElMessage.info('该点已经是区段边界，未重复添加切点')
-    }
-    return
-  }
+  if (nextCuts === manualCuts.value) return
 
   manualCuts.value = nextCuts
   selectSavableSegments()
@@ -676,6 +675,7 @@ function addCutAtRunStart(run: ContiguousSplitSegment) {
   if (nextCuts === manualCuts.value) return
   manualCuts.value = nextCuts
   candidateIndex.value = run.startIndex
+  candidateDistance.value = 0
   selectSavableSegments()
   ElMessage.success('已添加切点')
 }
