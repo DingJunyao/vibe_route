@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from xml.etree import ElementTree
 
 import pytest
 
@@ -126,6 +127,8 @@ class TestKmlExport:
                 db, source.id, user.id, 'wgs84', 'path'
             )
             assert filename.endswith('_path.kml')
+            root = ElementTree.fromstring(content)
+            assert root.tag == '{http://www.opengis.net/kml/2.2}kml'
             assert '<LineString>' in content
             assert '<coordinates>' in content
             assert '<gx:Track>' not in content

@@ -48,6 +48,12 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/tracks/:id/split',
+    name: 'TrackSplit',
+    component: () => import('@/views/TrackSplit.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/tracks/:id/map-only',
     name: 'TrackMapOnly',
     component: () => import('@/views/TrackMapOnly.vue'),

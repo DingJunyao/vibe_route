@@ -2129,8 +2129,8 @@ class TrackService:
                 elev = point.elevation if point.elevation is not None else 0
                 coordinates.append(f'{lon},{lat},{elev}')
             path_lines = [
-                '<?xml version=\\x221.0\\x22 encoding=\\x22UTF-8\\x22?>',
-                '<kml xmlns=\\x22http://www.opengis.net/kml/2.2\\x22>',
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<kml xmlns="http://www.opengis.net/kml/2.2">',
                 '  <Document>',
                 f'    <name>{track.name}</name>',
                 '    <Placemark>',
