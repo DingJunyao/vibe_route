@@ -30,7 +30,6 @@ export interface SplitValueAggregate {
 }
 
 const UNKNOWN_LABEL = '未识别'
-const MIXED_LABEL = '混合区段'
 
 function normalized(value: string | null | undefined): string {
   const result = value?.trim()
@@ -164,78 +163,31 @@ export function aggregateRuns(segments: ContiguousSplitSegment[]): SplitValueAgg
   return aggregates
 }
 
-export function mergeShortSegments(
-  segments: ContiguousSplitSegment[],
-  points: SplitSourcePoint[],
-  minPoints: number,
-  mode: SplitGroupMode,
-): ContiguousSplitSegment[] {
-  if (points.length === 0 || minPoints <= 1) return segments
-
-  const merged = segments.map(segment => ({ ...segment }))
-  while (merged.length > 1) {
-    const shortIndex = merged.findIndex(segment => segment.pointCount < minPoints)
-    if (shortIndex < 0) break
-
-    const previous = shortIndex > 0 ? merged[shortIndex - 1] : null
-    const next = shortIndex < merged.length - 1 ? merged[shortIndex + 1] : null
-    if (!previous && !next) break
-
-    const previousIsMixed = previous?.label === MIXED_LABEL
-    const nextIsMixed = next?.label === MIXED_LABEL
-    const useNext = !previous
-      ? true
-      : !next
-        ? false
-        : nextIsMixed !== previousIsMixed
-          ? nextIsMixed
-          : next.pointCount >= previous.pointCount
-    const left = useNext ? merged[shortIndex] : previous
-    const right = useNext ? next : merged[shortIndex]
-    if (!left || !right) break
-
-    const combined = makeSegment(points, left.startIndex, right.endIndex, mode)
-    const keys = new Set(
-      points
-        .slice(left.startIndex, right.endIndex + 1)
-        .map(point => groupKeyAndLabel(point, mode)[0]),
-    )
-    if (keys.size > 1) {
-      combined.key = `mixed:${left.startIndex}-${right.endIndex}`
-      combined.label = MIXED_LABEL
-    }
-
-    const replaceIndex = useNext ? shortIndex : shortIndex - 1
-    merged.splice(replaceIndex, 2, combined)
-  }
-  return merged
-}
-
-export function refineSegmentsWithCuts(
-  segments: ContiguousSplitSegment[],
+export function buildSegmentsFromCuts(
   cuts: number[],
   points: SplitSourcePoint[],
   mode: SplitGroupMode,
 ): ContiguousSplitSegment[] {
   if (points.length === 0) return []
 
-  const boundaries = new Set<number>()
-  for (const segment of segments) {
-    if (segment.startIndex > 0) boundaries.add(segment.startIndex)
-  }
-  for (const cut of cuts) {
-    if (cut > 0 && cut < points.length) boundaries.add(cut)
-  }
+  const orderedCuts = [...new Set(cuts)]
+    .filter(cut => cut > 0 && cut < points.length)
+    .sort((a, b) => a - b)
 
-  const orderedBoundaries = [...boundaries].sort((a, b) => a - b)
-  const result: ContiguousSplitSegment[] = []
+  const segments: ContiguousSplitSegment[] = []
   let previousBoundary = 0
-  for (const boundary of orderedBoundaries) {
-    result.push(makeSegment(points, previousBoundary, boundary - 1, mode))
-    previousBoundary = boundary
+  for (const cut of orderedCuts) {
+    segments.push(makeSegment(points, previousBoundary, cut - 1, mode))
+    previousBoundary = cut
   }
-  result.push(makeSegment(points, previousBoundary, points.length - 1, mode))
-  return result
+  segments.push(makeSegment(points, previousBoundary, points.length - 1, mode))
+
+  for (const segment of segments) {
+    const summary = segmentValueSummary(points, segment.startIndex, segment.endIndex, mode)
+    segment.key = segment.id
+    segment.label = summary.length > 1 ? summary.join(' → ') : (summary[0] || UNKNOWN_LABEL)
+  }
+  return segments
 }
 
 function isValidCut(index: number, pointCount: number): boolean {

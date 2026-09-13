@@ -5,10 +5,9 @@ import {
   addManualCut,
   aggregateRuns,
   buildContiguousSegments,
+  buildSegmentsFromCuts,
   findNearestSplitPoint,
-  mergeShortSegments,
   moveManualCut,
-  refineSegmentsWithCuts,
   segmentValueSummary,
   type SplitSourcePoint,
 } from '../src/utils/trackSplitSegments.js'
@@ -51,24 +50,23 @@ test('contiguous grouping keeps repeated values as separate runs', () => {
   ])
 })
 
-test('manual cuts refine automatic segments without dropping source points', () => {
+test('segments are defined by cuts only and summarize passed values', () => {
   const points = [
     point({ index: 0, road_number: 'E1' }),
     point({ index: 1, road_number: 'E1' }),
     point({ index: 2, road_number: 'N1' }),
     point({ index: 3, road_number: 'N1' }),
-    point({ index: 4, road_number: 'N1' }),
+    point({ index: 4, road_number: 'E1' }),
   ]
-  const automatic = buildContiguousSegments(points, 'roadNumber')
 
-  const refined = refineSegmentsWithCuts(automatic, [3], points, 'roadNumber')
+  const segments = buildSegmentsFromCuts([3], points, 'roadNumber')
 
-  deepEqual(refined.map(segment => [segment.startIndex, segment.endIndex]), [
-    [0, 1],
-    [2, 2],
+  deepEqual(segments.map(segment => [segment.startIndex, segment.endIndex]), [
+    [0, 2],
     [3, 4],
   ])
-  equal(refined.reduce((sum, segment) => sum + segment.pointCount, 0), points.length)
+  equal(segments.reduce((sum, segment) => sum + segment.pointCount, 0), points.length)
+  deepEqual(segments.map(segment => segment.label), ['E1 → N1', 'N1 → E1'])
 })
 
 test('a map cut immediately creates two boundaries and can be moved', () => {
@@ -76,7 +74,7 @@ test('a map cut immediately creates two boundaries and can be moved', () => {
 
   deepEqual(cuts, [4])
   deepEqual(
-    refineSegmentsWithCuts([], cuts, Array.from({ length: 10 }, (_, index) => point({ index })), 'province')
+    buildSegmentsFromCuts(cuts, Array.from({ length: 10 }, (_, index) => point({ index })), 'province')
       .map(segment => [segment.startIndex, segment.endIndex]),
     [
       [0, 3],
@@ -84,27 +82,6 @@ test('a map cut immediately creates two boundaries and can be moved', () => {
     ],
   )
   deepEqual(moveManualCut(cuts, 4, 6, 10, [4]), [6])
-})
-
-test('short noisy runs merge into neighbors without dropping source points', () => {
-  const points = [
-    point({ index: 0, road_number: 'E1' }),
-    point({ index: 1, road_number: 'N1' }),
-    point({ index: 2, road_number: 'E1' }),
-    point({ index: 3, road_number: 'N2' }),
-    point({ index: 4, road_number: 'N2' }),
-    point({ index: 5, road_number: 'N2' }),
-  ]
-  const segments = buildContiguousSegments(points, 'roadNumber')
-
-  const merged = mergeShortSegments(segments, points, 2, 'roadNumber')
-
-  deepEqual(merged.map(segment => [segment.startIndex, segment.endIndex]), [
-    [0, 2],
-    [3, 5],
-  ])
-  equal(merged.reduce((sum, segment) => sum + segment.pointCount, 0), points.length)
-  equal(merged[0].label, '混合区段')
 })
 
 test('nearest-point search uses the complete source sequence', () => {
@@ -154,4 +131,47 @@ test('aggregateRuns groups repeated values with totals in first-seen order', () 
   equal(aggregates[1].label, 'N1')
   equal(aggregates[1].pointCount, 2)
   ok(aggregates[1].distanceMeters > 0)
+})
+
+test('cut segments spanning multiple values get arrow summary labels', () => {
+  const points = [
+    point({ index: 0, province: 'Jawa Barat' }),
+    point({ index: 1, province: 'Banten' }),
+    point({ index: 2, province: 'Banten' }),
+  ]
+
+  const segments = buildSegmentsFromCuts([1], points, 'province')
+
+  equal(segments.length, 2)
+  equal(segments[0].label, 'Jawa Barat')
+  equal(segments[1].label, 'Banten')
+
+  const whole = buildSegmentsFromCuts([], points, 'province')
+  equal(whole.length, 1)
+  equal(whole[0].label, 'Jawa Barat → Banten')
+})
+
+test('aggregation helpers tolerate empty inputs', () => {
+  deepEqual(segmentValueSummary([], 0, 0, 'province'), [])
+  deepEqual(aggregateRuns([]), [])
+})
+
+test('adjacent unknown points form a single aggregate', () => {
+  const points = [point({ index: 0 }), point({ index: 1 })]
+
+  const aggregates = aggregateRuns(buildContiguousSegments(points, 'province'))
+
+  equal(aggregates.length, 1)
+  equal(aggregates[0].label, '未识别')
+  equal(aggregates[0].pointCount, 2)
+})
+
+test('buildSegmentsFromCuts ignores invalid cut indices', () => {
+  const points = [point({ index: 0 }), point({ index: 1 }), point({ index: 2 })]
+
+  const segments = buildSegmentsFromCuts([-1, 0, 3, 99], points, 'province')
+
+  equal(segments.length, 1)
+  equal(segments[0].startIndex, 0)
+  equal(segments[0].endIndex, 2)
 })
