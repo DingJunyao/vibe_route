@@ -511,7 +511,11 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 ### Task 4: 参考信息面板与区段预览模板
 
 **Files:**
-- Modify: `frontend/src/views/TrackSplit.vue`（模板与样式）
+- Modify: `frontend/src/views/TrackSplit.vue`（模板与样式，附一处 script 清理）
+
+- [ ] **Step 0: 删除死代码 `isSegmentBoundary`**
+
+Task 3 质量审查发现：`isSegmentBoundary` computed 在 script 与模板中均已无使用（`handleMapClick`/`selectCandidateIndex` 直接用 `segmentBoundaryStarts`）。从 `<script setup>` 删除该 computed（原 Task 3 Step 7 说明中"仍以其为判断"的表述有误，以此为准）。
 
 - [ ] **Step 1: 替换"划分规则"面板**
 
