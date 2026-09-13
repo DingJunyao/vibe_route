@@ -839,6 +839,95 @@ Co-Authored-By: Claude Code <noreply@anthropic.com>"
 
 ---
 
+### Task 5.1: map-click 与绘制模式解耦（Task 5 质量审查 Critical 修复）
+
+**背景：** Task 5 移除了 `:disable-point-hover="true"`，但五个引擎的 `emit('map-click')` 全部位于 `if (props.disablePointHover)`（绘制路径模式）分支内，导致拆分页"点击地图添加切点"在所有引擎上失效。拆分页需要同时满足：悬停气泡保留（不能恢复 `disablePointHover`）+ 点击发射 `map-click`。
+
+**方案：** 新增独立 prop `emitMapClick`（默认 `false`）：只控制点击事件发射，不影响悬停提示与自动聚焦（绘制路径页继续用 `disablePointHover`，行为不变）。覆盖层点击穿透已核实无需改动：AMap marker `bubble: true`；Leaflet 的 interactive 层在无 click 监听时不拦截 map click（`_findEventTargets` 仅收录 `listens(type)` 为真的层，否则事件落到地图本身）；BMap 覆盖层是普通 DOM div，点击冒泡至地图容器；Tencent 覆盖层容器 `pointer-events: none` 可穿透。
+
+**Files:**
+- Modify: `frontend/src/components/map/UniversalMap.vue`
+- Modify: `frontend/src/components/map/AMap.vue`
+- Modify: `frontend/src/components/map/LeafletMap.vue`
+- Modify: `frontend/src/components/map/BMap.vue`
+- Modify: `frontend/src/components/map/TencentMap.vue`
+- Modify: `frontend/src/components/map/GoogleMap.vue`
+- Modify: `frontend/src/views/TrackSplit.vue`
+
+- [ ] **Step 1: UniversalMap.vue 新增 prop 并转发**
+
+props 接口中 `disablePointHover?: boolean` 一行之后新增：
+
+```ts
+  emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，如轨迹拆分，不依赖绘制路径模式）
+```
+
+`withDefaults` 中 `disablePointHover: false,` 一行之后新增：
+
+```ts
+  emitMapClick: false,
+```
+
+五个引擎转发处（腾讯/高德/百度/Google/Leaflet，各有一行 `:disable-point-hover="disablePointHover"`）其后各加一行：
+
+```html
+      :emit-map-click="emitMapClick"
+```
+
+- [ ] **Step 2: 五个引擎声明 prop 并修改点击守卫**
+
+每个引擎（AMap/LeafletMap/BMap/TencentMap/GoogleMap）：
+1. props 接口 `disablePointHover?: boolean` 行后加 `emitMapClick?: boolean`（注释同 Step 1）。
+2. `withDefaults` 的 `disablePointHover: false,` 行后加 `emitMapClick: false,`。
+3. 把下列**点击发射点**的守卫 `if (props.disablePointHover)` 改为 `if (props.disablePointHover || props.emitMapClick)`，行前注释「绘制路径模式：…」同步改为「绘制路径/点击交互模式：…」：
+
+| 文件 | 行号（当前） | 位置 |
+|---|---|---|
+| AMap.vue | 1164 | handleMapClick |
+| AMap.vue | 1767 | 自定义覆盖 marker 点击 |
+| AMap.vue | 1808 | 自定义覆盖 polyline 点击 |
+| LeafletMap.vue | 826、904、1601、1679 | 地图点击（桌面/移动 × 两个初始化块） |
+| BMap.vue | 1296 | handleMapClick |
+| TencentMap.vue | 1561 | 地图点击 |
+| GoogleMap.vue | 1238 | 地图点击 |
+
+**不得改动**的同类守卫：mousemove 提示守卫（AMap ~892、LeafletMap 581/1356、TencentMap 1312、GoogleMap 942、BMap 同类处）与自动聚焦守卫（AMap ~1602、LeafletMap 2384、BMap 1594/1856/2106、TencentMap 2048、GoogleMap 1502）——拆分页需要悬停气泡与正常聚焦。
+
+- [ ] **Step 3: TrackSplit.vue 启用点击发射并处理审查小项**
+
+1. `UniversalMap` 标签上 `mode="detail"` 之后加：
+
+```html
+            :emit-map-click="true"
+```
+
+2. 图例"变化点"一项加开关条件（关闭时不显示该图例项）：
+
+```html
+            <div v-if="showChangeMarkers" class="legend-item">
+              <span class="legend-dot change-dot"></span>
+              <span>变化点</span>
+            </div>
+```
+
+3. 变化点标记颜色从 `#0891b2`（与 `SEGMENT_COLORS[5]` 冲突）改为 `#0d9488`，两处同步：`mapOverlays` 中 `makeMarker(..., '', '#0d9488', 5)` 与样式 `.change-dot { background: #0d9488; }`。
+
+- [ ] **Step 4: 构建**
+
+Run: `cd frontend && npm run build`
+Expected: 构建成功（不得使用 `build:check`）。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add frontend/src/components/map/UniversalMap.vue frontend/src/components/map/AMap.vue frontend/src/components/map/LeafletMap.vue frontend/src/components/map/BMap.vue frontend/src/components/map/TencentMap.vue frontend/src/components/map/GoogleMap.vue frontend/src/views/TrackSplit.vue
+git commit -m "fix(map): decouple map-click emission from drawing mode
+
+Co-Authored-By: Claude Code <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 6: 浏览器验证与记录要点
 
 **Files:**
