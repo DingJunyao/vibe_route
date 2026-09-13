@@ -261,6 +261,7 @@ interface Props {
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
@@ -277,6 +278,7 @@ const props = withDefaults(defineProps<Props>(), {
   mapScale: 100,
   trackOrientation: 'horizontal',
   disablePointHover: false,
+  emitMapClick: false,
   customOverlays: () => [],
 })
 
@@ -1234,8 +1236,8 @@ function handleMapClick(e: Event) {
   if (!latLng) return
   const { lat, lng } = latLng
 
-  // 绘制路径模式：直接发射点击事件（Google 地图使用 WGS84，无需转换）
-  if (props.disablePointHover) {
+  // 绘制路径/点击交互模式：直接发射点击事件（Google 地图使用 WGS84，无需转换）
+  if (props.disablePointHover || props.emitMapClick) {
     emit('map-click', lng, lat)
     return
   }

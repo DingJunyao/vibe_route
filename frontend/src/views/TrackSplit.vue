@@ -32,6 +32,7 @@
             :highlight-track-id="track.id"
             :tracks="[trackWithPoints]"
             mode="detail"
+            :emit-map-click="true"
             @map-click="handleMapClick"
             @map-provider-changed="handleProviderChanged"
           />
@@ -49,7 +50,7 @@
               <span class="legend-dot candidate-dot"></span>
               <span>当前切点</span>
             </div>
-            <div class="legend-item">
+            <div v-if="showChangeMarkers" class="legend-item">
               <span class="legend-dot change-dot"></span>
               <span>变化点</span>
             </div>
@@ -745,7 +746,7 @@ const mapOverlays = computed<SplitOverlay[]>(() => {
   if (showChangeMarkers.value) {
     for (const run of referenceRuns.value) {
       if (run.startIndex > 0 && !segmentBoundaryStarts.value.has(run.startIndex)) {
-        overlays.push(makeMarker(validPoints.value[run.startIndex], '', '#0891b2', 5))
+        overlays.push(makeMarker(validPoints.value[run.startIndex], '', '#0d9488', 5))
       }
     }
   }
@@ -936,7 +937,7 @@ onMounted(loadData)
 }
 
 .change-dot {
-  background: #0891b2;
+  background: #0d9488;
 }
 
 .map-hint {

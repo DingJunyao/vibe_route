@@ -15,6 +15,7 @@
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
       :disable-point-hover="disablePointHover"
+      :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -36,6 +37,7 @@
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
       :disable-point-hover="disablePointHover"
+      :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -58,6 +60,7 @@
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
       :disable-point-hover="disablePointHover"
+      :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -79,6 +82,7 @@
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
       :disable-point-hover="disablePointHover"
+      :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -102,6 +106,7 @@
       :map-scale="mapScale"
       :track-orientation="trackOrientation"
       :disable-point-hover="disablePointHover"
+      :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
@@ -280,6 +285,7 @@ interface Props {
   viewDetailsUrl?: string  // 嵌入模式：查看详情链接
   availableSegments?: Array<{ start: number; end: number; key: string }> | null  // 可用区段列表（用于插值页面）
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，如轨迹拆分，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
   enableAnimation?: boolean  // 是否启用动画回放功能（仅轨迹详情页需要）
 }
@@ -298,6 +304,7 @@ const props = withDefaults(defineProps<Props>(), {
   viewDetailsUrl: '',
   availableSegments: null,
   disablePointHover: false,
+  emitMapClick: false,
   customOverlays: () => [],
   enableAnimation: false,
 })

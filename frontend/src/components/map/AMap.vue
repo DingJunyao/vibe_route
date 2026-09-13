@@ -114,6 +114,7 @@ interface Props {
   mapScale?: number  // 地图缩放百分比（100-200），用于海报生成时调整视野
   trackOrientation?: 'horizontal' | 'vertical'  // 轨迹方向
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
+  emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
 }
 
@@ -130,6 +131,7 @@ const props = withDefaults(defineProps<Props>(), {
   mapScale: 100,
   trackOrientation: 'horizontal',
   disablePointHover: false,
+  emitMapClick: false,
   customOverlays: () => [],
 })
 
@@ -1160,8 +1162,8 @@ async function initMap() {
     // 定义点击处理函数（桌面端和移动端共用）
     const handleMapClick = (e: any) => {
 
-      // 绘制路径模式：直接发射点击事件（转换为 WGS84）
-      if (props.disablePointHover) {
+      // 绘制路径/点击交互模式：直接发射点击事件（转换为 WGS84）
+      if (props.disablePointHover || props.emitMapClick) {
         const lngLat = e.lnglat
         if (!lngLat) {
           console.warn('[AMap] handleMapClick - lngLat 为空', e)
@@ -1763,8 +1765,8 @@ function drawCustomOverlays() {
         bubble: true,  // 允许点击事件冒泡到地图
       })
 
-      // 绘制路径模式：点击 Marker 也触发 map-click 事件
-      if (props.disablePointHover) {
+      // 绘制路径/点击交互模式：点击 Marker 也触发 map-click 事件
+      if (props.disablePointHover || props.emitMapClick) {
         marker.on('click', (e: any) => {
           const lngLat = e.lnglat
           const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
@@ -1804,8 +1806,8 @@ function drawCustomOverlays() {
         })
       }
 
-      // 绘制路径模式：点击 Polyline 也触发 map-click 事件
-      if (props.disablePointHover) {
+      // 绘制路径/点击交互模式：点击 Polyline 也触发 map-click 事件
+      if (props.disablePointHover || props.emitMapClick) {
         polyline.on('click', (e: any) => {
           const lngLat = e.lnglat
           const [wgsLng, wgsLat] = gcj02ToWgs84(lngLat.lng, lngLat.lat)
