@@ -20,6 +20,15 @@ export interface ContiguousSplitSegment {
   distanceMeters: number
 }
 
+export interface SplitValueAggregate {
+  key: string
+  label: string
+  runCount: number
+  pointCount: number
+  distanceMeters: number
+  runs: ContiguousSplitSegment[]
+}
+
 const UNKNOWN_LABEL = '未识别'
 const MIXED_LABEL = '混合区段'
 
@@ -114,6 +123,45 @@ export function buildContiguousSegments(
   }
   segments.push(makeSegment(points, startIndex, points.length - 1, mode))
   return segments
+}
+
+export function segmentValueSummary(
+  points: SplitSourcePoint[],
+  startIndex: number,
+  endIndex: number,
+  mode: SplitGroupMode,
+): string[] {
+  const labels: string[] = []
+  for (const point of points.slice(startIndex, endIndex + 1)) {
+    const label = groupKeyAndLabel(point, mode)[1]
+    if (!labels.includes(label)) labels.push(label)
+  }
+  return labels
+}
+
+export function aggregateRuns(segments: ContiguousSplitSegment[]): SplitValueAggregate[] {
+  const aggregates: SplitValueAggregate[] = []
+  const aggregateMap = new Map<string, SplitValueAggregate>()
+  for (const segment of segments) {
+    let aggregate = aggregateMap.get(segment.key)
+    if (!aggregate) {
+      aggregate = {
+        key: segment.key,
+        label: segment.label,
+        runCount: 0,
+        pointCount: 0,
+        distanceMeters: 0,
+        runs: [],
+      }
+      aggregateMap.set(segment.key, aggregate)
+      aggregates.push(aggregate)
+    }
+    aggregate.runCount += 1
+    aggregate.pointCount += segment.pointCount
+    aggregate.distanceMeters += segment.distanceMeters
+    aggregate.runs.push(segment)
+  }
+  return aggregates
 }
 
 export function mergeShortSegments(

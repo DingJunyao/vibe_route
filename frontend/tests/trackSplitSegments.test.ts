@@ -3,11 +3,13 @@ import { test } from 'node:test'
 
 import {
   addManualCut,
+  aggregateRuns,
   buildContiguousSegments,
   findNearestSplitPoint,
   mergeShortSegments,
   moveManualCut,
   refineSegmentsWithCuts,
+  segmentValueSummary,
   type SplitSourcePoint,
 } from '../src/utils/trackSplitSegments.js'
 
@@ -116,4 +118,40 @@ test('nearest-point search uses the complete source sequence', () => {
 
   equal(nearest.index, 2)
   ok(nearest.distanceMeters > 0)
+})
+
+test('segment value summary dedupes values in first-seen order', () => {
+  const points = [
+    point({ index: 0, province: 'Jawa Barat' }),
+    point({ index: 1, province: 'Banten' }),
+    point({ index: 2, province: 'Banten' }),
+    point({ index: 3, province: 'Jawa Barat' }),
+    point({ index: 4 }),
+  ]
+
+  deepEqual(segmentValueSummary(points, 0, 4, 'province'), ['Jawa Barat', 'Banten', '未识别'])
+  deepEqual(segmentValueSummary(points, 1, 2, 'province'), ['Banten'])
+})
+
+test('aggregateRuns groups repeated values with totals in first-seen order', () => {
+  const points = [
+    point({ index: 0, road_number: 'E1' }),
+    point({ index: 1, road_number: 'N1' }),
+    point({ index: 2, road_number: 'N1' }),
+    point({ index: 3, road_number: 'E1' }),
+  ]
+
+  const aggregates = aggregateRuns(buildContiguousSegments(points, 'roadNumber'))
+
+  equal(aggregates.length, 2)
+  equal(aggregates[0].label, 'E1')
+  equal(aggregates[0].runCount, 2)
+  equal(aggregates[0].pointCount, 2)
+  deepEqual(
+    aggregates[0].runs.map(run => [run.startIndex, run.endIndex]),
+    [[0, 0], [3, 3]],
+  )
+  equal(aggregates[1].label, 'N1')
+  equal(aggregates[1].pointCount, 2)
+  ok(aggregates[1].distanceMeters > 0)
 })
