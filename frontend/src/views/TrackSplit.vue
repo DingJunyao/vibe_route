@@ -56,44 +56,74 @@
         </section>
 
         <aside class="panel-section">
-          <section class="panel-block rules-panel">
+          <section class="panel-block reference-panel">
             <div class="panel-heading">
-              <h2>划分规则</h2>
-              <el-switch v-model="autoGroup" active-text="自动" inactive-text="手动" />
-            </div>
-
-            <div class="rules-controls">
-              <el-select v-model="groupMode" :disabled="!autoGroup" class="dimension-select">
-                <el-option label="行政区划：省 / 州" value="province" />
-                <el-option label="行政区划：市 / 县" value="city" />
-                <el-option label="行政区划：区" value="district" />
-                <el-option label="道路编号" value="roadNumber" />
-                <el-option label="道路名称" value="roadName" />
-              </el-select>
-              <div class="minimum-points">
-                <span>最短区段点数</span>
-                <el-input-number
-                  v-model="minimumSegmentPoints"
-                  :min="2"
-                  :max="100"
-                  :step="1"
-                  step-strictly
-                  size="small"
-                  controls-position="right"
-                  :disabled="!autoGroup"
-                />
+              <h2>参考信息</h2>
+              <div class="reference-toggle">
+                <span>标记变化点</span>
+                <el-switch v-model="showChangeMarkers" size="small" />
               </div>
             </div>
 
+            <el-select v-model="referenceMode" class="dimension-select">
+              <el-option label="行政区划：省 / 州" value="province" />
+              <el-option label="行政区划：市 / 县" value="city" />
+              <el-option label="行政区划：区" value="district" />
+              <el-option label="道路编号" value="roadNumber" />
+              <el-option label="道路名称" value="roadName" />
+            </el-select>
+
             <div class="rule-summary">
-              <span>{{ filteredGroups.length }} 个分组</span>
-              <span>{{ workingSegments.length }} 个连续区段</span>
+              <span>{{ filteredAggregates.length }} 个值</span>
+              <span>{{ referenceRuns.length }} 个出现区间</span>
               <span>{{ manualCuts.length }} 个手动切点</span>
             </div>
 
-            <div class="selection-actions">
-              <el-button size="small" @click="selectSavableSegments">全选可保存</el-button>
-              <el-button size="small" @click="clearSelection">清空选择</el-button>
+            <el-input
+              v-model="aggregateQuery"
+              :prefix-icon="Search"
+              clearable
+              placeholder="搜索参考值"
+              class="aggregate-search"
+            />
+
+            <div v-if="filteredAggregates.length === 0" class="list-empty">没有匹配的参考值</div>
+
+            <div v-else class="aggregate-list">
+              <article
+                v-for="aggregate in filteredAggregates"
+                :key="aggregate.key || 'unknown'"
+                class="aggregate-item"
+              >
+                <header class="aggregate-header" @click="focusRun(aggregate.runs[0])">
+                  <strong>{{ aggregate.label }}</strong>
+                  <span>
+                    {{ aggregate.runCount }} 次出现 · {{ formatNumber(aggregate.pointCount) }} 点 ·
+                    {{ formatDistance(aggregate.distanceMeters) }}
+                  </span>
+                </header>
+                <div
+                  v-for="run in aggregate.runs"
+                  :key="run.id"
+                  class="run-row"
+                  @click="focusRun(run)"
+                >
+                  <span class="run-range">
+                    #{{ run.startIndex + 1 }} - #{{ run.endIndex + 1 }} ·
+                    {{ run.pointCount }} 点 · {{ formatDistance(run.distanceMeters) }}
+                  </span>
+                  <el-button
+                    v-if="run.startIndex > 0 && run.startIndex < points.length - 1"
+                    size="small"
+                    text
+                    :type="isCutAt(run.startIndex) ? 'success' : 'primary'"
+                    :disabled="isCutAt(run.startIndex)"
+                    @click.stop="addCutAtRunStart(run)"
+                  >
+                    {{ isCutAt(run.startIndex) ? '已设切点' : '在此设切点' }}
+                  </el-button>
+                </div>
+              </article>
             </div>
           </section>
 
@@ -173,94 +203,75 @@
             </template>
           </section>
 
-          <section class="panel-block groups-panel">
+          <section class="panel-block segments-panel">
             <div class="panel-heading">
               <h2>区段预览</h2>
-              <el-input
-                v-model="groupQuery"
-                :prefix-icon="Search"
-                clearable
-                placeholder="搜索分组 / 区段"
-                class="group-search"
-              />
+              <div class="segment-actions">
+                <el-button size="small" @click="selectSavableSegments">全选可保存</el-button>
+                <el-button size="small" @click="clearSelection">清空选择</el-button>
+              </div>
             </div>
 
-            <div v-if="filteredGroups.length === 0" class="groups-empty">没有匹配的分组</div>
-
-            <div v-else class="group-list">
-              <article v-for="group in filteredGroups" :key="group.key || 'unknown'" class="group-item">
-                <header class="group-header">
-                  <span class="group-dot" :style="{ backgroundColor: group.segments[0]?.color || '#909399' }"></span>
-                  <div class="group-title">
-                    <strong>{{ group.label }}</strong>
-                    <span>
-                      {{ group.runCount }} 次出现 · {{ formatNumber(group.pointCount) }} 点 ·
-                      {{ formatDistance(group.distanceMeters) }}
-                    </span>
-                  </div>
-                </header>
-
-                <div class="segment-list">
-                  <div
-                    v-for="segment in group.segments"
-                    :key="segment.id"
-                    class="segment-card"
-                    :class="{
-                      selected: segment.selected,
-                      focused: segment.id === focusedSegmentId,
-                      disabled: !segment.savable,
-                    }"
-                    @click="focusSegment(segment)"
-                  >
-                    <div class="segment-card-body">
-                      <div class="segment-card-main">
-                        <el-checkbox
-                          :model-value="segment.selected"
-                          :disabled="!segment.savable || (!segment.selected && selectedSegments.length >= 100)"
-                          label=""
-                          @click.stop
-                          @change="toggleSegment(segment)"
-                        />
-                        <div class="segment-copy">
-                          <strong>区段 {{ segment.sequence }}</strong>
-                          <span>
-                            #{{ segment.startIndex + 1 }} - #{{ segment.endIndex + 1 }} ·
-                            {{ segment.pointCount }} 点 · {{ formatDistance(segment.distanceMeters) }}
-                          </span>
-                          <span>{{ formatTimeRange(segment.startTime, segment.endTime) }}</span>
-                          <span v-if="!segment.savable" class="invalid-segment">少于 2 点，不能单独创建轨迹</span>
-                        </div>
-                      </div>
-
-                      <el-input
-                        v-model="segmentNames[segment.id]"
-                        :placeholder="defaultSegmentName(segment)"
-                        class="segment-name-input"
-                        size="small"
-                        @click.stop
-                      />
-                    </div>
-
-                    <div class="segment-card-actions">
-                      <el-tooltip content="定位到区段" placement="top">
-                        <el-button :icon="Aim" circle size="small" @click.stop="focusSegment(segment)" />
-                      </el-tooltip>
-                      <el-tooltip
-                        v-if="segment.startIndex > 0"
-                        content="并入上一区段"
-                        placement="top"
-                      >
-                        <el-button
-                          :icon="ArrowUp"
-                          circle
-                          size="small"
-                          @click.stop="mergeIntoPrevious(segment)"
-                        />
-                      </el-tooltip>
+            <div class="segment-list">
+              <div
+                v-for="segment in segmentViews"
+                :key="segment.id"
+                class="segment-card"
+                :class="{
+                  selected: segment.selected,
+                  focused: segment.id === focusedSegmentId,
+                  disabled: !segment.savable,
+                }"
+                @click="focusSegment(segment)"
+              >
+                <div class="segment-card-body">
+                  <div class="segment-card-main">
+                    <el-checkbox
+                      :model-value="segment.selected"
+                      :disabled="!segment.savable || (!segment.selected && selectedSegments.length >= 100)"
+                      label=""
+                      @click.stop
+                      @change="toggleSegment(segment)"
+                    />
+                    <div class="segment-copy">
+                      <strong>区段 {{ segment.sequence }}</strong>
+                      <span>
+                        #{{ segment.startIndex + 1 }} - #{{ segment.endIndex + 1 }} ·
+                        {{ segment.pointCount }} 点 · {{ formatDistance(segment.distanceMeters) }}
+                      </span>
+                      <span class="segment-summary">{{ segment.label }}</span>
+                      <span>{{ formatTimeRange(segment.startTime, segment.endTime) }}</span>
+                      <span v-if="!segment.savable" class="invalid-segment">少于 2 点，不能单独创建轨迹</span>
                     </div>
                   </div>
+
+                  <el-input
+                    v-model="segmentNames[segment.id]"
+                    :placeholder="defaultSegmentName(segment)"
+                    class="segment-name-input"
+                    size="small"
+                    @click.stop
+                  />
                 </div>
-              </article>
+
+                <div class="segment-card-actions">
+                  <el-tooltip content="定位到区段" placement="top">
+                    <el-button :icon="Aim" circle size="small" @click.stop="focusSegment(segment)" />
+                  </el-tooltip>
+                  <el-tooltip
+                    v-if="segment.startIndex > 0"
+                    content="移除起点切点"
+                    placement="top"
+                  >
+                    <el-button
+                      :icon="ArrowUp"
+                      circle
+                      size="small"
+                      @click.stop="mergeIntoPrevious(segment)"
+                    />
+                  </el-tooltip>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -470,11 +481,6 @@ const candidatePoint = computed(() => {
 const isManualCut = computed(() => {
   if (candidateIndex.value === null) return false
   return manualCuts.value.includes(candidateIndex.value)
-})
-
-const isSegmentBoundary = computed(() => {
-  if (candidateIndex.value === null) return false
-  return segmentBoundaryStarts.value.has(candidateIndex.value)
 })
 
 const candidateStatusLabel = computed(() => {
@@ -1042,60 +1048,86 @@ onMounted(loadData)
   overflow-wrap: anywhere;
 }
 
-.group-search {
-  width: 180px;
+.reference-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
-.groups-empty {
+.aggregate-search {
+  margin-top: 8px;
+}
+
+.list-empty {
   color: var(--el-text-color-secondary);
   padding: 12px 0;
   text-align: center;
 }
 
-.group-list {
+.aggregate-list {
+  max-height: 300px;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  margin-top: 8px;
 }
 
-.group-item + .group-item {
+.aggregate-item + .aggregate-item {
   border-top: 1px solid var(--el-border-color-extra-light);
   padding-top: 10px;
 }
 
-.group-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-}
-
-.group-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  margin-top: 5px;
-  flex-shrink: 0;
-}
-
-.group-title {
-  min-width: 0;
+.aggregate-header {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  cursor: pointer;
 }
 
-.group-title strong {
+.aggregate-header strong {
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 
-.group-title span {
+.aggregate-header span {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
+.run-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 5px;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.run-range {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.segment-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.segment-summary {
+  color: var(--el-text-color-regular);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
 .segment-list {
-  margin-top: 8px;
   display: flex;
   flex-direction: column;
   gap: 7px;
