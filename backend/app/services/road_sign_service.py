@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 from typing import Optional
 from sqlalchemy import select, or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.road_sign import RoadSignCache
@@ -109,6 +110,7 @@ class RoadSignService:
             select(RoadSignCache).where(RoadSignCache.id == cache_key)
         )
         cached = result.scalar_one_or_none()
+        cache_existed = cached is not None
 
         if cached and os.path.exists(cached.svg_path):
             # 从缓存读取
@@ -169,7 +171,25 @@ class RoadSignService:
                 )
                 db.add(cached)
 
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+
+                if cache_existed:
+                    raise
+
+                # Another request can insert the same deterministic cache key
+                # while this request is generating its SVG. Reuse that winner.
+                result = await db.execute(
+                    select(RoadSignCache).where(RoadSignCache.id == cache_key)
+                )
+                winning_cache = result.scalar_one_or_none()
+                if winning_cache is None or not os.path.exists(winning_cache.svg_path):
+                    raise
+
+                with open(winning_cache.svg_path, 'r', encoding='utf-8') as f:
+                    return f.read(), True
 
             # 读取生成的文件
             with open(svg_path, 'r', encoding='utf-8') as f:

@@ -199,3 +199,86 @@ class TestMissingAssets:
             with pytest.raises(FileNotFoundError, match='印尼盾牌资源缺失'):
                 asyncio.run(RoadSignService().get_or_create_sign(
                     _StubDB(), 'way', '3', region='id'))
+
+
+class TestCacheInsertRace:
+    def test_duplicate_insert_reuses_winning_cache(self, monkeypatch, workdir):
+        """A request that loses a deterministic cache-key race returns the winner."""
+        import asyncio
+        from pathlib import Path
+        from sqlalchemy import select, func
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from app.core.config import settings
+        from app.models import Base
+        from app.models.road_sign import RoadSignCache
+        from app.services import road_sign_service as road_sign_service_module
+        from app.services.config_service import config_service
+
+        cache_key = '1' * 32
+        svg_path = workdir / 'road-signs' / f'{cache_key}.svg'
+        monkeypatch.setattr(settings, 'ROAD_SIGN_DIR', str(svg_path.parent))
+        monkeypatch.setattr(
+            road_sign_service_module.RoadSignService,
+            '_generate_cache_key',
+            lambda self, *args, **kwargs: cache_key,
+        )
+
+        async def empty_configs(_db):
+            return {}
+
+        monkeypatch.setattr(config_service, 'get_all_configs', empty_configs)
+
+        def write_svg(**kwargs):
+            Path(kwargs['output_path']).parent.mkdir(parents=True, exist_ok=True)
+            Path(kwargs['output_path']).write_text('<svg>winner</svg>', encoding='utf-8')
+            return '<svg>winner</svg>'
+
+        monkeypatch.setattr(road_sign_service_module, 'generate_road_sign', write_svg)
+
+        async def run():
+            engine = create_async_engine(f"sqlite+aiosqlite:///{workdir / 'race.db'}")
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with engine.connect() as connection:
+                await connection.exec_driver_sql('PRAGMA journal_mode=WAL')
+            async with engine.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
+
+            request_session = session_factory()
+            winning_session = session_factory()
+            original_commit = request_session.commit
+            winner_inserted = False
+
+            async def commit_with_race():
+                nonlocal winner_inserted
+                if not winner_inserted:
+                    winner_inserted = True
+                    winning_session.add(RoadSignCache(
+                        id=cache_key,
+                        code='S12',
+                        region='cn',
+                        svg_path=str(svg_path),
+                    ))
+                    await winning_session.commit()
+                return await original_commit()
+
+            monkeypatch.setattr(request_session, 'commit', commit_with_race)
+            try:
+                svg, cached = await road_sign_service_module.road_sign_service.get_or_create_sign(
+                    request_session,
+                    sign_type='expwy',
+                    code='S12',
+                    province='豫',
+                    region='cn',
+                )
+
+                count = await request_session.execute(
+                    select(func.count()).select_from(RoadSignCache)
+                )
+                assert (svg, cached) == ('<svg>winner</svg>', True)
+                assert count.scalar_one() == 1
+            finally:
+                await request_session.close()
+                await winning_session.close()
+                await engine.dispose()
+
+        asyncio.run(run())
