@@ -1,6 +1,6 @@
 # 变更历史
 
-详细历史版本已归档到 `ref/CLAUDE_ARCHIVE.md`，以下是简要记录：
+详细历史版本已归档到根目录 [`AGENTS_ARCHIVE_2026-02-16.md`](../AGENTS_ARCHIVE_2026-02-16.md)（原 `CLAUDE_ARCHIVE_2026-02-16.md`），以下是简要记录：
 
 ## 2026-09
 
@@ -15,7 +15,7 @@
   - **`GET /road-signs/list` 增 `region` 字段**（读已有列，**无需迁移**）；前端对 id 行以「印尼」tag 覆盖展示（`sign_type` 由 cn 规则反推，对 id 行无意义）
   - **兼容性**：缓存键 `force_tol` **仅在 True 时**追加 `:force`，False 键与历史版本逐字节相同 → 旧缓存行继续命中（有断言钉住）；`RoadSignCache` 未加 `name_id`/`province_id`/`force_tol` 列（避免迁移），故**历史回填后这两项无法还原**，需重新勾选，TOL 判定退回中文路名关键词兜底。**仍建议发布后 `POST /api/road-signs/clear-cache` 清掉按旧省码表语义生成的 id 行**（东爪哇 `35` → `16`）
   - **两处 UI 微调**（浏览器验证时发现）：① 标签「印尼语路名」5 字在 80px 标签列内**折成两行**（Home 的 `.road-sign-form` 有 `width: 80px !important` 的响应式覆盖，生成页 `label-width="80px"`）→ 统一缩短为 4 字「**印尼路名**」，与「中文路名」对仗，且不动 cn 分支布局；② Home 对话框的 `.road-sign-tip` 提示与 checkbox **挤在同一行**（`.el-form-item__content` 是 flex 容器）→ 加 `width: 100%` 独占整行
-  - **浏览器验证（Edge，隔离实例：后端 8001 + vite 5174 代理至 8001，未动开发者的 5173/8000 进程）**：生成页「印尼」模式 → 标志类型/G·S prepend 隐藏，编号/省份/中文路名/印尼路名/收费公路五项出现，4 条印尼示例与「印尼」tag 历史回填 `region` 均正常（`name_id`/`force_tol` 按设计不回填）；`3`→红头 NASIONAL、`16-024`→蓝头 `PROVINSI 16`、`8`+收费公路→红头 `TOL`。Home 内嵌对话框 → cn 字段全部隐藏、印尼字段出现；`16-024`→`PROVINSI 16`、`3`+省份「东爪哇省」→**红头 `NASIONAL 16`**（中→kode wilayah 查表打通）、`8`+收费公路+省名→`TOL 16`；切回中国后 cn 表单原样恢复。track 85 详情页 → 区域树仍为纯文本 `3 三号国道`（**根因现场复现**，配置 `show_road_sign_in_region_tree=true` 已排除配置因素）、编辑对话框出现「同时更新已有轨迹点地区（**共 11729 个点**）」。**未执行保存**——点级批量改写属数据修改，按 CLAUDE.md「不要自行修改数据库」与计划「范围外」交开发者勾选
+  - **浏览器验证（Edge，隔离实例：后端 8001 + vite 5174 代理至 8001，未动开发者的 5173/8000 进程）**：生成页「印尼」模式 → 标志类型/G·S prepend 隐藏，编号/省份/中文路名/印尼路名/收费公路五项出现，4 条印尼示例与「印尼」tag 历史回填 `region` 均正常（`name_id`/`force_tol` 按设计不回填）；`3`→红头 NASIONAL、`16-024`→蓝头 `PROVINSI 16`、`8`+收费公路→红头 `TOL`。Home 内嵌对话框 → cn 字段全部隐藏、印尼字段出现；`16-024`→`PROVINSI 16`、`3`+省份「东爪哇省」→**红头 `NASIONAL 16`**（中→kode wilayah 查表打通）、`8`+收费公路+省名→`TOL 16`；切回中国后 cn 表单原样恢复。track 85 详情页 → 区域树仍为纯文本 `3 三号国道`（**根因现场复现**，配置 `show_road_sign_in_region_tree=true` 已排除配置因素）、编辑对话框出现「同时更新已有轨迹点地区（**共 11729 个点**）」。**未执行保存**——点级批量改写属数据修改，按 AGENTS.md（原 CLAUDE.md）「不要自行修改数据库」与计划「范围外」交开发者勾选
   - **数据副作用披露**：验证过程按功能正常行为写入了 `road_sign_cache` 若干 id 行与 `backend/data/road_signs/*.svg`（`track 85` 本身**零改动**，`track_points` 未写）
 - 印尼多语言适配（由「仅中国大陆」扩展为支持印尼并预留其他地区）：`region` 三层存储（轨迹行级 / **轨迹点级权威** / 道路标牌缓存级）+ `province`/`city`/`district`/`road_name` 四组语言后缀平铺列（中文无后缀、印尼语 `_id`、英语 `_en`）；迁移 `016_add_multilanguage_region`（附 sqlite/mysql/postgresql 三份 SQL，sqlite 版为本次新增）+ `017_widen_road_sign_province`（`road_sign_cache.province` 10→100）。region 贯通上传 Form、编辑 PATCH、fill-geocoding Query（缺省读轨迹自身）与 CSV 行级（跨地区文件主通道）；导出 CSV 由 22 列扩到 **30 列**，导入侧按别名表兼容新/样例/旧三格式；区域树按 (region, 文本) 分组 + 多语 `names` 与原生 `title` tooltip；印尼六边形盾牌（PROVINSI 蓝 `#003E86` / TOL·NASIONAL 红 `#B5273C`，前端按节点 region 分派渲染，缓存键含 region 与路名）；Nominatim region=id 三请求（zh-CN/id/en）+ 38 省中文回填表
 - **升级须知（道路标牌缓存）**：缓存键算法变更（旧键不含 region 与路名）使**既有 cn 缓存行全部失配**（实测 88 行 0 命中）→ 旧缓存行与 `backend/data/road_signs/*.svg` 成为孤儿，`GET /road-signs/list` 会对同一编号同时列出新旧两条。**发布后调一次 `POST /api/road-signs/clear-cache`** 即可清理（开发库本次未清理，故新旧并存属预期现象，非缺陷）

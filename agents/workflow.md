@@ -78,12 +78,13 @@ Chrome DevTools MCP 分析
 
 ## 文档更新规范
 
-### CLAUDE.md 维护
+### AGENTS.md 维护
 
 - **大小限制**: < 40KB
-- **压缩策略**: 详细内容移至 `ref/CLAUDE_ARCHIVE.md` 或 `./cc` 目录
+- **压缩策略**: 详细内容移至根目录 `AGENTS_ARCHIVE_*.md` 归档文件或 `./agents` 目录
 - **更新时机**: 大功能完成后
 - **格式**: 简洁表格 + 关键代码片段
+- **历史说明**: 本项目原使用 `CLAUDE.md` + `./cc` 目录，已通用化为 `AGENTS.md` + `./agents` 目录
 
 ### 代码注释
 
@@ -93,7 +94,7 @@ Chrome DevTools MCP 分析
 
 ## Tips
 
-当遇到 Edit 失败报错时，使用 serena 来编辑代码。
+当内置编辑工具（如 Edit）修改文件失败报错时，可改用 serena MCP 或以脚本方式编辑代码。
 
 ### 开发检查清单
 
@@ -124,7 +125,7 @@ For any coordinate or marker-related fix: (1) Test coordinate conversion works f
 
 ## Reviewing
 
-在合适的情况下，或者是用户提出审查项目时，使用 code-review-excellence skill 来审查这个项目。排除 ./ref_gpxutil。
+在合适的情况下，或者是用户提出审查项目时，使用当前智能体可用的代码审查技能或流程（如 code-review-excellence skill）来审查这个项目。排除 ./ref_gpxutil。
 
 审查结果存入 ./ref/CODE_REVIEW_REPORT.md，如果已存在，则覆盖它。
 
