@@ -69,7 +69,7 @@ import {
   type TrackPoint,
   type MarkerPosition,
 } from '@/utils/animationUtils'
-import { exportWithPlaywright, downloadFile, generateExportFilename, requiresBackendExport, checkExportPrerequisites, buildExportConfig } from '@/utils/animation/videoExport'
+import { exportWithPlaywright, downloadFile, generateExportFilename, buildExportConfig } from '@/utils/animation/videoExport'
 import { ElMessage } from 'element-plus'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
 
@@ -83,7 +83,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const animationStore = useAnimationStore()
-const { setMarkerPosition, setPassedSegment, setCameraToMarker, setAnimationPlaying, fitTrackWithPadding } = useAnimationMap()
+const { setMarkerPosition, setPassedSegment, setCameraToMarker, applyMapRotation, setAnimationPlaying, fitTrackWithPadding } = useAnimationMap()
 
 // 状态
 const isInitialized = ref(false)
@@ -272,28 +272,18 @@ function handleExport() {
 
 async function handleExportVideo(options: ExportOptions) {
   try {
-    // 检查是否需要后端导出
-    if (requiresBackendExport(props.mapProvider)) {
-      // 组装完整导出配置（含当前视图状态），使用后端 Playwright 导出
-      const config = buildExportConfig(options)
-      exportDialogRef.value?.startExport()
-      const downloadUrl = await exportWithPlaywright(
-        props.trackId,
-        config,
-        (progress) => exportDialogRef.value?.updateProgress(progress)
-      )
-      await downloadFile(downloadUrl, generateExportFilename(props.trackId))
-      exportDialogRef.value?.finishSuccess()
-      ElMessage.success('导出完成')
-    } else {
-      // 前端导出（暂时不支持）
-      const prerequisites = checkExportPrerequisites()
-      if (!prerequisites.canPlay) {
-        ElMessage.error(prerequisites.reason)
-        return
-      }
-      ElMessage.warning('前端导出功能开发中，请使用百度地图进行导出')
-    }
+    // 统一使用后端 Playwright 导出：导出页面与用户预览完全一致，
+    // 且不受各引擎前端捕获限制（CORS 污染、DOM 渲染、瓦片跨域等）影响
+    const config = buildExportConfig(options)
+    exportDialogRef.value?.startExport()
+    const downloadUrl = await exportWithPlaywright(
+      props.trackId,
+      config,
+      (progress) => exportDialogRef.value?.updateProgress(progress)
+    )
+    await downloadFile(downloadUrl, generateExportFilename(props.trackId))
+    exportDialogRef.value?.finishSuccess()
+    ElMessage.success('导出完成')
   } catch (e: any) {
     console.error('Export error:', e)
     exportDialogRef.value?.finishError()
@@ -373,10 +363,16 @@ function updateAnimation() {
   )
   setPassedSegment(0, index)
 
-  // 相机跟随模式
+  // 相机与朝向模式：
+  // - fixed-center：当前点居中，朝向按 orientationMode（track-up 时轨迹方向始终指向画面上方）
+  // - full：展示整个路径，固定正北朝上
+  const targetRotation = animationStore.cameraMode === 'fixed-center' && animationStore.orientationMode === 'track-up'
+    ? pos.bearing
+    : 0
   if (animationStore.cameraMode === 'fixed-center') {
     setCameraToMarker(pos)
   }
+  applyMapRotation(targetRotation)
 }
 
 // 生命周期
@@ -458,6 +454,14 @@ watch(() => animationStore.markerStyle, () => {
   const pos = isMobile.value ? updateAndEmitPosition.getLastPosition?.() ?? null : currentPosition.value
   if (pos) {
     setMarkerPosition(pos, animationStore.markerStyle)
+  }
+})
+
+// 监听相机/朝向模式切换：暂停状态下立即按新模式刷新一次画面
+// （播放中由动画循环逐帧应用，不在此处处理，避免与逐帧旋转相互覆盖）
+watch(() => [animationStore.cameraMode, animationStore.orientationMode] as const, () => {
+  if (!animationStore.isPlaying) {
+    updateAnimation()
   }
 })
 </script>

@@ -184,7 +184,14 @@ class AnimationDOMOverlay {
 
   setBearing(bearing: number) {
     this.bearing = bearing
-    this.innerElement.style.transform = `rotate(${bearing}deg)`
+    // 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
+    // person 图标无方向性，始终保持直立
+    const rotation = this.style === 'person' ? 0 : bearing - currentMapRotation
+    this.innerElement.style.transform = `rotate(${rotation}deg)`
+  }
+
+  getBearing() {
+    return this.bearing
   }
 
   destroy() {
@@ -233,9 +240,9 @@ class AnimationDOMOverlay {
       return
     }
 
-    // 获取 DOM 元素的尺寸
-    const width = this.style === 'car' ? 60 : 36
-    const height = this.style === 'car' ? 40 : 36
+    // 获取 DOM 元素的尺寸（顶视图车标 40x60，其余 36x36）
+    const width = this.style === 'car' ? 40 : 36
+    const height = this.style === 'car' ? 60 : 36
 
     // 计算新的像素位置
     const newLeft = pointPixel.x - width / 2
@@ -318,8 +325,13 @@ class AnimationDOMOverlay {
 
     if (this.style === 'car') {
       this.innerElement.className = 'animation-marker-car'
+      // 顶视图车标（车头朝上，随方位角旋转）
+      const carWidth = 40
+      const carHeight = 60
+      this.innerElement.style.width = `${carWidth}px`
+      this.innerElement.style.height = `${carHeight}px`
       this.innerElement.innerHTML = `
-        <img src="/vehicle.svg" style="display: block; width: ${width}px; height: ${height}px;" />
+        <img src="/vehicle-top.svg" style="display: block; width: ${carWidth}px; height: ${carHeight}px;" />
       `
     } else if (this.style === 'person') {
       this.innerElement.className = 'animation-marker-person'
@@ -683,8 +695,14 @@ const animationAdapter: AnimationMapAdapter = {
 
   setMapRotation(bearing) {
     if (!TMapInstance) return
-    TMapInstance.setRotation(bearing)
+    // 腾讯 setRotation 为地图内容顺时针旋转的角度；
+    // 轨迹朝上（方位角 bearing 指向画面正上方）需内容逆时针旋转，故取负
+    TMapInstance.setRotation(-bearing)
     currentMapRotation = bearing
+    // 地图旋转后补偿标记图标方向
+    if (animationMarker) {
+      animationMarker.setBearing(animationMarker.getBearing())
+    }
   },
 
   getMapRotation() {

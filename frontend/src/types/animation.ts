@@ -64,6 +64,7 @@ export interface ExportConfig {
   markerStyle: MarkerStyle
   showInfoPanel: boolean
   layerId?: string  // 地图图层（含卫星图等变体）
+  engine?: 'sdk' | 'leaflet'  // 地图引擎（同一图层可在 SDK 与 Leaflet 瓦片间切换）
   zoom?: number | null  // fixed-center 模式下用户手动缩放
   center?: { lat: number; lng: number } | null
   viewportWidth?: number  // 详情页地图画幅宽度（像素），用于导出画幅变化时的 zoom 修正

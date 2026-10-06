@@ -41,6 +41,9 @@ import { ref, Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { escapeHtml } from '@/utils/format'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+// leaflet-rotate：为 Leaflet 补充地图旋转能力（patch 全局 L，需在 leaflet 之后导入）
+// 注意须显式引入 dist 产物，避免解析到 package.json 的 module 字段（其源码以裸全局 L 编写）
+import 'leaflet-rotate/dist/leaflet-rotate-src.js'
 import 'proj4leaflet'
 import 'leaflet.chinatmsproviders'
 import { useConfigStore } from '@/stores/config'
@@ -185,6 +188,8 @@ let animationMarker: L.Marker | null = null
 let animationMarkerIcon: L.DivIcon | null = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
+// 当前地图旋转（语义：指向画面正上方的罗盘方位角，0 = 正北朝上）
+let currentMapRotation = 0
 
 // 道路标志 SVG 缓存（渲染与加载见 tooltipRoadSign 共享模块）
 const currentTooltipPoint = ref<Point | null>(null)  // 当前 tooltip 显示的点（用于异步更新）
@@ -235,20 +240,20 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
   let iconAnchor: [number, number] = [18, 18] // 中心锚点
 
   if (style === 'car') {
-    // 汽车图标 - 使用 vehicle.svg
-    iconSize = [60, 40]
-    iconAnchor = [30, 20] // 中心锚点
+    // 汽车图标 - 顶视图（车头朝上，随方位角旋转）
+    iconSize = [40, 60]
+    iconAnchor = [20, 30] // 中心锚点
     html = `
       <div class="animation-marker-car" style="
-        width: 60px;
-        height: 40px;
+        width: 40px;
+        height: 60px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
+        <img src="/vehicle-top.svg" width="40" height="60" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
@@ -293,6 +298,26 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
     iconSize,
     iconAnchor,
   })
+}
+
+// 最近一次回放标记位置（地图旋转后补偿图标方向用）
+let lastMarkerPosition: MarkerPosition | null = null
+
+// 应用回放标记图标的屏幕旋转角
+// 图标随地图旋转层一起旋转，需按「方位角 - 地图旋转角」反向补偿；
+// person 图标无方向性，始终保持直立
+function applyAnimationMarkerRotation(position?: MarkerPosition) {
+  if (!animationMarker) return
+  const pos = position || lastMarkerPosition
+  if (!pos) return
+  lastMarkerPosition = pos
+  const icon = animationMarker.getElement()
+  if (!icon) return
+  // 使用类选择器找到正确的 inner div，避免选中 Leaflet 的包装 div
+  const innerDiv = icon.querySelector('.animation-marker-car') ||
+                   icon.querySelector('.animation-marker-arrow')
+  if (!innerDiv) return
+  innerDiv.style.transform = `rotate(${pos.bearing - currentMapRotation}deg)`
 }
 
 // 实现动画地图适配器
@@ -368,16 +393,7 @@ const animationAdapter: AnimationMapAdapter = {
 
       // 延迟设置旋转，确保 DOM 已初始化
       setTimeout(() => {
-        const icon = animationMarker?.getElement()
-        if (icon) {
-          // 使用类选择器找到正确的 inner div，避免选中 Leaflet 的包装 div
-          const innerDiv = icon.querySelector('.animation-marker-car') ||
-                          icon.querySelector('.animation-marker-person') ||
-                          icon.querySelector('.animation-marker-arrow')
-          if (innerDiv) {
-            innerDiv.style.transform = `rotate(${position.bearing}deg)`
-          }
-        }
+        applyAnimationMarkerRotation(position)
       }, 0)
     } else {
       animationMarker.setLatLng(latLng)
@@ -387,36 +403,35 @@ const animationAdapter: AnimationMapAdapter = {
         animationMarkerIcon = createAnimationIcon(style)
         animationMarker.setIcon(animationMarkerIcon)
         currentAnimationMarkerStyle = style
-      }
-
-      // 根据方位旋转标记（所有样式都需要旋转）
-      const icon = animationMarker.getElement()
-      if (icon) {
-        // 使用类选择器找到正确的 inner div，避免选中 Leaflet 的包装 div
-        const innerDiv = icon.querySelector('.animation-marker-car') ||
-                        icon.querySelector('.animation-marker-person') ||
-                        icon.querySelector('.animation-marker-arrow')
-        if (innerDiv) {
-          innerDiv.style.transform = `rotate(${position.bearing}deg)`
-        }
+        // setIcon 会重建 DOM，等待元素就绪后再应用旋转
+        setTimeout(() => {
+          applyAnimationMarkerRotation(position)
+        }, 0)
+      } else {
+        applyAnimationMarkerRotation(position)
       }
     }
   },
 
   setCameraToMarker(position: MarkerPosition) {
     if (!map.value) return
-    map.value.panTo([position.lat, position.lng])
+    // 回放中每帧调用，禁用平移动画避免相互打断
+    map.value.setView([position.lat, position.lng], map.value.getZoom(), { animate: false })
   },
 
   setMapRotation(bearing: number) {
-    // Leaflet 默认不支持旋转
-    // 需要使用 leaflet-rotate 插件
-    // 或者使用 CSS transform
-    console.warn('Leaflet rotation requires plugin')
+    if (!map.value) return
+    // leaflet-rotate 的 setBearing(θ) 使地图内容顺时针旋转 θ；
+    // 让方位角 bearing 指向画面正上方需内容逆时针旋转 bearing，即 setBearing(-bearing)
+    const rotatedMap = map.value as unknown as { setBearing: (theta: number) => void }
+    rotatedMap.setBearing(-bearing)
+    currentMapRotation = bearing
+    // 地图内容旋转后，标记图标需反向补偿以保持指向正确方位
+    applyAnimationMarkerRotation(lastMarkerPosition || undefined)
   },
 
   getMapRotation() {
-    return 0
+    return currentMapRotation
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）
@@ -525,7 +540,8 @@ function initMap() {
   // 检查是否为海报生成模式
   const isPosterMode = (window as any).__posterMode === true
 
-  // 创建地图
+  // 创建地图（rotate: true 启用 leaflet-rotate 旋转能力，回放 track-up 模式使用；
+  // bearing 保持 0 时不旋转，常规浏览行为与原生 Leaflet 一致）
   map.value = L.map(mapContainer.value, {
     center: [39.9, 116.4],
     zoom: 10,
@@ -535,7 +551,17 @@ function initMap() {
     crs: crs,
     // 海报生成模式使用 Canvas 渲染（html2canvas 兼容性更好）
     preferCanvas: isPosterMode,
-  })
+    rotate: true,
+    bearing: 0,
+    // 关闭插件附带的旋转手势，保持交互与原生一致（旋转仅由回放朝向模式驱动）
+    shiftKeyRotate: false,
+    touchRotate: false,
+    compassBearing: false,
+    touchGestures: false,
+  } as L.MapOptions)
+  // 地图重建后旋转复位为正北朝上
+  currentMapRotation = 0
+  lastMarkerPosition = null
 
   // 添加默认底图（使用当前提供商）
   addTileLayer(currentLayerId.value)

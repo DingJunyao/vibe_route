@@ -251,6 +251,7 @@
                       ref="mapRef"
                       :tracks="[trackWithPoints]"
                       :default-layer-id="exportLayerId || undefined"
+                      :force-engine="exportEngine"
                       :highlight-track-id="track.id"
                       :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                       :latest-point-index="latestPointIndex"
@@ -483,6 +484,7 @@
                     ref="mapRef"
                     :tracks="[trackWithPoints]"
                     :default-layer-id="exportLayerId || undefined"
+                    :force-engine="exportEngine"
                     :highlight-track-id="track.id"
                     :highlight-segments="highlightedSegment ? [highlightedSegment] : null"
                     :latest-point-index="latestPointIndex"
@@ -1108,7 +1110,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useAnimationStore } from '@/stores/animation'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
-import { exportWithPlaywright, downloadFile, generateExportFilename, checkExportPrerequisites, buildExportConfig } from '@/utils/animation/videoExport'
+import { exportWithPlaywright, downloadFile, generateExportFilename, buildExportConfig } from '@/utils/animation/videoExport'
 import { calculateDuration, findPointIndexByTime, interpolatePosition } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber } from '@/utils/roadSignParser'
@@ -1186,6 +1188,11 @@ function handleMapProviderChanged(provider: string) {
 const isExportMode = computed(() => route.query.export === 'true')
 // 数据与地图就绪（加载遮罩移除、exportState=ready，等待服务端触发播放）
 const exportReady = ref(false)
+// 导出模式：强制地图引擎（与用户点击导出时的引擎一致）
+const exportEngine = computed<'sdk' | 'leaflet' | undefined>(() => {
+  const engine = route.query.engine
+  return engine === 'sdk' || engine === 'leaflet' ? engine : undefined
+})
 
 // 响应式：判断是否为移动端（导出模式强制桌面布局，与用户导出时视图一致）
 const screenWidth = ref(window.innerWidth)
@@ -1292,18 +1299,9 @@ async function handleExport(options: ExportOptions) {
       config,
       (progress) => exportDialogRef.value?.updateProgress(progress)
     )
-    if (downloadUrl) {
-      await downloadFile(downloadUrl, generateExportFilename(trackId.value))
-      exportDialogRef.value?.finishSuccess()
-      ElMessage.success('导出完成')
-    } else {
-      const prerequisites = checkExportPrerequisites()
-      if (!prerequisites.canPlay) {
-        ElMessage.error(prerequisites.reason)
-        return
-      }
-      ElMessage.warning('前端导出功能开发中，请使用百度地图进行导出')
-    }
+    await downloadFile(downloadUrl, generateExportFilename(trackId.value))
+    exportDialogRef.value?.finishSuccess()
+    ElMessage.success('导出完成')
   } catch (e: any) {
     console.error('Export error:', e)
     exportDialogRef.value?.finishError()

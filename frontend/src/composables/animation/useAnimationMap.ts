@@ -67,6 +67,7 @@ export interface MapViewState {
   center: { lat: number; lng: number } | null
   zoom: number | null
   layerId: string
+  engine?: 'sdk' | 'leaflet'  // 当前底图使用的引擎（SDK 或 Leaflet 瓦片）
   width: number  // 地图画幅宽度（像素），用于导出画幅变化时的 zoom 修正
   height: number  // 地图画幅高度（像素）
 }
@@ -86,6 +87,9 @@ export function registerViewStateProvider(provider: () => MapViewState) {
 export function getGlobalViewState(): MapViewState {
   return globalViewStateProvider?.() ?? { center: null, zoom: null, layerId: '', width: 0, height: 0 }
 }
+
+// 最近一次直接应用的目标朝向（避免每帧重复设置相同角度）
+let lastAppliedRotation: number | null = null
 
 // 等待队列（在适配器注册之前存储调用）
 let markerPositionQueue: Array<{ position: MarkerPosition; style: MarkerStyle }> = []
@@ -154,28 +158,19 @@ export function useAnimationMap() {
     }
   }
 
-  // 设置地图旋转（平滑过渡）
-  function setMapRotation(targetBearing: number) {
-    if (!globalAdapter) return
-
-    const current = globalAdapter.getMapRotation()
-    const delta = calculateShortestRotation(current, targetBearing)
-
-    // 平滑过渡（分5步完成）
-    const steps = 5
-    const stepDelta = delta / steps
-    let currentStep = 0
-
-    function animate() {
-      if (currentStep < steps) {
-        const newRotation = current + stepDelta * (currentStep + 1)
-        globalAdapter.setMapRotation(normalizeAngle(newRotation))
-        currentStep++
-        requestAnimationFrame(animate)
-      }
+  // 直接设置地图旋转（无过渡动画，播放中每帧调用、模式切换时一次性调用）
+  // bearing 语义：应指向画面正上方的罗盘方位角（0 = 正北朝上）
+  function applyMapRotation(targetBearing: number) {
+    if (!globalAdapter) {
+      lastAppliedRotation = null
+      return
     }
-
-    animate()
+    const normalized = normalizeAngle(targetBearing)
+    if (lastAppliedRotation !== null && Math.abs(calculateShortestRotation(lastAppliedRotation, normalized)) < 0.01) {
+      return
+    }
+    globalAdapter.setMapRotation(normalized)
+    lastAppliedRotation = normalized
   }
 
   // 设置动画播放状态
@@ -210,7 +205,7 @@ export function useAnimationMap() {
     setPassedSegment,
     setMarkerPosition,
     setCameraToMarker,
-    setMapRotation,
+    applyMapRotation,
     setAnimationPlaying,
     fitTrackWithPadding,
   }
