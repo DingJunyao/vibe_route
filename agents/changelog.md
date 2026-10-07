@@ -2,6 +2,10 @@
 
 详细历史版本已归档到根目录 [`AGENTS_ARCHIVE_2026-02-16.md`](../AGENTS_ARCHIVE_2026-02-16.md)（原 `CLAUDE_ARCHIVE_2026-02-16.md`），以下是简要记录：
 
+## 2026-10
+
+- 后端依赖双声明等价（pyproject.toml ↔ requirements.txt）：新增 `backend/pyproject.toml`，`[project.dependencies]` 与 requirements.txt **逐条等价**（含 `bcrypt==4.0.1`、`playwright==1.58.0` 钉版与 svgpathtools 的 GitHub 直连 URL；`requires-python = ">=3.11"` 对齐 Dockerfile 的 python:3.11-slim 与本机 3.11.15；`[tool.uv] package = false`，后端是 uvicorn 直跑的应用，uv 只管依赖不构建包）。校验：静态归一化比对 45 条完全一致（requirements.txt 侧顺带删掉「测试」段落里重复的 httpx），`uv pip compile` 全解析锁集一致（**103 个包**含传递依赖，diff 仅差 `# via` 来源注释）。两文件头部互加「新增依赖时两边同步修改」注记；`agents/quick-commands.md` ARM 段的手写 pip 一行装（已漂移：缺 python-multipart/slowapi/svgpathtools，bcrypt 未钉版——passlib 1.7.4 遇 bcrypt≥4.1 会崩）改为 `pip install -r requirements.txt --index-url https://pypi.org/simple`，消除第三份会漂移的依赖列表（Dockerfile 本就走 requirements.txt，不受影响）。另核：`pyproj` 包仅为 geopandas 传递依赖（环境实装 3.7.2），后端代码无直接 import，无需显式声明
+
 ## 2026-09
 
 - 修复「轨迹设为印尼后详情页仍显示纯文本编号」+ 道路标志生成入口印尼支持 + 地区代码表对齐 gpxutil（后端 pytest **108 passed**，2026-09-11）：

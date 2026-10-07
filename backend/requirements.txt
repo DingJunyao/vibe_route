@@ -1,3 +1,6 @@
+# 与 pyproject.toml 的 dependencies 保持等价：新增依赖时两边同步修改，
+# 保证 `pip install -r requirements.txt`、`pip install .`、`uv sync` 结果一致。
+
 # FastAPI 和服务器
 fastapi
 uvicorn[standard]
@@ -66,7 +69,6 @@ openpyxl
 # 测试
 pytest
 pytest-asyncio
-httpx
 
 # 解压
 rarfile
