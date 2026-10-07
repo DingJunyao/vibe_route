@@ -162,6 +162,8 @@ let fullTrackPolyline: any = null  // 播放时的完整轨迹
 let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let currentMapRotation = 0
+// 最近一次标记方位角（地图旋转后补偿图标方向用）
+let lastMarkerBearing = 0
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
 // 存储轨迹点数据用于查询
@@ -361,18 +363,18 @@ function createAnimationIcon(style: 'arrow' | 'car' | 'person' = 'arrow') {
   const div = document.createElement('div')
 
   if (style === 'car') {
-    // 汽车图标 - 使用 vehicle.svg
+    // 汽车图标 - 顶视图（车头朝上，随方位角旋转）
     div.innerHTML = `
       <div class="animation-marker-car" style="
-        width: 60px;
-        height: 40px;
+        width: 40px;
+        height: 60px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
+        <img src="/vehicle-top.svg" width="40" height="60" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
@@ -471,11 +473,12 @@ const animationAdapter: AnimationMapAdapter = {
     if (!AMapInstance) return
 
     const AMap = (window as any).AMap
+    lastMarkerBearing = position.bearing
     const lngLat = new AMap.LngLat(position.lng, position.lat)
 
-    // 根据样式确定标记尺寸和锚点
-    const iconSize = style === 'car' ? { width: 60, height: 40 } : { width: 36, height: 36 }
-    const offset = style === 'car' ? { x: -30, y: -20 } : { x: -18, y: -15 }
+    // 根据样式确定标记尺寸和锚点（顶视图车标 40x60，其余 36x36）
+    const iconSize = style === 'car' ? { width: 40, height: 60 } : { width: 36, height: 36 }
+    const offset = style === 'car' ? { x: -20, y: -30 } : { x: -18, y: -15 }
 
     if (!animationMarker) {
       animationMarker = new AMap.Marker({
@@ -498,23 +501,26 @@ const animationAdapter: AnimationMapAdapter = {
         currentAnimationMarkerStyle = style
       }
 
-      // 根据方位旋转标记（所有样式都需要旋转）
+      // 旋转标记：图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
+      // person 图标无方向性，保持直立
       const content = animationMarker.getContent() as HTMLElement
-      if (content) {
-        // 所有样式都旋转外层容器
+      if (content && style !== 'person') {
         const wrapperDiv = content.querySelector('div') as HTMLDivElement
         if (wrapperDiv) {
-          wrapperDiv.style.transform = `rotate(${position.bearing}deg)`
+          wrapperDiv.style.transform = `rotate(${position.bearing - currentMapRotation}deg)`
         }
       }
     }
   },
 
-  setCameraToMarker(position: MarkerPosition) {
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (!AMapInstance) return
     const AMap = (window as any).AMap
     const lngLat = new AMap.LngLat(position.lng, position.lat)
     AMapInstance.setCenter(lngLat)
+    if (targetZoom != null && AMapInstance.getZoom() !== targetZoom) {
+      AMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing: number) {
@@ -525,9 +531,21 @@ const animationAdapter: AnimationMapAdapter = {
     // 设置为 3D 模式
     AMapInstance.setViewMode('3D')
 
-    // 设置旋转角度
+    // 高德 setRotation 为地图内容顺时针旋转的角度；
+    // 轨迹朝上（方位角 bearing 指向画面正上方）需内容逆时针旋转，故取负
     currentMapRotation = bearing
-    AMapInstance.setRotation(bearing)
+    AMapInstance.setRotation(-bearing)
+
+    // 地图旋转后补偿标记图标方向（person 图标保持直立）
+    if (animationMarker && currentAnimationMarkerStyle !== 'person') {
+      const content = animationMarker.getContent() as HTMLElement
+      if (content) {
+        const wrapperDiv = content.querySelector('div') as HTMLDivElement
+        if (wrapperDiv) {
+          wrapperDiv.style.transform = `rotate(${lastMarkerBearing - bearing}deg)`
+        }
+      }
+    }
   },
 
   getMapRotation() {
@@ -583,14 +601,29 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周各留 10% 空间（bottomPaddingPx 追加底部像素）
   fitTrackWithPadding(bottomPaddingPx: number) {
     if (!AMapInstance) return
-    // 计算底部 padding 的百分比（相对于容器高度）
-    const containerHeight = (AMapInstance.getSize() as any).height
-    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
-    // 调用现有的 fitBounds 方法，使用额外的底部 padding
-    fitBounds(paddingPercent)
+
+    const AMap = (window as any).AMap
+    const bounds: any[] = []
+    for (const track of props.tracks) {
+      if (!track.points || track.points.length === 0) continue
+      for (const point of track.points) {
+        const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
+        const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
+        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+          bounds.push(new AMap.LngLat(lng, lat))
+        }
+      }
+    }
+    if (bounds.length === 0) return
+
+    const size = AMapInstance.getSize() as any
+    // setFitView avoid 为 [上, 右, 下, 左]（与组件内 fitBounds 的既有用法一致）
+    const padX = Math.round((size.width || 800) * 0.1)
+    const padY = Math.round((size.height || 600) * 0.1)
+    AMapInstance.setFitView(null, true, [padY, padX, padY + bottomPaddingPx, padX])
   },
 }
 

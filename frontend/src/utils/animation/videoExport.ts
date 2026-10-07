@@ -113,6 +113,7 @@ export function buildExportConfig(options: ExportOptions): ExportConfig {
     markerStyle: animationStore.markerStyle,
     showInfoPanel: animationStore.showInfoPanel,
     layerId: view.layerId || undefined,
+    engine: view.engine,
     zoom: view.zoom,
     center: view.center,
     viewportWidth: view.width || undefined,
@@ -138,6 +139,7 @@ export async function exportWithPlaywright(
     markerStyle,
     showInfoPanel,
     layerId,
+    engine,
     zoom,
     center,
     viewportWidth,
@@ -157,6 +159,7 @@ export async function exportWithPlaywright(
       marker_style: markerStyle,
       show_info_panel: showInfoPanel,
       layer_id: layerId ?? null,
+      engine: engine ?? null,
       zoom: zoom ?? null,
       center_lat: center?.lat ?? null,
       center_lng: center?.lng ?? null,
@@ -243,27 +246,4 @@ export function generateExportFilename(trackId: number): string {
   const date = new Date()
   const dateStr = date.toISOString().slice(0, 10).replace(/T/, '-')
   return `track_${trackId}_animation_${dateStr}.webm`
-}
-
-/**
- * 检查导出前置条件
- */
-export function checkExportPrerequisites(): { canExport: boolean; reason?: string } {
-  const isBrowserSupported = checkMediaRecorderSupport()
-
-  if (!isBrowserSupported) {
-    return {
-      canExport: false,
-      reason: '浏览器不支持 MediaRecorder',
-    }
-  }
-
-  return { canExport: true }
-}
-
-/**
- * 检查是否需要后端导出（百度地图、Google 地图需要）
- */
-export function requiresBackendExport(mapProvider: string): boolean {
-  return ['baidu', 'baidu_gl', 'baidu_legacy', 'google'].includes(mapProvider)
 }

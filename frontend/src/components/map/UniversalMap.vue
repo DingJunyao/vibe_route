@@ -167,6 +167,19 @@
           :value="layer.id"
         />
       </el-select>
+      <!-- 引擎切换（仅配置了 SDK 凭据的图层显示）：SDK 引擎 / Leaflet 瓦片 -->
+      <el-button-group v-if="sdkAvailable" size="small" class="engine-switch">
+        <el-button
+          :type="currentEngine === 'sdk' ? 'primary' : ''"
+          title="使用官方 SDK 引擎"
+          @click="switchEngine('sdk')"
+        >SDK</el-button>
+        <el-button
+          :type="currentEngine === 'leaflet' ? 'primary' : ''"
+          title="使用 Leaflet 瓦片引擎"
+          @click="switchEngine('leaflet')"
+        >Leaflet</el-button>
+      </el-button-group>
       <el-button-group size="small" class="fit-bounds-btn">
         <el-button @click="fitBounds" title="居中显示轨迹">
           <el-icon :size="14">
@@ -201,7 +214,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useUserConfigStore } from '@/stores/userConfig'
 import { useAnimationStore } from '@/stores/animation'
@@ -213,7 +226,7 @@ import TencentMap from './TencentMap.vue'
 import GoogleMap from './GoogleMap.vue'
 import type { MapLayerConfig } from '@/api/admin'
 import { formatTimeShort } from '@/utils/relativeTime'
-import { getEffectiveMapLayer, saveLocalMapPreference } from '@/utils/mapLocalPreference'
+import { getEffectiveMapLayer, saveLocalMapPreference, getLocalEnginePreference, saveLocalEnginePreference, type MapEngineType } from '@/utils/mapLocalPreference'
 import { registerViewStateProvider } from '@/composables/animation/useAnimationMap'
 
 interface Point {
@@ -288,6 +301,7 @@ interface Props {
   emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，如轨迹拆分，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
   enableAnimation?: boolean  // 是否启用动画回放功能（仅轨迹详情页需要）
+  forceEngine?: 'sdk' | 'leaflet'  // 强制使用的地图引擎（导出模式下由 URL 指定，优先于本地偏好）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -307,6 +321,7 @@ const props = withDefaults(defineProps<Props>(), {
   emitMapClick: false,
   customOverlays: () => [],
   enableAnimation: false,
+  forceEngine: undefined,
 })
 
 // 定义 emit 事件
@@ -461,36 +476,107 @@ const savedViewState = ref<{
   zoom: number | null
 }>({ center: null, zoom: null })
 
+// 底图层家族（同一 provider 可能有多个图层变体，如 amap/amap_satellite）
+const layerFamily = computed<string>(() => {
+  const layerId = currentLayerId.value || ''
+  if (layerId.startsWith('baidu')) return 'baidu'
+  if (layerId.startsWith('amap')) return 'amap'
+  if (layerId.startsWith('tencent')) return 'tencent'
+  if (layerId.startsWith('google')) return 'google'
+  if (layerId.startsWith('tianditu')) return 'tianditu'
+  return 'osm'
+})
+
+// 当前使用的地图引擎（SDK 或 Leaflet 瓦片）
+const currentEngine = ref<MapEngineType>('sdk')
+
+// 当前家族是否配置了 SDK 凭据（配置了 api_key/ak 才能切换到 SDK 引擎）
+const sdkAvailable = computed<boolean>(() => {
+  switch (layerFamily.value) {
+    case 'amap':
+      return !!configStore.getMapLayerById('amap')?.api_key
+    case 'baidu': {
+      // baidu_legacy 使用百度地图的配置（api_key）
+      const configKey = currentLayerId.value === 'baidu_legacy' ? 'baidu' : currentLayerId.value
+      const baiduConfig = configStore.getMapLayerById(configKey)
+      return !!(baiduConfig?.api_key || baiduConfig?.ak)
+    }
+    case 'tencent':
+      return !!configStore.getMapLayerById('tencent')?.api_key
+    case 'google':
+      return !!configStore.getMapLayerById('google')?.api_key
+    default:
+      // 天地图、OSM 无 SDK 引擎（天地图仅有需要 key 的 Leaflet 瓦片）
+      return false
+  }
+})
+
+// 同步当前引擎：导出模式以 forceEngine 为准；否则读本地偏好（默认 SDK，保持既有行为；无 SDK 时固定 Leaflet）
+watch(
+  [layerFamily, sdkAvailable, () => props.forceEngine],
+  ([family, hasSdk, forced]) => {
+    if (forced === 'sdk' || forced === 'leaflet') {
+      currentEngine.value = forced
+      return
+    }
+    currentEngine.value = hasSdk ? getLocalEnginePreference(family) : 'leaflet'
+  },
+  { immediate: true },
+)
+
+// 切换地图引擎（同一底图层在 SDK 与 Leaflet 瓦片间切换，切换后恢复视角）
+function switchEngine(engine: MapEngineType) {
+  if (!sdkAvailable.value || engine === currentEngine.value) return
+
+  // 保存当前视角（地图处于错误状态时可能失败，不应阻断切换）
+  try {
+    const currentState = getCurrentViewState()
+    if (currentState.center && currentState.zoom !== null) {
+      savedViewState.value = currentState
+    }
+  } catch (err) {
+    console.warn('[UniversalMap] 切换引擎前保存地图视角失败:', err)
+  }
+
+  saveLocalEnginePreference(layerFamily.value, engine)
+  currentEngine.value = engine
+
+  // 等待新引擎地图初始化后恢复视角
+  nextTick(() => {
+    setTimeout(() => {
+      if (savedViewState.value.center && savedViewState.value.zoom !== null) {
+        setMapViewState(savedViewState.value.center, savedViewState.value.zoom)
+      }
+    }, 300)
+  })
+}
+
 // 判断是否使用高德地图引擎
 const useAMapEngine = computed(() => {
-  const layerId = currentLayerId.value
-  if (layerId !== 'amap' && !layerId.startsWith('amap')) return false
+  if (layerFamily.value !== 'amap' || currentEngine.value !== 'sdk') return false
   const amapConfig = configStore.getMapLayerById('amap')
   return !!(amapConfig?.api_key)
 })
 
 // 判断是否使用百度地图引擎（包括 GL 版本和 Legacy 版本）
 const useBMapEngine = computed(() => {
-  const layerId = currentLayerId.value
-  if (layerId !== 'baidu' && !layerId.startsWith('baidu')) return false
+  if (layerFamily.value !== 'baidu' || currentEngine.value !== 'sdk') return false
   // baidu_legacy 使用百度地图的配置（api_key）
-  const configKey = layerId === 'baidu_legacy' ? 'baidu' : layerId
+  const configKey = currentLayerId.value === 'baidu_legacy' ? 'baidu' : currentLayerId.value
   const baiduConfig = configStore.getMapLayerById(configKey)
   return !!(baiduConfig?.api_key || baiduConfig?.ak)
 })
 
 // 判断是否使用腾讯地图引擎
 const useTencentEngine = computed(() => {
-  const layerId = currentLayerId.value
-  if (layerId !== 'tencent' && !layerId.startsWith('tencent')) return false
+  if (layerFamily.value !== 'tencent' || currentEngine.value !== 'sdk') return false
   const tencentConfig = configStore.getMapLayerById('tencent')
   return !!(tencentConfig?.api_key)
 })
 
 // 判断是否使用 Google 地图引擎（有 api_key 时用 SDK，否则回退 Leaflet 瓦片，同高德/腾讯模式）
 const useGoogleEngine = computed(() => {
-  const layerId = currentLayerId.value
-  if (layerId !== 'google' && !layerId.startsWith('google')) return false
+  if (layerFamily.value !== 'google' || currentEngine.value !== 'sdk') return false
   const googleConfig = configStore.getMapLayerById('google')
   return !!(googleConfig?.api_key)
 })
@@ -834,10 +920,11 @@ function resize() {
 }
 
 onMounted(async () => {
-  // 注册视图状态提供者（导出动画时收集地图状态，含画幅尺寸用于 zoom 修正）
+  // 注册视图状态提供者（导出动画时收集地图状态，含引擎与画幅尺寸用于导出视图还原）
   registerViewStateProvider(() => ({
     ...getCurrentViewState(),
     layerId: currentLayerId.value,
+    engine: currentEngine.value,
     width: rootRef.value?.offsetWidth ?? 0,
     height: rootRef.value?.offsetHeight ?? 0,
   }))
@@ -1016,6 +1103,11 @@ defineExpose({
 .mobile-layer-selector {
   display: none;
   width: 100px;
+}
+
+.engine-switch {
+  display: flex;
+  flex-shrink: 0;
 }
 
 .live-update-time-btn {

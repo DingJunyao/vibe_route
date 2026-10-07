@@ -28,6 +28,14 @@
 | 坐标转像素 | `lngLatToContainer` | `pointToOverlayPixel` | `pointToPixel` | `projectToContainer` | OverlayView `fromLatLngToContainerPixel` | `latLngToContainerPoint` |
 | Zoom 范围 | 3-20 | 3-20 | 3-18 | 3-20 | 3-20 | 1-20 |
 | 事件监听 | DOM 捕获 | addEventListener | addEventListener | DOM 容器 | 地图实例 `addListener` | 地图实例 |
+| 回放旋转 | `setRotation(-θ)` | `setHeading(θ)` | 不支持 | `setRotation(-θ)` | `setHeading(θ)` | leaflet-rotate `setBearing(-θ)` |
+
+## 地图引擎切换（SDK / Leaflet）
+
+- UniversalMap 图层按钮组旁有 **SDK / Leaflet 切换按钮组**，仅当前图层家族配置了 SDK 凭据时显示（amap/baidu/tencent/google 有 SDK；天地图仅有需 key 的 Leaflet 瓦片、OSM 无 SDK，均不显示）
+- 同一 provider 家族（ID 前缀匹配，如 `amap`/`amap_satellite`）共用一个引擎偏好；存 localStorage `map_engine_preference`（[`mapLocalPreference.ts`](frontend/src/utils/mapLocalPreference.ts)），**默认 `sdk` 保持既有行为**；无凭据家族强制 leaflet
+- 切换时保存/恢复地图视角（与跨引擎图层切换同机制）；`map_provider` 事件不变（坐标系字段选择不受引擎影响）
+- 导出模式 URL `engine=sdk|leaflet` → `forceEngine` prop 覆盖本地偏好（见 features.md 轨迹回放）
 
 ## Google 地图
 

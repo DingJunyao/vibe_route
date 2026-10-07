@@ -171,22 +171,26 @@ let animationMarker: any = null
 let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 const ANIMATION_MARKER_ID = 'bmap-animation-marker'  // 动画标记的唯一 ID
+// 当前地图旋转（语义：指向画面正上方的罗盘方位角，0 = 正北朝上）
+let currentMapRotation = 0
+// 最近一次标记方位角（地图旋转后补偿图标方向用）
+let lastMarkerBearing = 0
 
 // 创建动画标记图标
 function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
   if (style === 'car') {
-    // 汽车图标 - 使用 vehicle.svg
+    // 汽车图标 - 顶视图（车头朝上，随方位角旋转）
     return `
       <div class="animation-marker-car" style="
-        width: 60px;
-        height: 40px;
+        width: 40px;
+        height: 60px;
         position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
         transform-origin: center center;
       ">
-        <img src="/vehicle.svg" width="60" height="40" style="display: block;" />
+        <img src="/vehicle-top.svg" width="40" height="60" style="display: block;" />
       </div>
     `
   } else if (style === 'person') {
@@ -227,12 +231,16 @@ function createAnimationIcon(style: MarkerStyle = 'arrow'): string {
 }
 
 // 旋转百度地图标记
+// 百度地图的 Label 会创建一个带有 class="BMapLabel" 的 div，
+// 需要找到这个元素内部的 .animation-marker-* 元素并旋转它。
+// 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时图标指向画面上方）；
+// person 图标无方向性，始终保持直立
 function rotateBaiduMarker(bearing: number) {
-  // 百度地图的 Label 会创建一个带有 class="BMapLabel" 的 div
-  // 我们需要找到这个元素内部的 .animation-marker-* 元素并旋转它
+  lastMarkerBearing = bearing
   const labelDiv = document.querySelector(`.BMapLabel .${currentAnimationMarkerStyle === 'car' ? 'animation-marker-car' : currentAnimationMarkerStyle === 'person' ? 'animation-marker-person' : 'animation-marker-arrow'}`)
   if (labelDiv && labelDiv instanceof HTMLElement) {
-    labelDiv.style.transform = `rotate(${bearing}deg)`
+    if (currentAnimationMarkerStyle === 'person') return
+    labelDiv.style.transform = `rotate(${bearing - currentMapRotation}deg)`
   }
 }
 
@@ -296,8 +304,8 @@ const animationAdapter: AnimationMapAdapter = {
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const point = new BMapClass.Point(position.lng, position.lat)
 
-    // 根据样式确定标记尺寸和锚点（car 宽高比 1.5:1）
-    const iconSize = style === 'car' ? { width: 60, height: 40 } : { width: 36, height: 36 }
+    // 根据样式确定标记尺寸和锚点（顶视图车标 40x60，其余 36x36）
+    const iconSize = style === 'car' ? { width: 40, height: 60 } : { width: 36, height: 36 }
 
     if (!animationMarker) {
       // 使用 Label 创建自定义 HTML 标记
@@ -331,11 +339,14 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position: MarkerPosition) {
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (!BMapInstance) return
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const point = new BMapClass.Point(position.lng, position.lat)
     BMapInstance.setCenter(point)
+    if (targetZoom != null && BMapInstance.getZoom() !== targetZoom) {
+      BMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing: number) {
@@ -344,12 +355,13 @@ const animationAdapter: AnimationMapAdapter = {
       console.warn('Baidu Legacy does not support rotation')
       return
     }
-    // GL 版本支持
-    const BMapGL = (window as any).BMapGL
-    if (BMapGL && BMapInstance && typeof BMapInstance.setMapStyle === 'function') {
-      // GL 版本的旋转方法（简化）
+    // GL 版本支持：setHeading 为相机朝向语义（heading 指向画面正上方），与适配器语义一致
+    if (BMapInstance && typeof BMapInstance.setHeading === 'function') {
       try {
         BMapInstance.setHeading(bearing)
+        currentMapRotation = bearing
+        // 地图旋转后补偿标记图标方向
+        rotateBaiduMarker(lastMarkerBearing)
       } catch (e) {
         console.warn('Baidu GL rotation not fully supported')
       }
@@ -357,15 +369,18 @@ const animationAdapter: AnimationMapAdapter = {
   },
 
   getMapRotation() {
-    return 0
+    return currentMapRotation
   },
 
   // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周留 10% 空间（组件 fitBounds 的百分比各边一致，宽屏时纵向略大于 10%）
   fitTrackWithPadding(bottomPaddingPx: number) {
     if (!BMapInstance) return
     const containerHeight = BMapInstance.getSize().height
-    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
-    fitBounds(paddingPercent)
+    const extraPercent = bottomPaddingPx > 0 && containerHeight > 0
+      ? (bottomPaddingPx / containerHeight) * 100
+      : 0
+    fitBounds(10 + extraPercent)
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）

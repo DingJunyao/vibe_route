@@ -121,6 +121,9 @@ async def _capture_impl(
     }
     if request.layer_id:
         params['layer'] = request.layer_id
+    if request.engine:
+        # 地图引擎（SDK / Leaflet 瓦片），与用户点击导出时一致
+        params['engine'] = request.engine
     if request.zoom is not None:
         # 画幅修正：用户在详情页的 zoom 是基于其地图画幅调整的，
         # 导出画幅（如 1920x1080）与详情页画幅不同，按最小维度比例修正 zoom，

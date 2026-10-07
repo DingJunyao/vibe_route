@@ -1,5 +1,46 @@
 # 功能模块
 
+## 轨迹回放（动画）
+
+### 架构
+
+- 适配器模式：[`useAnimationMap.ts`](frontend/src/composables/animation/useAnimationMap.ts) 持有全局唯一 `AnimationMapAdapter`，五个地图组件各自实现并在 onMounted 注册 / onUnmounted 注销；适配器未就绪时调用进队列，注册时重放
+- 播放器 [`TrackAnimationPlayer.vue`](frontend/src/components/animation/TrackAnimationPlayer.vue) 驱动 rAF 循环 → 更新 [`stores/animation.ts`](frontend/src/stores/animation.ts) 的 `currentTime` → 节流（33ms）调用适配器；移动端额外 emit `position-changed` 给详情页 HUD
+- 播放状态：`cameraMode`（`full` 全轨迹 / `fixed-center` 固定中心）× `orientationMode`（`north-up` 正北朝上 / `track-up` 轨迹朝上）× `markerStyle`（arrow/car/person）× 倍速；偏好存 localStorage（`vibe-route-animation-prefs`）
+- **画面运动模式为三态循环**（HUD 相机按钮）：全轨迹画面 → 固定中心-正北朝上 → 固定中心-轨迹朝上 → 全轨迹（`toggleCameraMode` 按组合状态循环，勿回退成两态+翻转朝向的旧写法）
+- 时间定位：`findPointIndexByTime` 二分 + `interpolatePosition` 线性插值（坐标/方位角/速度/海拔/时间），坐标字段按 mapProvider 选 GCJ02/BD09/WGS84
+
+### 缩放规格
+
+- **全轨迹画面**：`fitTrackWithPadding(0)` → 整条轨迹四周各留 **10%** 空间（Leaflet/高德按轴精确：x 取宽度 10%、y 取高度 10%；百度/腾讯/Google 走各自 `fitBounds(10)` 百分比流，宽屏时纵向略大于 10%）；HUD 高度变化、地图切换、模式切到 full 时重新 fit，不逐帧 fit
+- **固定中心（两模式）**：`getFixedCenterZoom(speed, lat)` 自适应缩放——60km/h 及以下约 **30m 一格**（基准 0.47 m/px ≈ 30m/64px，`zoom = log2(156543.03·cos(lat)/mPerPx)` 向下取整）；速度更高时 mPerPx 按速度线性放大（如 120km/h → zoom 约降 1 级）。缩放**仅在进入固定中心模式或速度档位变化时应用**（播放器记 `lastFixedCenterZoom`，档位不变时只居中不缩放，避免逐帧覆盖用户手动缩放；模式/地图切换后重置重应用）
+
+### 朝向旋转（track-up）
+
+- 播放循环每帧 `applyMapRotation(target)`：fixed-center + track-up → 目标 = 当前点方位角；否则 0（正北）。与上次目标最短旋转差 <0.01° 时跳过
+- **标记图标补偿**：图标屏幕旋转角 = `方位角 - 地图旋转角`（五引擎一致，对「整层旋转」与「屏幕直立标记」两种形态数学同解）；**person 图标无方向性，恒直立**
+- 各引擎旋转 API 语义换算（适配器统一收「指向画面上方的方位角」）：
+  - Leaflet（leaflet-rotate 插件）：`setBearing(-bearing)`（插件 setBearing 为内容顺时针旋转）
+  - 高德 / 腾讯：`setRotation(-bearing)`（两者 setRotation 均为内容顺时针语义）
+  - 百度 GL / Google：`setHeading(bearing)`（heading 为相机朝向语义；**方向符号待真实 key 实测校准**）
+  - 百度 Legacy：不支持旋转（warn 跳过）
+- Leaflet 旋转依赖 `leaflet-rotate`：patch 全局 L 的插件，须在 `leaflet` 之后导入且**显式引 `dist/leaflet-rotate-src.js`**（module 入口按裸全局 L 编写）；地图常开 `rotate: true` 并关闭插件自带旋转手势（shiftKeyRotate/touchRotate/compassBearing/touchGestures 均 false），bearing 0 时与原生行为一致
+- 相机/朝向模式切换**无论播放状态**都 `updateAnimation(force=true)` 立即刷新（带节流旁路参数）；若只依赖 rAF 循环，rAF 节流/页面隐藏的场景下切换迟迟看不到效果（勿再引入 rAF 过渡动画，会与逐帧直设相互覆盖）
+
+### 标记图形
+
+- arrow（location.svg 上指箭头，36×36）/ car（**vehicle-top.svg 顶视图车标**，40×60，车头朝上）/ person（内联 SVG，直立不旋转）
+
+### 进度条 seek
+
+- HUD 滑块 → `currentTime` → 暂停态 watch 触发 `updateAnimation()`（标记、双色轨迹、相机、旋转全部联动）；播放中由循环自然接续；播放中不重绘双色轨迹（`setAnimationPlaying` 置灰整轨防闪烁）
+
+### 视频导出
+
+- **统一走后端 Playwright 录制**（全引擎开放，原 `requiresBackendExport` 白名单已删）：导出页与用户预览一致，不受前端捕获限制（CORS 瓦片污染 / DOM 渲染）
+- 导出请求 `engine`（sdk/leaflet）→ 后端透传为导出页 URL 参数 → TrackDetail `exportEngine` → UniversalMap `forceEngine` prop，保证导出画面引擎与点击导出时一致；无该参数时回退旧行为（本地偏好，Playwright 无 localStorage → 默认 SDK）
+- 其余视图状态（起点/相机/朝向/标记/图层/缩放中心/画幅 zoom 修正）沿用 2026-09 导出方案，见 changelog
+
 ## 合并轨迹
 
 ### 流程（两步式，独立页面 `/merge`）

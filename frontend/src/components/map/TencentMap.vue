@@ -184,7 +184,14 @@ class AnimationDOMOverlay {
 
   setBearing(bearing: number) {
     this.bearing = bearing
-    this.innerElement.style.transform = `rotate(${bearing}deg)`
+    // 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
+    // person 图标无方向性，始终保持直立
+    const rotation = this.style === 'person' ? 0 : bearing - currentMapRotation
+    this.innerElement.style.transform = `rotate(${rotation}deg)`
+  }
+
+  getBearing() {
+    return this.bearing
   }
 
   destroy() {
@@ -233,9 +240,9 @@ class AnimationDOMOverlay {
       return
     }
 
-    // 获取 DOM 元素的尺寸
-    const width = this.style === 'car' ? 60 : 36
-    const height = this.style === 'car' ? 40 : 36
+    // 获取 DOM 元素的尺寸（顶视图车标 40x60，其余 36x36）
+    const width = this.style === 'car' ? 40 : 36
+    const height = this.style === 'car' ? 60 : 36
 
     // 计算新的像素位置
     const newLeft = pointPixel.x - width / 2
@@ -318,8 +325,13 @@ class AnimationDOMOverlay {
 
     if (this.style === 'car') {
       this.innerElement.className = 'animation-marker-car'
+      // 顶视图车标（车头朝上，随方位角旋转）
+      const carWidth = 40
+      const carHeight = 60
+      this.innerElement.style.width = `${carWidth}px`
+      this.innerElement.style.height = `${carHeight}px`
       this.innerElement.innerHTML = `
-        <img src="/vehicle.svg" style="display: block; width: ${width}px; height: ${height}px;" />
+        <img src="/vehicle-top.svg" style="display: block; width: ${carWidth}px; height: ${carHeight}px;" />
       `
     } else if (this.style === 'person') {
       this.innerElement.className = 'animation-marker-person'
@@ -675,16 +687,25 @@ const animationAdapter: AnimationMapAdapter = {
   }
 },
 
-  setCameraToMarker(position) {
+  setCameraToMarker(position, targetZoom) {
     if (!TMapInstance) return
     const TMap = (window as any).TMap
     TMapInstance.setCenter(new TMap.LatLng(position.lat, position.lng))
+    if (targetZoom != null && TMapInstance.getZoom() !== targetZoom) {
+      TMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing) {
     if (!TMapInstance) return
-    TMapInstance.setRotation(bearing)
+    // 腾讯 setRotation 为地图内容顺时针旋转的角度；
+    // 轨迹朝上（方位角 bearing 指向画面正上方）需内容逆时针旋转，故取负
+    TMapInstance.setRotation(-bearing)
     currentMapRotation = bearing
+    // 地图旋转后补偿标记图标方向
+    if (animationMarker) {
+      animationMarker.setBearing(animationMarker.getBearing())
+    }
   },
 
   getMapRotation() {
@@ -748,32 +769,18 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
-  // 注意：bottomPaddingPx 可以是像素值或百分比（<=100）
+  // 调整地图视野以适应整条轨迹：四周留 10% 空间（组件 fitBounds 的百分比各边一致，宽屏时纵向略大于 10%）
   fitTrackWithPadding(bottomPaddingPx) {
     if (!TMapInstance) return
 
-    let paddingPercent: number
-
-    // 判断是像素值还是百分比
-    // TrackAnimationPlayer 传递的 5 表示 5%（而不是 5px）
-    if (bottomPaddingPx <= 100) {
-      // 小于等于 100，视为百分比
-      paddingPercent = bottomPaddingPx
-    } else {
-      // 大于 100，视为像素值，转换为百分比
-      const containerHeight = TMapInstance.getContainer().offsetHeight
-      paddingPercent = (bottomPaddingPx / containerHeight) * 100
+    // bottomPaddingPx 作为额外底部像素换算为百分比叠加
+    let extraPercent = 0
+    if (bottomPaddingPx > 0) {
+      const containerHeight = TMapInstance.getContainer().offsetHeight || 600
+      extraPercent = (bottomPaddingPx / containerHeight) * 100
     }
 
-    addTencentLog('fitTrackWithPadding', 'called', {
-      bottomPaddingPx,
-      interpretedAs: bottomPaddingPx <= 100 ? 'percent' : 'pixels',
-      paddingPercent
-    })
-
-    // 调用现有的 fitBounds 方法
-    fitBounds(paddingPercent)
+    fitBounds(10 + extraPercent)
   },
 }
 

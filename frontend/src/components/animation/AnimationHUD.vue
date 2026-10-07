@@ -42,6 +42,18 @@
             @click="$emit('toggle-camera-mode')"
           />
         </el-tooltip>
+        <el-tooltip :content="orientationModeTooltip">
+          <el-button
+            size="small"
+            :type="orientationMode === 'track-up' ? 'primary' : ''"
+            @click="$emit('toggle-orientation-mode')"
+          >
+            <el-icon>
+              <Compass v-if="orientationMode === 'north-up'" />
+              <Position v-else />
+            </el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip v-if="!isMobile" content="信息浮层">
           <el-button
             :type="showInfoPanel ? 'primary' : ''"
@@ -93,6 +105,8 @@ import {
   ArrowDown,
   Van,
   User,
+  Compass,
+  Position,
 } from '@element-plus/icons-vue'
 import { formatAnimationTime } from '@/utils/animationUtils'
 
@@ -164,6 +178,15 @@ const cameraModeTooltip = computed(() => {
   if (props.cameraMode === 'full') return '全轨迹画面'
   if (props.orientationMode === 'north-up') return '固定中心 - 正北朝上'
   return '固定中心 - 轨迹朝上'
+})
+
+const orientationModeTooltip = computed(() => {
+  if (props.cameraMode === 'full') {
+    return props.orientationMode === 'north-up'
+      ? '朝向：正北朝上（仅固定中心模式生效）'
+      : '朝向：轨迹朝上（仅固定中心模式生效）'
+  }
+  return props.orientationMode === 'north-up' ? '朝向：正北朝上' : '朝向：轨迹朝上'
 })
 
 function formatTime(ms: number): string {

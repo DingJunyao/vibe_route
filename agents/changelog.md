@@ -5,6 +5,22 @@
 ## 2026-10
 
 - 后端依赖双声明等价（pyproject.toml ↔ requirements.txt）：新增 `backend/pyproject.toml`，`[project.dependencies]` 与 requirements.txt **逐条等价**（含 `bcrypt==4.0.1`、`playwright==1.58.0` 钉版与 svgpathtools 的 GitHub 直连 URL；`requires-python = ">=3.11"` 对齐 Dockerfile 的 python:3.11-slim 与本机 3.11.15；`[tool.uv] package = false`，后端是 uvicorn 直跑的应用，uv 只管依赖不构建包）。校验：静态归一化比对 45 条完全一致（requirements.txt 侧顺带删掉「测试」段落里重复的 httpx），`uv pip compile` 全解析锁集一致（**103 个包**含传递依赖，diff 仅差 `# via` 来源注释）。两文件头部互加「新增依赖时两边同步修改」注记；`agents/quick-commands.md` ARM 段的手写 pip 一行装（已漂移：缺 python-multipart/slowapi/svgpathtools，bcrypt 未钉版——passlib 1.7.4 遇 bcrypt≥4.1 会崩）改为 `pip install -r requirements.txt --index-url https://pypi.org/simple`，消除第三份会漂移的依赖列表（Dockerfile 本就走 requirements.txt，不受影响）。另核：`pyproj` 包仅为 geopandas 传递依赖（环境实装 3.7.2），后端代码无直接 import，无需显式声明
+- 画面运动模式三态化 + 缩放规格（2026-10-07，同分支第二笔）：
+  - **三态循环**：`toggleCameraMode` 改为按组合状态循环 全轨迹画面 → 固定中心-正北朝上 → 固定中心-轨迹朝上 → 全轨迹（旧实现两态切换+进入固定中心时翻转朝向，两个固定中心被「全轨迹」隔开，实际只有两个可见状态）
+  - **模式切换立即生效**：watch 改为**无论播放状态**都 `updateAnimation(force=true)` 强制刷新（新增节流旁路参数）。此前仅暂停态立即刷新、播放中依赖 rAF 循环——页面隐藏/rAF 节流时切换迟迟不生效（开发者实测「轨迹朝上不旋转」即此因：其查看的页面工作区在 master 旧代码 + 隐藏页 rAF 停摆；特性分支代码在可见页与导出视频中旋转正常）
+  - **全轨迹画面 10% 边距**：`fitTrackWithPadding(0)` 语义改为整轨四周各留 10%（Leaflet/高德按轴精确：x=宽度 10%、y=高度 10%，高德走 `setFitView` 的 avoid 数组；百度/腾讯/Google 走各自 `fitBounds(10)` 百分比流，宽屏纵向略大于 10%）；删除旧的「HUD 高度 +20px 追加底部 padding」逻辑，HUD/地图切换/模式切换时统一按 10% 重 fit
+  - **固定中心自适应缩放**：新增 `getFixedCenterZoom(speed, lat)`——60km/h 及以下约 30m 一格（0.47 m/px 基准，Web 墨卡托按纬度换算，向下取整），速度更高按比例放大 m/px（120km/h 约降 1 级）；`setCameraToMarker` 增加可选 `targetZoom`（五引擎），播放器记 `lastFixedCenterZoom`，**仅进入模式或速度档位变化时应用缩放**（不逐帧覆盖用户手动缩放；模式/地图切换后重置）
+  - 验证：vite build 通过；headless Chromium（IAB 卡死期间的替代通道）store 驱动断言——三态循环顺序（full → fc-正北 → fc-轨迹朝上 → full）、fc-正北不旋转且居中、fc-轨迹朝上旋转随方位（242°/182°/152°）标记指上居中、全轨迹 10% 边距（整数 zoom 取满足 ≥10% 的最大级别，实测 29%/14%）、自适应缩放随速度生效（实测轨迹约 167km/h → zoom 16）
+- 轨迹回放完善 + 地图引擎切换（SDK/Leaflet）（2026-10-07，分支 `feat/track-replay-leaflet`）：
+  - **朝向模式真正生效**（此前 `orientationMode` 只存不用、`setMapRotation` 从未被播放器调用）：fixed-center + track-up 时播放循环每帧按当前点方位角旋转地图（方向恒指向画面上方），full 视图与 north-up 恒 0；新增 `applyMapRotation` 直设通道（带 <0.01° 跳重守卫），**删除原 5 步 rAF 动画过渡版 `setMapRotation`**——rAF 节流/隐藏页下动画链会迟落在 seek 之后把旋转拉回旧值（实测复现），模式切换改为暂停态立即 `updateAnimation()` 刷新；HUD 新增独立朝向切换按钮（Compass/Position 图标，桌面与移动端 HUD 同源生效）
+  - **Leaflet 旋转落地**：引入 `leaflet-rotate` 插件（patch 全局 L 的插件，须在 `leaflet` 之后导入；**必须显式引 `dist/leaflet-rotate-src.js`**——其 package.json 的 module 入口按裸全局 L 编写，走 Vite module 解析会踩空）。地图常开 `rotate: true` + 关闭插件自带旋转手势（shiftKeyRotate/touchRotate/compassBearing/touchGestures 均 false），bearing 0 时行为与原生一致；重建地图时旋转复位
+  - **标记图标补偿公式统一（五引擎一致）**：图标屏幕旋转角 = `方位角 - 地图旋转角`。该公式对「整层随地图旋转」的 Leaflet（图标在旋转层内）与「屏幕直立」的 SDK DOM 标记两种形态数学上同解；**person 图标无方向性，恒直立不旋转**；地图旋转后各适配器补偿已渲染标记（AMap/BMap 用 lastMarkerBearing，腾讯/Google 走 overlay getBearing()）
+  - **车标换顶视图**：新增 `frontend/public/vehicle-top.svg`（40×60，车头朝上），五引擎 car 样式统一换用（原 vehicle.svg 为侧视图，随方位旋转观感错误）；AMap/腾讯/Google overlay 的尺寸与锚点同步改 40×60
+  - **各引擎旋转 API 语义换算**（适配器统一收「指向画面上方的方位角」）：Leaflet `setBearing(-θ)`（插件为内容顺时针语义，插件源码确认）；高德 `setRotation(-θ)`、腾讯 `setRotation(-θ)`（两家 setRotation 均为内容顺时针，官方文档+社区 track-up demo 确认）；百度 GL / Google `setHeading(θ)`（heading 为相机朝向语义，**方向符号尚未用真实 key 实测校准**，如相反在各自适配器取负）；百度 Legacy 不支持旋转（warn 跳过）
+  - **引擎切换（SDK/Leaflet）**：UniversalMap 图层选择旁新增 SDK/Leaflet 按钮组（仅当前图层家族配置了 SDK 凭据时显示；天地图仅 Leaflet 瓦片、OSM 无 SDK，不显示——天地图不在本次范围）。偏好按 provider 家族存 localStorage `map_engine_preference`（`mapLocalPreference.ts` 新增 `get/saveLocalEnginePreference`），**默认 sdk 保持既有行为**；无凭据家族强制 leaflet。切换保存/恢复地图视角；`map_provider` 事件与坐标字段选择不受引擎影响
+  - **视频导出全引擎开放**：删除 `requiresBackendExport` 白名单（原非百度/Google 提示「前端导出功能开发中」，而后端 Playwright 录制本就引擎无关），TrackAnimationPlayer 与 TrackDetail 移动端统一走后端导出；`ExportConfig`/导出请求/`AnimationExportRequest` 新增 `engine` 字段，后端透传为导出页 URL 参数 → TrackDetail `exportEngine` → UniversalMap `forceEngine` prop，保证导出画面引擎与用户点击导出时一致（无该参数时保持旧行为：Playwright 全新浏览器无 localStorage → 默认 SDK）
+  - **验证**：vite build 通过（vue-tsc 不可用见 2026-09 记录）；后端 schema/import 检查通过。本机（ARM Linux 全新环境：自建 .env/建库/注册/上传 GPX）IAB 浏览器实测——Leaflet 回放 seek（HUD/信息浮层/双色轨迹/标记角联动）、track-up 旋转随进度联动（t=30/90/240/330s upDeg 与轨迹方位一致、标记补偿归零、居中偏差 ≤1px）、person 直立/car 顶视图切换、引擎切换 SDK↔Leaflet 往返（组件交换+偏好持久化 `{"amap":"leaflet"}`+回放接续）；720p/speed=8 导出任务全链路 45.1s 视频完成，抽帧核验 track-up 旋转、车标指上、HUD 进度行。**注意：IAB 页面 `document.hidden=true` 时 rAF 节流致播放爬行属测试环境伪影，非缺陷**（真实可见页与 Playwright 录制页正常）
+  - **遗留**：百度 GL / Google setHeading 方向符号需有真实 key 环境校准；引擎切换在真实 SDK（有 key）下的回放接续需实测
 
 ## 2026-09
 

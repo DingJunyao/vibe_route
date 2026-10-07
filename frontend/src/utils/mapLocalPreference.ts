@@ -5,11 +5,18 @@
  */
 
 const STORAGE_KEY = 'map_preference'
+const ENGINE_STORAGE_KEY = 'map_engine_preference'
 
 export interface MapPreference {
   layerId: string
   timestamp: number
 }
+
+/**
+ * 地图引擎偏好：同一底图层可在 SDK 引擎与 Leaflet 瓦片引擎间切换
+ * （key 为底图层 ID 家族前缀，如 amap / baidu / tencent / google）
+ */
+export type MapEngineType = 'sdk' | 'leaflet'
 
 /**
  * 获取本地保存的地图偏好
@@ -61,6 +68,43 @@ export function clearLocalMapPreference(): void {
     localStorage.removeItem(STORAGE_KEY)
   } catch (error) {
     console.error('[mapLocalPreference] Failed to clear local preference:', error)
+  }
+}
+
+/**
+ * 读取引擎偏好表（layerId 家族 → 'sdk' | 'leaflet'）
+ */
+function getEnginePreferenceMap(): Record<string, MapEngineType> {
+  try {
+    const stored = localStorage.getItem(ENGINE_STORAGE_KEY)
+    if (!stored) return {}
+    const parsed = JSON.parse(stored)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch (error) {
+    console.error('[mapLocalPreference] Failed to get engine preference:', error)
+    return {}
+  }
+}
+
+/**
+ * 获取指定底图层家族的引擎偏好（默认 'sdk'，保持既有行为）
+ * @param layerFamily 底图层 ID 家族（如 amap / baidu / tencent / google）
+ */
+export function getLocalEnginePreference(layerFamily: string): MapEngineType {
+  if (!layerFamily) return 'sdk'
+  return getEnginePreferenceMap()[layerFamily] === 'leaflet' ? 'leaflet' : 'sdk'
+}
+
+/**
+ * 保存指定底图层家族的引擎偏好
+ */
+export function saveLocalEnginePreference(layerFamily: string, engine: MapEngineType): void {
+  try {
+    const map = getEnginePreferenceMap()
+    map[layerFamily] = engine
+    localStorage.setItem(ENGINE_STORAGE_KEY, JSON.stringify(map))
+  } catch (error) {
+    console.error('[mapLocalPreference] Failed to save engine preference:', error)
   }
 }
 

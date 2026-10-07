@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 64">
+  <!-- 轨迹回放用顶视图车标：车头朝上（正北），随方位角旋转 -->
+  <!-- 后视镜 -->
+  <rect x="0" y="15" width="7" height="5" rx="2.5" fill="#22313f"/>
+  <rect x="33" y="15" width="7" height="5" rx="2.5" fill="#22313f"/>
+  <!-- 车身 -->
+  <path d="M7 12 C7 4.5 12.5 2 20 2 C27.5 2 33 4.5 33 12 L33 52 C33 59.5 27.5 62 20 62 C12.5 62 7 59.5 7 52 Z" fill="#e98f36" stroke="#a8641b" stroke-width="1.5"/>
+  <!-- 前挡风玻璃 -->
+  <path d="M9.5 17 L30.5 17 L27 25 L13 25 Z" fill="#22313f"/>
+  <!-- 车顶 -->
+  <rect x="11" y="26" width="18" height="15" rx="3.5" fill="#f7b26b"/>
+  <!-- 后挡风玻璃 -->
+  <path d="M13 42 L27 42 L30.5 50 L9.5 50 Z" fill="#22313f"/>
+</svg>

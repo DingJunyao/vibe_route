@@ -79,7 +79,14 @@ class AnimationDOMOverlay {
 
   setBearing(bearing: number) {
     this.bearing = bearing
-    this.innerElement.style.transform = `rotate(${bearing}deg)`
+    // 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
+    // person 图标无方向性，始终保持直立
+    const rotation = this.style === 'person' ? 0 : bearing - currentMapRotation
+    this.innerElement.style.transform = `rotate(${rotation}deg)`
+  }
+
+  getBearing() {
+    return this.bearing
   }
 
   destroy() {
@@ -105,8 +112,9 @@ class AnimationDOMOverlay {
     if (!pointPixel) return
 
     // 获取 DOM 元素的尺寸
-    const width = this.style === 'car' ? 60 : 36
-    const height = this.style === 'car' ? 40 : 36
+    // 获取 DOM 元素的尺寸（顶视图车标 40x60，其余 36x36）
+    const width = this.style === 'car' ? 40 : 36
+    const height = this.style === 'car' ? 60 : 36
 
     // 计算新的像素位置
     const newLeft = pointPixel.x - width / 2
@@ -116,9 +124,9 @@ class AnimationDOMOverlay {
   }
 
   private updateContent() {
-    // car: 60×40，arrow/person: 36×36
-    const width = this.style === 'car' ? 60 : 36
-    const height = this.style === 'car' ? 40 : 36
+    // car: 40×60（顶视图车标），arrow/person: 36×36
+    const width = this.style === 'car' ? 40 : 36
+    const height = this.style === 'car' ? 60 : 36
 
     this.innerElement.style.width = `${width}px`
     this.innerElement.style.height = `${height}px`
@@ -129,7 +137,7 @@ class AnimationDOMOverlay {
     if (this.style === 'car') {
       this.innerElement.className = 'animation-marker-car'
       this.innerElement.innerHTML = `
-        <img src="/vehicle.svg" style="display: block; width: ${width}px; height: ${height}px;" />
+        <img src="/vehicle-top.svg" style="display: block; width: ${width}px; height: ${height}px;" />
       `
     } else if (this.style === 'person') {
       this.innerElement.className = 'animation-marker-person'
@@ -394,20 +402,28 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position) {
+  setCameraToMarker(position, targetZoom) {
     if (!googleMapInstance) return
     googleMapInstance.setCenter({ lat: position.lat, lng: position.lng })
+    if (targetZoom != null && googleMapInstance.getZoom() !== targetZoom) {
+      googleMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing) {
     if (!googleMapInstance) return
     // 光栅地图不支持 heading，仅在矢量地图（mapId）下生效
+    // Google heading 为相机朝向语义（heading 指向画面正上方），与适配器语义一致
     try {
       googleMapInstance.setHeading(bearing)
     } catch {
       // 忽略不支持的情况
     }
     currentMapRotation = bearing
+    // 地图旋转后补偿标记图标方向
+    if (animationMarker) {
+      animationMarker.setBearing(animationMarker.getBearing())
+    }
   },
 
   getMapRotation() {
@@ -463,26 +479,19 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
-  // 注意：bottomPaddingPx 可以是像素值或百分比（<=100）
+  // 调整地图视野以适应整条轨迹：四周留 10% 空间（组件 fitBounds 的百分比各边一致，宽屏时纵向略大于 10%）
   fitTrackWithPadding(bottomPaddingPx) {
     if (!googleMapInstance) return
 
-    let paddingPercent: number
-
-    // 判断是像素值还是百分比
-    // TrackAnimationPlayer 传递的 5 表示 5%（而不是 5px）
-    if (bottomPaddingPx <= 100) {
-      // 小于等于 100，视为百分比
-      paddingPercent = bottomPaddingPx
-    } else {
-      // 大于 100，视为像素值，转换为百分比
+    // bottomPaddingPx 作为额外底部像素换算为百分比叠加
+    let extraPercent = 0
+    if (bottomPaddingPx > 0) {
       const containerHeight = mapContainer.value?.offsetHeight || 600
-      paddingPercent = (bottomPaddingPx / containerHeight) * 100
+      extraPercent = (bottomPaddingPx / containerHeight) * 100
     }
 
     // 调用现有的 fitBounds 方法
-    fitBounds(paddingPercent)
+    fitBounds(10 + extraPercent)
   },
 }
 

@@ -15,6 +15,7 @@ class AnimationExportRequest(BaseModel):
     marker_style: Literal['arrow', 'car', 'person'] = 'arrow'
     show_info_panel: bool = True
     layer_id: Optional[str] = None  # 地图图层（含卫星图等变体）
+    engine: Optional[Literal['sdk', 'leaflet']] = None  # 地图引擎（同一图层可在 SDK 与 Leaflet 瓦片间切换）
     zoom: Optional[float] = None  # fixed-center 模式下用户手动缩放
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
