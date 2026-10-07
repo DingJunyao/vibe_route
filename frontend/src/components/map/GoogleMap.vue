@@ -402,9 +402,12 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position) {
+  setCameraToMarker(position, targetZoom) {
     if (!googleMapInstance) return
     googleMapInstance.setCenter({ lat: position.lat, lng: position.lng })
+    if (targetZoom != null && googleMapInstance.getZoom() !== targetZoom) {
+      googleMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing) {
@@ -476,26 +479,19 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
-  // 注意：bottomPaddingPx 可以是像素值或百分比（<=100）
+  // 调整地图视野以适应整条轨迹：四周留 10% 空间（组件 fitBounds 的百分比各边一致，宽屏时纵向略大于 10%）
   fitTrackWithPadding(bottomPaddingPx) {
     if (!googleMapInstance) return
 
-    let paddingPercent: number
-
-    // 判断是像素值还是百分比
-    // TrackAnimationPlayer 传递的 5 表示 5%（而不是 5px）
-    if (bottomPaddingPx <= 100) {
-      // 小于等于 100，视为百分比
-      paddingPercent = bottomPaddingPx
-    } else {
-      // 大于 100，视为像素值，转换为百分比
+    // bottomPaddingPx 作为额外底部像素换算为百分比叠加
+    let extraPercent = 0
+    if (bottomPaddingPx > 0) {
       const containerHeight = mapContainer.value?.offsetHeight || 600
-      paddingPercent = (bottomPaddingPx / containerHeight) * 100
+      extraPercent = (bottomPaddingPx / containerHeight) * 100
     }
 
     // 调用现有的 fitBounds 方法
-    fitBounds(paddingPercent)
+    fitBounds(10 + extraPercent)
   },
 }
 

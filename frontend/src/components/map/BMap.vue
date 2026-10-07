@@ -339,11 +339,14 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position: MarkerPosition) {
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (!BMapInstance) return
     const BMapClass = (window as any).BMap || (window as any).BMapGL
     const point = new BMapClass.Point(position.lng, position.lat)
     BMapInstance.setCenter(point)
+    if (targetZoom != null && BMapInstance.getZoom() !== targetZoom) {
+      BMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing: number) {
@@ -370,11 +373,14 @@ const animationAdapter: AnimationMapAdapter = {
   },
 
   // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周留 10% 空间（组件 fitBounds 的百分比各边一致，宽屏时纵向略大于 10%）
   fitTrackWithPadding(bottomPaddingPx: number) {
     if (!BMapInstance) return
     const containerHeight = BMapInstance.getSize().height
-    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
-    fitBounds(paddingPercent)
+    const extraPercent = bottomPaddingPx > 0 && containerHeight > 0
+      ? (bottomPaddingPx / containerHeight) * 100
+      : 0
+    fitBounds(10 + extraPercent)
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）

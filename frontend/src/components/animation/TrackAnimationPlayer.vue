@@ -65,6 +65,7 @@ import {
   findPointIndexByTime,
   interpolatePosition,
   formatAnimationTime,
+  getFixedCenterZoom,
   canPlayAnimation as checkCanPlay,
   type TrackPoint,
   type MarkerPosition,
@@ -93,6 +94,8 @@ const lastUpdateTime = ref(0)  // 上次更新地图的时间
 const showExportDialog = ref(false)
 const exportDialogRef = ref<InstanceType<typeof AnimationExportDialog> | null>(null)
 const hudHeight = ref(0)
+// 最近一次应用的固定中心自适应缩放（null 表示待应用，模式/地图切换后重置）
+let lastFixedCenterZoom: number | null = null
 
 // 地图更新节流：每帧最多更新一次
 const UPDATE_THROTTLE_MS = 33  // 约30fps
@@ -294,11 +297,9 @@ async function handleExportVideo(options: ExportOptions) {
 // HUD 高度变化处理
 function handleHeightChanged(height: number) {
   hudHeight.value = height
-  // 如果当前是全轨迹画面模式，立即调整地图视野
+  // 如果当前是全轨迹画面模式，立即调整地图视野（四周 10% 边距）
   if (animationStore.cameraMode === 'full') {
-    // 额外增加 20px 作为间距
-    const padding = height + 20
-    fitTrackWithPadding(padding)
+    fitTrackWithPadding(0)
   }
 }
 
@@ -331,7 +332,8 @@ function animationLoop(timestamp: number) {
 }
 
 // 更新动画
-function updateAnimation() {
+// force: 跳过节流立即应用（模式切换时使用，确保切换即刻生效）
+function updateAnimation(force = false) {
   // 移动端：需要在每次更新时计算并 emit 位置
   if (isMobile.value) {
     updateAndEmitPosition()
@@ -339,7 +341,7 @@ function updateAnimation() {
 
   const now = Date.now()
   // 节流更新：避免过于频繁地调用地图适配器
-  if (now - lastUpdateTime.value < UPDATE_THROTTLE_MS) {
+  if (!force && now - lastUpdateTime.value < UPDATE_THROTTLE_MS) {
     return
   }
 
@@ -364,15 +366,22 @@ function updateAnimation() {
   setPassedSegment(0, index)
 
   // 相机与朝向模式：
-  // - fixed-center：当前点居中，朝向按 orientationMode（track-up 时轨迹方向始终指向画面上方）
-  // - full：展示整个路径，固定正北朝上
-  const targetRotation = animationStore.cameraMode === 'fixed-center' && animationStore.orientationMode === 'track-up'
-    ? pos.bearing
-    : 0
+  // - fixed-center：当前点居中，朝向按 orientationMode（track-up 时轨迹方向始终指向画面上方）；
+  //   缩放按速度自适应（60km/h 及以下约 30m/格，速度更高适当缩小）。
+  //   缩放仅在进入模式或速度档位变化时应用，避免逐帧覆盖用户手动缩放
+  // - full：展示整个路径，固定正北朝上（视野在模式切换时调整，不逐帧 fit）
   if (animationStore.cameraMode === 'fixed-center') {
-    setCameraToMarker(pos)
+    const targetZoom = getFixedCenterZoom(pos.speed, pos.lat)
+    if (lastFixedCenterZoom === null || targetZoom !== lastFixedCenterZoom) {
+      setCameraToMarker(pos, targetZoom)
+      lastFixedCenterZoom = targetZoom
+    } else {
+      setCameraToMarker(pos)
+    }
+    applyMapRotation(animationStore.orientationMode === 'track-up' ? pos.bearing : 0)
+  } else {
+    applyMapRotation(0)
   }
-  applyMapRotation(targetRotation)
 }
 
 // 生命周期
@@ -419,31 +428,35 @@ watch(() => animationStore.cameraMode, (newMode) => {
   if (animationStore.isPlaying) {
     setAnimationPlaying(true)
   }
-  // 切换到全轨迹画面时，调整地图视野以避免 HUD 遮挡
-  if (newMode === 'full' && hudHeight.value > 0) {
-    const padding = hudHeight.value + 20
-    fitTrackWithPadding(padding)
+})
+
+// 监听相机/朝向模式切换：无论播放状态都立即按新模式刷新一次画面
+// （若只依赖动画循环，rAF 节流/页面隐藏的场景下切换会迟迟看不到效果）
+// 注意顺序：先 updateAnimation（full 模式复位旋转到正北），再 fit——否则会在旋转状态下 fit 导致边距错大
+watch(() => [animationStore.cameraMode, animationStore.orientationMode] as const, () => {
+  // 重置缩放记忆，进入固定中心时重新应用自适应缩放
+  lastFixedCenterZoom = null
+  updateAnimation(true)
+  if (animationStore.cameraMode === 'full') {
+    fitTrackWithPadding(0)
   }
 })
 
-// 监听 HUD 高度变化
+// 监听 HUD 高度变化：全轨迹画面按 10% 边距重新 fit
 watch(hudHeight, (newHeight) => {
-  // 如果是全轨迹画面模式，调整地图视野
   if (animationStore.cameraMode === 'full' && newHeight > 0) {
-    const padding = newHeight + 20
-    fitTrackWithPadding(padding)
+    fitTrackWithPadding(0)
   }
 })
 
-// 监听地图切换，全轨迹模式下重新调整视野
+// 监听地图切换，全轨迹模式下重新调整视野；固定中心下重置缩放记忆待新地图重新应用
 watch(() => props.mapProvider, () => {
-  // 如果是全轨迹画面模式，重新调整地图视野
-  if (animationStore.cameraMode === 'full' && hudHeight.value > 0) {
+  lastFixedCenterZoom = null
+  if (animationStore.cameraMode === 'full') {
     // 延迟执行，等待地图初始化完成
     nextTick(() => {
       setTimeout(() => {
-        const padding = hudHeight.value + 20
-        fitTrackWithPadding(padding)
+        fitTrackWithPadding(0)
       }, 500)
     })
   }
@@ -454,14 +467,6 @@ watch(() => animationStore.markerStyle, () => {
   const pos = isMobile.value ? updateAndEmitPosition.getLastPosition?.() ?? null : currentPosition.value
   if (pos) {
     setMarkerPosition(pos, animationStore.markerStyle)
-  }
-})
-
-// 监听相机/朝向模式切换：暂停状态下立即按新模式刷新一次画面
-// （播放中由动画循环逐帧应用，不在此处处理，避免与逐帧旋转相互覆盖）
-watch(() => [animationStore.cameraMode, animationStore.orientationMode] as const, () => {
-  if (!animationStore.isPlaying) {
-    updateAnimation()
   }
 })
 </script>

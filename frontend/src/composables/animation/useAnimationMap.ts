@@ -42,8 +42,8 @@ export interface AnimationMapAdapter {
   // 设置移动标记
   setMarkerPosition(position: MarkerPosition, style: MarkerStyle): void
 
-  // 设置地图中心
-  setCameraToMarker(position: MarkerPosition): void
+  // 设置地图中心（targetZoom 提供时同步校正缩放，仅在与当前 zoom 不同时生效）
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number): void
 
   // 设置地图旋转
   setMapRotation(bearing: number): void
@@ -54,7 +54,7 @@ export interface AnimationMapAdapter {
   // 设置动画播放状态（避免双色轨迹闪烁）
   setAnimationPlaying(playing: boolean): void
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周各留 10% 空间（bottomPaddingPx 为额外底部像素）
   fitTrackWithPadding?(bottomPaddingPx: number): void
 }
 
@@ -146,11 +146,11 @@ export function useAnimationMap() {
     }
   }
 
-  // 设置地图中心
-  function setCameraToMarker(position: MarkerPosition) {
+  // 设置地图中心（targetZoom 提供时同步校正缩放）
+  function setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (globalAdapter) {
       // 适配器已注册，直接调用
-      globalAdapter.setCameraToMarker(position)
+      globalAdapter.setCameraToMarker(position, targetZoom)
     } else {
       // 适配器未注册，加入队列
       addLog('useAnimationMap', 'Adapter not registered, queuing setCameraToMarker')

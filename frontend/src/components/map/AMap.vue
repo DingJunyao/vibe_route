@@ -513,11 +513,14 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position: MarkerPosition) {
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (!AMapInstance) return
     const AMap = (window as any).AMap
     const lngLat = new AMap.LngLat(position.lng, position.lat)
     AMapInstance.setCenter(lngLat)
+    if (targetZoom != null && AMapInstance.getZoom() !== targetZoom) {
+      AMapInstance.setZoom(targetZoom)
+    }
   },
 
   setMapRotation(bearing: number) {
@@ -598,14 +601,29 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周各留 10% 空间（bottomPaddingPx 追加底部像素）
   fitTrackWithPadding(bottomPaddingPx: number) {
     if (!AMapInstance) return
-    // 计算底部 padding 的百分比（相对于容器高度）
-    const containerHeight = (AMapInstance.getSize() as any).height
-    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
-    // 调用现有的 fitBounds 方法，使用额外的底部 padding
-    fitBounds(paddingPercent)
+
+    const AMap = (window as any).AMap
+    const bounds: any[] = []
+    for (const track of props.tracks) {
+      if (!track.points || track.points.length === 0) continue
+      for (const point of track.points) {
+        const lng = point.longitude_gcj02 ?? point.longitude_wgs84 ?? point.longitude
+        const lat = point.latitude_gcj02 ?? point.latitude_wgs84 ?? point.latitude
+        if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+          bounds.push(new AMap.LngLat(lng, lat))
+        }
+      }
+    }
+    if (bounds.length === 0) return
+
+    const size = AMapInstance.getSize() as any
+    // setFitView avoid 为 [上, 右, 下, 左]（与组件内 fitBounds 的既有用法一致）
+    const padX = Math.round((size.width || 800) * 0.1)
+    const padY = Math.round((size.height || 600) * 0.1)
+    AMapInstance.setFitView(null, true, [padY, padX, padY + bottomPaddingPx, padX])
   },
 }
 

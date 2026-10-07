@@ -107,23 +107,18 @@ export const useAnimationStore = defineStore('animation', () => {
     }
   }
 
-  // 切换相机模式（同时切换朝向模式）
+  // 切换相机模式（三态循环：全轨迹 → 固定中心-正北朝上 → 固定中心-轨迹朝上 → 全轨迹）
   function toggleCameraMode() {
-    const cameraModes: CameraMode[] = ['full', 'fixed-center']
-    const orientationModes: OrientationMode[] = ['north-up', 'track-up']
-
-    const currentCameraIndex = cameraModes.indexOf(playbackState.value.cameraMode)
-    const currentOrientationIndex = orientationModes.indexOf(playbackState.value.orientationMode)
-
-    // 切换相机模式
-    playbackState.value.cameraMode = cameraModes[(currentCameraIndex + 1) % cameraModes.length]
-
-    // 当切换到固定中心时，同时切换朝向模式
-    if (playbackState.value.cameraMode === 'fixed-center') {
-      playbackState.value.orientationMode = orientationModes[(currentOrientationIndex + 1) % orientationModes.length]
+    const state = playbackState.value
+    if (state.cameraMode === 'full') {
+      state.cameraMode = 'fixed-center'
+      state.orientationMode = 'north-up'
+    } else if (state.cameraMode === 'fixed-center' && state.orientationMode === 'north-up') {
+      state.cameraMode = 'fixed-center'
+      state.orientationMode = 'track-up'
     } else {
-      // 全轨迹视图时，重置为正北朝上
-      playbackState.value.orientationMode = 'north-up'
+      state.cameraMode = 'full'
+      state.orientationMode = 'north-up'
     }
   }
 

@@ -4,6 +4,12 @@
 
 ## 2026-10
 
+- 画面运动模式三态化 + 缩放规格（2026-10-07，同分支第二笔）：
+  - **三态循环**：`toggleCameraMode` 改为按组合状态循环 全轨迹画面 → 固定中心-正北朝上 → 固定中心-轨迹朝上 → 全轨迹（旧实现两态切换+进入固定中心时翻转朝向，两个固定中心被「全轨迹」隔开，实际只有两个可见状态）
+  - **模式切换立即生效**：watch 改为**无论播放状态**都 `updateAnimation(force=true)` 强制刷新（新增节流旁路参数）。此前仅暂停态立即刷新、播放中依赖 rAF 循环——页面隐藏/rAF 节流时切换迟迟不生效（开发者实测「轨迹朝上不旋转」即此因：其查看的页面工作区在 master 旧代码 + 隐藏页 rAF 停摆；特性分支代码在可见页与导出视频中旋转正常）
+  - **全轨迹画面 10% 边距**：`fitTrackWithPadding(0)` 语义改为整轨四周各留 10%（Leaflet/高德按轴精确：x=宽度 10%、y=高度 10%，高德走 `setFitView` 的 avoid 数组；百度/腾讯/Google 走各自 `fitBounds(10)` 百分比流，宽屏纵向略大于 10%）；删除旧的「HUD 高度 +20px 追加底部 padding」逻辑，HUD/地图切换/模式切换时统一按 10% 重 fit
+  - **固定中心自适应缩放**：新增 `getFixedCenterZoom(speed, lat)`——60km/h 及以下约 30m 一格（0.47 m/px 基准，Web 墨卡托按纬度换算，向下取整），速度更高按比例放大 m/px（120km/h 约降 1 级）；`setCameraToMarker` 增加可选 `targetZoom`（五引擎），播放器记 `lastFixedCenterZoom`，**仅进入模式或速度档位变化时应用缩放**（不逐帧覆盖用户手动缩放；模式/地图切换后重置）
+  - 验证：vite build 通过；headless Chromium（IAB 卡死期间的替代通道）store 驱动断言——三态循环顺序（full → fc-正北 → fc-轨迹朝上 → full）、fc-正北不旋转且居中、fc-轨迹朝上旋转随方位（242°/182°/152°）标记指上居中、全轨迹 10% 边距（整数 zoom 取满足 ≥10% 的最大级别，实测 29%/14%）、自适应缩放随速度生效（实测轨迹约 167km/h → zoom 16）
 - 轨迹回放完善 + 地图引擎切换（SDK/Leaflet）（2026-10-07，分支 `feat/track-replay-leaflet`）：
   - **朝向模式真正生效**（此前 `orientationMode` 只存不用、`setMapRotation` 从未被播放器调用）：fixed-center + track-up 时播放循环每帧按当前点方位角旋转地图（方向恒指向画面上方），full 视图与 north-up 恒 0；新增 `applyMapRotation` 直设通道（带 <0.01° 跳重守卫），**删除原 5 步 rAF 动画过渡版 `setMapRotation`**——rAF 节流/隐藏页下动画链会迟落在 seek 之后把旋转拉回旧值（实测复现），模式切换改为暂停态立即 `updateAnimation()` 刷新；HUD 新增独立朝向切换按钮（Compass/Position 图标，桌面与移动端 HUD 同源生效）
   - **Leaflet 旋转落地**：引入 `leaflet-rotate` 插件（patch 全局 L 的插件，须在 `leaflet` 之后导入；**必须显式引 `dist/leaflet-rotate-src.js`**——其 package.json 的 module 入口按裸全局 L 编写，走 Vite module 解析会踩空）。地图常开 `rotate: true` + 关闭插件自带旋转手势（shiftKeyRotate/touchRotate/compassBearing/touchGestures 均 false），bearing 0 时行为与原生一致；重建地图时旋转复位

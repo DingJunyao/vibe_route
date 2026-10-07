@@ -413,10 +413,11 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  setCameraToMarker(position: MarkerPosition) {
+  setCameraToMarker(position: MarkerPosition, targetZoom?: number) {
     if (!map.value) return
-    // 回放中每帧调用，禁用平移动画避免相互打断
-    map.value.setView([position.lat, position.lng], map.value.getZoom(), { animate: false })
+    // 回放中每帧调用，禁用平移动画避免相互打断；
+    // targetZoom 与当前 zoom 相同时 setView 仅平移，速度档位变化时才实际缩放
+    map.value.setView([position.lat, position.lng], targetZoom ?? map.value.getZoom(), { animate: false })
   },
 
   setMapRotation(bearing: number) {
@@ -491,14 +492,30 @@ const animationAdapter: AnimationMapAdapter = {
     }
   },
 
-  // 调整地图视野以适应轨迹（添加底部 padding）
+  // 调整地图视野以适应整条轨迹：四周各留 10% 空间（x 按宽度、y 按高度），bottomPaddingPx 追加底部空间
   fitTrackWithPadding(bottomPaddingPx: number) {
-    if (!map.value) return
-    // 计算底部 padding 的百分比（相对于容器高度）
-    const containerHeight = map.value.getContainer().offsetHeight
-    const paddingPercent = (bottomPaddingPx / containerHeight) * 100
-    // 调用现有的 fitBounds 方法，使用额外的底部 padding
-    fitBounds(paddingPercent)
+    if (!map.value || !props.tracks[0]?.points) return
+
+    const points = props.tracks[0].points
+    const layerConfig = currentLayerConfig.value
+    const crsType = layerConfig?.crs || 'wgs84'
+    const mapId = layerConfig?.id
+
+    const bounds = L.latLngBounds([])
+    for (const point of points) {
+      const coords = getCoordsByCRS(point, crsType, mapId)
+      if (!coords) continue
+      const [lat, lng] = coords
+      if (typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)) {
+        bounds.extend([lat, lng])
+      }
+    }
+    if (!bounds.isValid()) return
+
+    const container = map.value.getContainer()
+    const padX = Math.round((container.clientWidth || 800) * 0.1)
+    const padY = Math.round((container.clientHeight || 600) * 0.1 + bottomPaddingPx)
+    map.value.fitBounds(bounds, { padding: L.point(padX, padY), animate: false })
   },
 }
 

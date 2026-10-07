@@ -219,6 +219,26 @@ export function getSampleStep(pointCount: number, speed: number): number {
 }
 
 /**
+ * 固定中心模式的自适应缩放级别
+ *
+ * 目标：60km/h 及以下时比例尺约 30m 一格（一格约 64px，即 0.47 m/px）；
+ * 速度更高时按速度比例放大每像素米数（随速度增大适当缩小缩放，画面时间密度恒定）。
+ *
+ * @param speed 当前速度（m/s，可空，空按 0 处理）
+ * @param lat 当前纬度（Web 墨卡托每像素米数随纬度变化）
+ * @returns 整数 zoom 级别（3-21）
+ */
+export function getFixedCenterZoom(speed: number | null | undefined, lat: number): number {
+  const speedKmh = (speed ?? 0) * 3.6
+  const baseMPerPx = 30 / 64
+  const mPerPx = baseMPerPx * Math.max(1, speedKmh / 60)
+  const cosLat = Math.max(0.1, Math.cos((lat * Math.PI) / 180))
+  // Web 墨卡托：赤道 zoom 0 时每像素 156543.03 米
+  const zoom = Math.log2((156543.03392 * cosLat) / mPerPx)
+  return Math.max(3, Math.min(21, Math.floor(zoom)))
+}
+
+/**
  * 检查轨迹是否有足够的数据用于动画播放
  */
 export function canPlayAnimation(points: TrackPoint[]): { canPlay: boolean; reason?: string } {
