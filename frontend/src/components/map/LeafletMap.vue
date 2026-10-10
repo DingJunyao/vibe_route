@@ -537,6 +537,28 @@ function getCRS(crsType: CRSType): L.CRS {
   return L.CRS.EPSG3857
 }
 
+// 地图创建参数（initMap 与 recreateMap 必须共用，避免两处漂移；
+// rotate 常开以支持回放 track-up 旋转，bearing 0 时行为与原生一致）
+function buildMapOptions(crs: L.CRS, isPosterMode: boolean): L.MapOptions {
+  return {
+    center: [39.9, 116.4],
+    zoom: 10,
+    zoomControl: true,
+    zoomSnap: 1,              // 缩放级别为整数
+    wheelPxPerZoomLevel: 240, // 滚轮每 240 像素改变一个级别（默认 120）
+    crs,
+    // 海报生成模式使用 Canvas 渲染（html2canvas 兼容性更好）
+    preferCanvas: isPosterMode,
+    rotate: true,
+    bearing: 0,
+    // 关闭插件附带的旋转手势，保持交互与原生一致（旋转仅由回放朝向模式驱动）
+    shiftKeyRotate: false,
+    touchRotate: false,
+    compassBearing: false,
+    touchGestures: false,
+  } as L.MapOptions
+}
+
 // 初始化地图
 function initMap() {
   if (!mapContainer.value) {
@@ -557,25 +579,8 @@ function initMap() {
   // 检查是否为海报生成模式
   const isPosterMode = (window as any).__posterMode === true
 
-  // 创建地图（rotate: true 启用 leaflet-rotate 旋转能力，回放 track-up 模式使用；
-  // bearing 保持 0 时不旋转，常规浏览行为与原生 Leaflet 一致）
-  map.value = L.map(mapContainer.value, {
-    center: [39.9, 116.4],
-    zoom: 10,
-    zoomControl: true,
-    zoomSnap: 1,              // 缩放级别为整数
-    wheelPxPerZoomLevel: 240, // 滚轮每 240 像素改变一个级别（默认 120）
-    crs: crs,
-    // 海报生成模式使用 Canvas 渲染（html2canvas 兼容性更好）
-    preferCanvas: isPosterMode,
-    rotate: true,
-    bearing: 0,
-    // 关闭插件附带的旋转手势，保持交互与原生一致（旋转仅由回放朝向模式驱动）
-    shiftKeyRotate: false,
-    touchRotate: false,
-    compassBearing: false,
-    touchGestures: false,
-  } as L.MapOptions)
+  // 创建地图（共用 buildMapOptions，rotate: true 启用 leaflet-rotate 旋转能力）
+  map.value = L.map(mapContainer.value, buildMapOptions(crs, isPosterMode))
   // 地图重建后旋转复位为正北朝上
   currentMapRotation = 0
   lastMarkerPosition = null
@@ -1346,14 +1351,12 @@ function recreateMap() {
   const crs = layerConfig ? getCRS(layerConfig.crs) : L.CRS.EPSG3857
   const isPosterMode = (window as any).__posterMode === true
 
-  // 创建新地图
-  map.value = L.map(mapContainer.value, {
-    center: [39.9, 116.4],
-    zoom: 10,
-    zoomControl: true,
-    crs: crs,
-    preferCanvas: isPosterMode,
-  })
+  // 创建新地图（与 initMap 共用参数，含 rotate: true；
+  // 缺失 rotate 会导致图层切换后回放旋转静默失效——两个固定中心模式视觉上变得相同）
+  map.value = L.map(mapContainer.value, buildMapOptions(crs, isPosterMode))
+  // 地图重建后旋转复位为正北朝上
+  currentMapRotation = 0
+  lastMarkerPosition = null
 
   // 添加底图
   addTileLayer(currentLayerId.value)

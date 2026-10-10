@@ -4,6 +4,7 @@
 
 ## 2026-10
 
+- 修复图层切换后回放旋转静默失效（2026-10-10）：`recreateMap()` 是一份**没有 rotate 选项的重复建图代码**（CRS 不同的图层互切——如 高德↔OSM——会走重建路径），重建出的地图无旋转能力 → track-up 与 north-up 视觉相同（用户报告「只有两个模式」的真正根因之一）。修复：抽取 `buildMapOptions()` 供 `initMap`/`recreateMap` 共用（顺带补齐 recreateMap 缺失的 zoomSnap/wheelPxPerZoomLevel），重建时复位旋转状态。headless 实测：图层切换后 `_rotate: true`、rotate 层存在、setBearing 生效。**另核**：SDK/Leaflet 切换按钮按设计仅在当前图层家族配置了 SDK 凭据时显示——本机测试库所有 api_key 为空，谷歌层无按钮属预期，配置 api_key 后按钮即出现（实测复验：临时 key → 按钮出现且 SDK 引擎激活 → 还原）
 - 后端依赖双声明等价（pyproject.toml ↔ requirements.txt）：新增 `backend/pyproject.toml`，`[project.dependencies]` 与 requirements.txt **逐条等价**（含 `bcrypt==4.0.1`、`playwright==1.58.0` 钉版与 svgpathtools 的 GitHub 直连 URL；`requires-python = ">=3.11"` 对齐 Dockerfile 的 python:3.11-slim 与本机 3.11.15；`[tool.uv] package = false`，后端是 uvicorn 直跑的应用，uv 只管依赖不构建包）。校验：静态归一化比对 45 条完全一致（requirements.txt 侧顺带删掉「测试」段落里重复的 httpx），`uv pip compile` 全解析锁集一致（**103 个包**含传递依赖，diff 仅差 `# via` 来源注释）。两文件头部互加「新增依赖时两边同步修改」注记；`agents/quick-commands.md` ARM 段的手写 pip 一行装（已漂移：缺 python-multipart/slowapi/svgpathtools，bcrypt 未钉版——passlib 1.7.4 遇 bcrypt≥4.1 会崩）改为 `pip install -r requirements.txt --index-url https://pypi.org/simple`，消除第三份会漂移的依赖列表（Dockerfile 本就走 requirements.txt，不受影响）。另核：`pyproj` 包仅为 geopandas 传递依赖（环境实装 3.7.2），后端代码无直接 import，无需显式声明
 - 画面运动模式三态化 + 缩放规格（2026-10-07，同分支第二笔）：
   - **三态循环**：`toggleCameraMode` 改为按组合状态循环 全轨迹画面 → 固定中心-正北朝上 → 固定中心-轨迹朝上 → 全轨迹（旧实现两态切换+进入固定中心时翻转朝向，两个固定中心被「全轨迹」隔开，实际只有两个可见状态）
