@@ -1,6 +1,7 @@
 # backend/app/services/animation_export.py
 
 import asyncio
+import time
 import uuid
 from typing import Optional
 from fastapi import BackgroundTasks
@@ -102,8 +103,15 @@ class AnimationExportService:
             # 使用 Playwright 录制视频
             from ..utils.playwright_export import capture_animation_video
 
+            last_progress_write = 0.0
+
             async def progress_callback(p: float):
-                """进度回调"""
+                """进度回调（节流：写入间隔 <3s 时跳过，避免并发任务下 SQLite 写锁竞争）"""
+                nonlocal last_progress_write
+                now = time.monotonic()
+                if p < 100.0 and now - last_progress_write < 3.0:
+                    return
+                last_progress_write = now
                 async with async_session_maker() as db:
                     result = await db.execute(
                         select(AnimationExportTask).where(AnimationExportTask.id == task_id)
@@ -119,6 +127,7 @@ class AnimationExportService:
                 token=token,
                 request=request,
                 progress_callback=progress_callback,
+                task_id=task_id,
             )
 
             # 更新为完成状态

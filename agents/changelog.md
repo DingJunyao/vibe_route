@@ -4,6 +4,11 @@
 
 ## 2026-10
 
+- 长视频导出支持（数小时）+ 双模式采集（2026-10-11 第二笔）：
+  - **自动选路**：输出 ≤30s（900 帧）走逐帧截图（质量最优）；**>30s 走 CDP screencast 流式录制**——页面实时播放，screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳、`-loglevel error -nostats` 防 stderr 缓冲死锁，不落盘中间帧），**耗时 ≈ 输出时长**，数小时输出不再受逐帧帧数上限限制（54000 帧上限删除）
+  - **导出模式瓦片门控**：animationLoop 在导出播放中检测到加载中 Leaflet 瓦片即暂停推进（超 2.5s 强制放行，防加载失败的瓦片把播放永久卡死），流式录制不会把灰块录进画面
+  - **并发修复**：① 同轨迹同秒并发导出文件名碰撞互相覆盖 → 结果文件名与帧目录编入 task_id 片段；② 进度回调节流 ≥3s 写库，缓解 SQLite 写锁竞争（此前并发双任务触发 `database is locked`）；③ screencast 帧队列满时丢弃 Newest 帧并立即 ACK（背压防内存堆积）
+  - 验证：流式 240s@1x → 输出 245.2s 1080p H.264（7.1Mbps，抽帧无灰块/无控件/时长精确，含短暂瓦片等待驻留属预期）；逐帧 15s 模式复验通过；并发双任务均完成
 - 视频导出改为逐帧截图 + ffmpeg 合成，修复质量/瓦片/控件入镜（2026-10-11）：
   - **架构替换**：后端 Playwright 不再用 `record_video` 实时录屏（webm VP8 压缩质量差、瓦片加载滞后入镜灰块、旋转视野外空白），改为**逐帧截图**——对每帧调用页面 `__seekExportFrame(t)`（导出模式播放器注册：seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，ffmpeg libx264 CRF16 合成 **MP4**（30fps）。leaflet-rotate 的 GridLayer 补丁会按旋转视口扩展瓦片边界，逐帧等待其加载完成后即全覆盖（实测 1080p 抽帧：文字锐利、无灰块、旋转视野完整）
   - 适配器新增可选 `waitForIdle()`：Leaflet 轮询 `.leaflet-tile:not(.leaflet-tile-loaded)` 清零 + 淡入 320ms + 双 rAF flush；未实现的引擎退化 250ms 延时

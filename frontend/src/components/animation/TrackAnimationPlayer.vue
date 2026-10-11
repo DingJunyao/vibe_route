@@ -308,10 +308,39 @@ function handleHeightChanged(height: number) {
   }
 }
 
+// 导出模式瓦片就绪门控：加载中的 Leaflet 瓦片数（非 Leaflet 引擎恒为 0，不门控）
+function pendingTileCount(): number {
+  return document.querySelectorAll('.leaflet-tile:not(.leaflet-tile-loaded)').length
+}
+
+// 瓦片门控起始时间：持续超过 TILE_GATE_TIMEOUT_MS 后放行推进，
+// 防止加载失败（永不进入 loaded 状态）的瓦片把播放永久卡死
+let tileGateSince = 0
+const TILE_GATE_TIMEOUT_MS = 2500
+
 // 动画循环
 function animationLoop(timestamp: number) {
   if (!lastTimestamp.value) {
     lastTimestamp.value = timestamp
+  }
+
+  // 导出模式（流式录制）：瓦片未就绪时本帧不推进，避免未加载瓦片入镜
+  // （画面短暂停顿优于灰块；时间轴以挂钟为准，停顿即输出中的短暂驻留）
+  if (props.exportMode && animationStore.isPlaying) {
+    const pending = pendingTileCount()
+    if (pending > 0) {
+      if (!tileGateSince) {
+        tileGateSince = timestamp
+      }
+      if (timestamp - tileGateSince < TILE_GATE_TIMEOUT_MS) {
+        lastTimestamp.value = timestamp
+        animationFrameId.value = requestAnimationFrame(animationLoop)
+        return
+      }
+      // 门控超时：放行推进（tileGateSince 保持，待瓦片清零后重置）
+    } else {
+      tileGateSince = 0
+    }
   }
 
   const delta = timestamp - lastTimestamp.value

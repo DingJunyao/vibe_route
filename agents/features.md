@@ -37,12 +37,15 @@
 
 ### 视频导出
 
-- **逐帧截图 + ffmpeg 合成 H.264 MP4**（2026-10-11 起替换浏览器实时录屏 webm）：后端对每帧调用页面暴露的 `__seekExportFrame(t)`（播放器在导出模式注册：seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截图 JPEG q92，libx264 CRF16 合成。解决实时录屏的三大问题：压缩质量差、瓦片未加载完就入镜（灰块）、旋转视野外空白（leaflet-rotate 会按旋转视口扩展瓦片边界，等它加载完即可全覆盖）
+- **双模式采集，按输出时长自动选择**（后端 Playwright → H.264 MP4）：
+  - **逐帧截图**（输出 ≤30s / 900 帧）：每帧调用页面 `__seekExportFrame(t)`（seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，质量最优、瓦片确定性加载
+  - **CDP screencast 流式录制**（输出 >30s，支持数小时）：页面实时播放（`__startExportPlayback`），screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳，不落盘中间帧），**耗时 ≈ 输出时长**
 - 适配器可选 `waitForIdle()`：Leaflet 轮询无加载中瓦片 + 瓦片淡入走完（约 320ms）+ 双 rAF 渲染 flush；未实现的引擎退化为固定 250ms 延时
-- 帧数 = 输出时长 × 30fps（上限 `MAX_EXPORT_FRAMES=54000`，超出报错提示提高倍速）；**导出耗时 ≈ 输出帧数 × ~1s**（瓦片加载主导），长轨迹建议提高倍速
+- **导出模式瓦片门控**：animationLoop 在导出模式播放中检测到加载中瓦片即暂停推进（超 2.5s 强制放行防失败瓦片卡死），流式录制不录灰块
+- **并发**：进度回调 ≥3s 节流写库（防 SQLite 写锁竞争）；结果文件名/帧目录编入 task_id 片段（同轨迹同秒并发不互相覆盖）；ffmpeg stdin 加 `-loglevel error -nostats` 防 stderr 缓冲死锁
 - 导出请求 `engine`（sdk/leaflet）→ 后端透传为导出页 URL 参数 → TrackDetail `exportEngine` → UniversalMap `forceEngine` prop，保证导出画面引擎与点击导出时一致；无该参数时回退旧行为（本地偏好，Playwright 无 localStorage → 默认 SDK）
 - **导出画面隐藏控件**（body.export-mode CSS）：图层切换、**引擎切换（.engine-switch）**、居中/全屏/动画入口、各家缩放控件；Leaflet 指南针在 `buildMapOptions` 用 `rotateControl: false` 全局关闭（插件 rotate:true 时默认自动添加）
-- 文件名 `track_{id}_animation_{ts}.mp4`
+- 文件名 `track_{id}_animation_{ts}_{taskId前8位}.mp4`
 - 其余视图状态（起点/相机/朝向/标记/图层/缩放中心/画幅 zoom 修正）沿用既有方案，见 changelog
 
 ## 合并轨迹
