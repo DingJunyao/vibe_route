@@ -1,0 +1,141 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# PyCharm
+.idea/
+
+# VS Code
+*.code-workspace
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+backend/data/*.db
+
+# User data directories (uploads, temp, exports)
+backend/data/uploads/
+backend/data/temp/
+backend/data/exports/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.sqlite
+.env.mysql
+.env.postgresql
+.env.postgresql.postgis
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Node.js (frontend)
+node_modules/
+dist/
+.cache/
+*.tsbuildinfo
+
+# Frontend specific
+frontend/dist/
+frontend/.vite/
+frontend/node_modules/
+
+# Road sign fonts (user provided)
+backend/data/fonts/*
+backend/data/road_signs/*
+
+# Alembic (database migrations)
+# Note: alembic/versions/ should be tracked, but config files may vary
+backend/alembic.ini
+
+# claude code
+.claude/
+tmpclaude*
+
+ref_gpxutil/
+ref/
+
+backend/data/area_data/
+
+.spec-workflow/
+.serena/
+
+# Git worktrees
+.worktrees/
+# docs/
+.conda/
+# Docker compose（用户从 example 复制自定义）
+docker-compose.yml
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+coverage/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+pip-wheel-metadata/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
