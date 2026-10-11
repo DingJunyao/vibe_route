@@ -517,6 +517,21 @@ const animationAdapter: AnimationMapAdapter = {
     const padY = Math.round((container.clientHeight || 600) * 0.1 + bottomPaddingPx)
     map.value.fitBounds(bounds, { padding: L.point(padX, padY), animate: false })
   },
+
+  // 等待地图渲染就绪（逐帧导出用）：无加载中瓦片 + 瓦片淡入完成 + 渲染 flush
+  async waitForIdle() {
+    if (!map.value) return
+    const container = map.value.getContainer()
+    const start = Date.now()
+    while (Date.now() - start < 3000) {
+      const pending = container.querySelectorAll('.leaflet-tile:not(.leaflet-tile-loaded)').length
+      if (pending === 0) break
+      await new Promise((r) => setTimeout(r, 60))
+    }
+    // 瓦片淡入动画（约 250ms）走完再交给截图
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+    await new Promise((r) => setTimeout(r, 320))
+  },
 }
 
 // 根据坐标系类型获取 CRS
@@ -551,6 +566,8 @@ function buildMapOptions(crs: L.CRS, isPosterMode: boolean): L.MapOptions {
     preferCanvas: isPosterMode,
     rotate: true,
     bearing: 0,
+    // 不自动添加插件自带的指南针控件（旋转由回放朝向模式驱动，控件在导出视频里也会入镜）
+    rotateControl: false,
     // 关闭插件附带的旋转手势，保持交互与原生一致（旋转仅由回放朝向模式驱动）
     shiftKeyRotate: false,
     touchRotate: false,

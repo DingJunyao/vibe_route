@@ -56,6 +56,9 @@ export interface AnimationMapAdapter {
 
   // 调整地图视野以适应整条轨迹：四周各留 10% 空间（bottomPaddingPx 为额外底部像素）
   fitTrackWithPadding?(bottomPaddingPx: number): void
+
+  // 等待地图渲染就绪（逐帧导出用）：未实现时由调用方退化为固定延时
+  waitForIdle?(): Promise<void>
 }
 
 // 全局适配器（真正的单例）
@@ -183,6 +186,14 @@ export function useAnimationMap() {
     globalAdapter?.fitTrackWithPadding?.(bottomPaddingPx)
   }
 
+  // 等待地图渲染就绪（逐帧导出用）：适配器实现 waitForIdle 时精确等待，否则退化为固定延时
+  function waitForMapIdle(): Promise<void> {
+    if (globalAdapter?.waitForIdle) {
+      return globalAdapter.waitForIdle()
+    }
+    return new Promise((r) => setTimeout(r, 250))
+  }
+
   // 辅助函数
   function calculateShortestRotation(from: number, to: number): number {
     let delta = to - from
@@ -208,5 +219,6 @@ export function useAnimationMap() {
     applyMapRotation,
     setAnimationPlaying,
     fitTrackWithPadding,
+    waitForMapIdle,
   }
 }

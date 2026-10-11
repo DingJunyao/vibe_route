@@ -4,6 +4,13 @@
 
 ## 2026-10
 
+- 视频导出改为逐帧截图 + ffmpeg 合成，修复质量/瓦片/控件入镜（2026-10-11）：
+  - **架构替换**：后端 Playwright 不再用 `record_video` 实时录屏（webm VP8 压缩质量差、瓦片加载滞后入镜灰块、旋转视野外空白），改为**逐帧截图**——对每帧调用页面 `__seekExportFrame(t)`（导出模式播放器注册：seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，ffmpeg libx264 CRF16 合成 **MP4**（30fps）。leaflet-rotate 的 GridLayer 补丁会按旋转视口扩展瓦片边界，逐帧等待其加载完成后即全覆盖（实测 1080p 抽帧：文字锐利、无灰块、旋转视野完整）
+  - 适配器新增可选 `waitForIdle()`：Leaflet 轮询 `.leaflet-tile:not(.leaflet-tile-loaded)` 清零 + 淡入 320ms + 双 rAF flush；未实现的引擎退化 250ms 延时
+  - 帧数 = 输出时长×30fps，上限 54000（约 30min@30fps）超出报错提示提高倍速；**导出耗时 ≈ 帧数×~1s**（瓦片加载主导，实测 450 帧 ≈ 8.7min），长轨迹建议提高倍速
+  - **控件入镜修复**：左上角指南针 = leaflet-rotate 在 `rotate:true` 时默认自动添加的 `rotateControl` → `buildMapOptions` 加 `rotateControl: false` 全局关闭；右上角 SDK/Leaflet 切换按钮 → `body.export-mode` CSS 补藏 `.engine-switch`
+  - 导出进度行修复：info 面板曾把毫秒时长当时间戳 `toLocaleTimeString` 格式化（显示偏移时区的钟点），改 `formatAnimationTime`
+  - 验证：billding 库 track 90（巴厘岛，49min）末段 120s@8x → 15s 1080p MP4（30fps、16.8Mbps、H.264），抽帧核验四项问题全部消除；`uv pip compile` 无关；前后端构建通过
 - 修复图层切换后回放旋转静默失效（2026-10-10）：`recreateMap()` 是一份**没有 rotate 选项的重复建图代码**（CRS 不同的图层互切——如 高德↔OSM——会走重建路径），重建出的地图无旋转能力 → track-up 与 north-up 视觉相同（用户报告「只有两个模式」的真正根因之一）。修复：抽取 `buildMapOptions()` 供 `initMap`/`recreateMap` 共用（顺带补齐 recreateMap 缺失的 zoomSnap/wheelPxPerZoomLevel），重建时复位旋转状态。headless 实测：图层切换后 `_rotate: true`、rotate 层存在、setBearing 生效。**另核**：SDK/Leaflet 切换按钮按设计仅在当前图层家族配置了 SDK 凭据时显示——本机测试库所有 api_key 为空，谷歌层无按钮属预期，配置 api_key 后按钮即出现（实测复验：临时 key → 按钮出现且 SDK 引擎激活 → 还原）
 - 后端依赖双声明等价（pyproject.toml ↔ requirements.txt）：新增 `backend/pyproject.toml`，`[project.dependencies]` 与 requirements.txt **逐条等价**（含 `bcrypt==4.0.1`、`playwright==1.58.0` 钉版与 svgpathtools 的 GitHub 直连 URL；`requires-python = ">=3.11"` 对齐 Dockerfile 的 python:3.11-slim 与本机 3.11.15；`[tool.uv] package = false`，后端是 uvicorn 直跑的应用，uv 只管依赖不构建包）。校验：静态归一化比对 45 条完全一致（requirements.txt 侧顺带删掉「测试」段落里重复的 httpx），`uv pip compile` 全解析锁集一致（**103 个包**含传递依赖，diff 仅差 `# via` 来源注释）。两文件头部互加「新增依赖时两边同步修改」注记；`agents/quick-commands.md` ARM 段的手写 pip 一行装（已漂移：缺 python-multipart/slowapi/svgpathtools，bcrypt 未钉版——passlib 1.7.4 遇 bcrypt≥4.1 会崩）改为 `pip install -r requirements.txt --index-url https://pypi.org/simple`，消除第三份会漂移的依赖列表（Dockerfile 本就走 requirements.txt，不受影响）。另核：`pyproj` 包仅为 geopandas 传递依赖（环境实装 3.7.2），后端代码无直接 import，无需显式声明
 - 画面运动模式三态化 + 缩放规格（2026-10-07，同分支第二笔）：

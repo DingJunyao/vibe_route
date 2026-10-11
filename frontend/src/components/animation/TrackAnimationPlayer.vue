@@ -31,11 +31,11 @@
         class="info-panel"
         :style="infoPanelStyle"
       >
-        <!-- 导出模式：播放进度、当前时间、剩余时间 -->
+        <!-- 导出模式：播放进度、当前时间、剩余时间（时长用 HH:MM:SS 格式化，勿用时间戳格式） -->
         <div v-if="exportMode" class="info-export-progress">
-          {{ formatTime(animationStore.currentTime) }} / {{ formatTime(duration) }}
+          {{ formatDurationText(animationStore.currentTime) }} / {{ formatDurationText(duration) }}
           · {{ Math.round((animationStore.currentTime / duration) * 100) }}%
-          · 剩余 {{ formatTime(Math.max(0, duration - animationStore.currentTime)) }}
+          · 剩余 {{ formatDurationText(Math.max(0, duration - animationStore.currentTime)) }}
         </div>
         <div class="info-time">{{ formatTime(currentPosition.time) }}</div>
         <div class="info-speed">{{ formatSpeed(currentPosition.speed) }}</div>
@@ -84,7 +84,7 @@ interface Props {
 const props = defineProps<Props>()
 
 const animationStore = useAnimationStore()
-const { setMarkerPosition, setPassedSegment, setCameraToMarker, applyMapRotation, setAnimationPlaying, fitTrackWithPadding } = useAnimationMap()
+const { setMarkerPosition, setPassedSegment, setCameraToMarker, applyMapRotation, setAnimationPlaying, fitTrackWithPadding, waitForMapIdle } = useAnimationMap()
 
 // 状态
 const isInitialized = ref(false)
@@ -180,6 +180,11 @@ const infoPanelStyle = computed(() => ({
 function formatTime(time: string | null): string {
   if (!time) return '--:--:--'
   return new Date(time).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+// 毫秒时长 → HH:MM:SS（导出进度行使用，currentTime 是时长而非时间戳）
+function formatDurationText(ms: number): string {
+  return formatAnimationTime(ms)
 }
 
 function formatSpeed(speed: number | null): string {
@@ -393,11 +398,26 @@ onMounted(() => {
   if (isMobile.value) {
     updateAndEmitPosition()
   }
+
+  // 导出模式（后端逐帧截图）：暴露单帧定位接口
+  // 后端对每帧调用 seek → 强制刷新 → 等待地图空闲（瓦片加载完成）→ 截图，
+  // 输出视频不受实时录制下瓦片加载滞后与压缩质量问题影响
+  if (props.exportMode) {
+    ;(window as any).__seekExportFrame = async (t: number) => {
+      animationStore.setPlaybackState('isPlaying', false)
+      animationStore.setPlaybackState('currentTime', t)
+      updateAnimation(true)
+      await waitForMapIdle()
+    }
+  }
 })
 
 onUnmounted(() => {
   if (animationFrameId.value) {
     cancelAnimationFrame(animationFrameId.value)
+  }
+  if (props.exportMode) {
+    delete (window as any).__seekExportFrame
   }
 })
 

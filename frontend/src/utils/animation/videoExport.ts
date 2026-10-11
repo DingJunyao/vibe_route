@@ -240,10 +240,10 @@ export async function downloadFile(url: string, filename: string) {
 }
 
 /**
- * 生成导出文件名
+ * 生成导出文件名（逐帧合成 H.264 MP4）
  */
 export function generateExportFilename(trackId: number): string {
   const date = new Date()
   const dateStr = date.toISOString().slice(0, 10).replace(/T/, '-')
-  return `track_${trackId}_animation_${dateStr}.webm`
+  return `track_${trackId}_animation_${dateStr}.mp4`
 }

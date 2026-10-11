@@ -24,6 +24,12 @@ RESOLUTION_DIMENSIONS = {
     '4k': (3840, 2160),
 }
 
+# 逐帧导出参数
+EXPORT_FPS = 30                 # 输出视频帧率
+FRAME_JPEG_QUALITY = 92         # 单帧截图 JPEG 质量
+MAX_EXPORT_FRAMES = 54000       # 帧数上限（30 分钟 @30fps），超出提示提高倍速
+FFMPEG_CRF = '16'               # H.264 恒定质量（越小越清晰）
+
 
 def _capture_in_proactor_loop(
     track_id: int,
@@ -59,20 +65,24 @@ async def capture_animation_video(
     progress_callback: Optional[Callable[[float], None]] = None,
 ) -> str:
     """
-    使用 Playwright 录制动画视频
+    使用 Playwright 逐帧截图并经 ffmpeg 合成动画视频
 
-    打开前端轨迹详情页的导出模式，页面就绪后触发自动播放，
-    完成后返回视频下载 URL（相对路径）。
+    打开前端轨迹详情页的导出模式，对每一帧调用页面暴露的
+    `__seekExportFrame(t)`（定位动画 → 等待瓦片加载与渲染完成）后截图，
+    最终合成为 H.264 MP4。相比浏览器实时录屏：
+    - 画面不受录制压缩影响（源帧为高保真截图）
+    - 瓦片必然加载完成，旋转视野外不会出现空白
+    - 输出时长与帧严格对应（输出帧率 = EXPORT_FPS）
 
     Args:
         track_id: 轨迹 ID
-        duration_ms: 轨迹时长（毫秒），用于计算整体超时
+        duration_ms: 轨迹总时长（毫秒）
         token: 用户 token（注入页面 localStorage 以复用登录会话）
         request: 导出请求（含分辨率、倍速与视图状态）
         progress_callback: 进度回调（0-100）
 
     Returns:
-        下载路径（相对于 EXPORT_DIR，例如 animation/xxx.webm）
+        下载路径（相对于 EXPORT_DIR，例如 animation/xxx.mp4）
     """
     if sys.platform == 'win32':
         return await asyncio.to_thread(
@@ -94,7 +104,7 @@ async def _capture_impl(
     progress_callback: Optional[Callable[[float], None]] = None,
 ) -> str:
     """
-    Playwright 录制实现（必须在支持子进程的事件循环中运行）
+    逐帧截图实现（必须在支持子进程的事件循环中运行）
     """
     if progress_callback is None:
         progress_callback = lambda p: None  # noqa: E731
@@ -102,11 +112,23 @@ async def _capture_impl(
     export_dir = Path(settings.EXPORT_DIR) / 'animation'
     export_dir.mkdir(parents=True, exist_ok=True)
 
-    # 每任务独立录制目录（Playwright 要求目录存在且为空）
-    record_dir = export_dir / 'recordings' / f'{track_id}_{int(time.time() * 1000)}'
-    record_dir.mkdir(parents=True, exist_ok=True)
-
     width, height = RESOLUTION_DIMENSIONS.get(request.resolution, (1920, 1080))
+
+    # 输出帧序列：覆盖 [start_time, duration_ms]，按倍速压缩时长
+    speed = max(request.speed, 0.25)
+    start_ms = max(0.0, request.start_time)
+    out_duration_s = max(0.0, (duration_ms - start_ms) / 1000.0 / speed)
+    frame_count = int(math.ceil(out_duration_s * EXPORT_FPS))
+    if frame_count < 1:
+        raise ValueError("导出区间时长为 0（起点已到轨迹末尾）")
+    if frame_count > MAX_EXPORT_FRAMES:
+        raise ValueError(
+            f"导出帧数 {frame_count} 超过上限 {MAX_EXPORT_FRAMES}（约 "
+            f"{MAX_EXPORT_FRAMES // EXPORT_FPS} 分钟 @30fps），请提高导出倍速"
+        )
+
+    frames_dir = export_dir / 'frames' / f'{track_id}_{int(time.time() * 1000)}'
+    frames_dir.mkdir(parents=True, exist_ok=True)
 
     # 构造导出模式 URL
     params = {
@@ -141,9 +163,8 @@ async def _capture_impl(
 
     url = f"{settings.FRONTEND_URL}/tracks/{track_id}?{urlencode(params)}"
 
-    # 整体超时：预估播放时长 * 2 + 60s 兜底
-    speed = max(request.speed, 0.25)
-    timeout_sec = (duration_ms / 1000 / speed) * 2 + 60
+    # 整体超时：单帧最坏 ~2.5s + 编译余量
+    timeout_s = frame_count * 2.5 + 180
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -152,8 +173,6 @@ async def _capture_impl(
         )
         context = await browser.new_context(
             viewport={'width': width, 'height': height},
-            record_video_dir=str(record_dir),
-            record_video_size={'width': width, 'height': height},
         )
         # 注入登录会话（复用导出用户自己的 token）
         await context.add_init_script(
@@ -164,12 +183,10 @@ async def _capture_impl(
         try:
             # 页面存在持续轮询/WebSocket 连接，networkidle 永不满足，改用 domcontentloaded
             await page.goto(url, wait_until='domcontentloaded', timeout=60000)
-            goto_done_at = time.monotonic()
 
             # 阶段一：等待页面就绪（数据加载 + 地图渲染完成，前端设置 exportState='ready'）
             ready_deadline = time.time() + 60
             state = None
-            ready_offset = 0.0  # 从 goto 完成到就绪的时长（用于裁剪录制开头的遮罩期）
             while time.time() < ready_deadline:
                 current_path = await page.evaluate("window.location.pathname")
                 if not current_path.startswith(f'/tracks/{track_id}'):
@@ -179,7 +196,6 @@ async def _capture_impl(
                     "document.body?.dataset?.exportState || null"
                 )
                 if state in ('ready', 'completed', 'failed'):
-                    ready_offset = time.monotonic() - goto_done_at
                     break
                 await asyncio.sleep(1)
 
@@ -189,76 +205,57 @@ async def _capture_impl(
                 )
 
             if progress_callback:
-                await progress_callback(10.0)
+                await progress_callback(5.0)
 
-            # 阶段二：缓冲后触发播放（视频从起点静止画面后开始动画）
-            await asyncio.sleep(0.5)
-            await page.evaluate(
-                "window.__startExportPlayback && window.__startExportPlayback()"
-            )
+            # 阶段二：逐帧定位 + 截图（页面等待瓦片加载与渲染完成后返回）
+            if not await page.evaluate("typeof window.__seekExportFrame === 'function'"):
+                raise RuntimeError("导出页面未暴露 __seekExportFrame（回放播放器未挂载）")
 
-            # 阶段三：等待播放完成信号，期间轮询进度
-            deadline = time.time() + timeout_sec
-            state = None
-            while time.time() < deadline:
-                # 页面跳走（如登录失效跳转登录页）视为失败
-                current_path = await page.evaluate("window.location.pathname")
-                if not current_path.startswith(f'/tracks/{track_id}'):
-                    raise RuntimeError(f"导出页面跳转，当前路径: {current_path}")
-
-                state = await page.evaluate(
-                    "document.body?.dataset?.exportState || null"
+            frame_deadline = time.time() + timeout_s
+            for i in range(frame_count):
+                if time.time() > frame_deadline:
+                    raise RuntimeError(f"逐帧导出超时（{frame_count} 帧未在限时内完成）")
+                t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
+                await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
+                frame_path = frames_dir / f"{i:06d}.jpg"
+                await page.screenshot(
+                    path=str(frame_path), type='jpeg', quality=FRAME_JPEG_QUALITY
                 )
-                if state in ('completed', 'failed'):
-                    break
-
-                try:
-                    pct = await page.evaluate(
-                        "parseFloat(document.body?.dataset?.exportProgress || '0') || 0"
-                    )
-                    if progress_callback:
-                        await progress_callback(10.0 + pct * 0.9)
-                except Exception:
-                    pass  # 页面暂不可读时忽略，下轮再试
-
-                await asyncio.sleep(1)
-
-            if state != 'completed':
-                raise RuntimeError(
-                    f"动画导出{'失败' if state == 'failed' else '超时'}"
-                    f"（state={state or 'unknown'}）"
-                )
-
-            if progress_callback:
-                await progress_callback(100.0)
+                if progress_callback:
+                    await progress_callback(5.0 + 85.0 * (i + 1) / frame_count)
         finally:
-            # 关闭 context 使视频落盘
             await context.close()
             await browser.close()
 
-    # 移动录制文件到最终位置
-    video_files = list(record_dir.glob('*.webm'))
-    if not video_files:
-        raise RuntimeError("录制完成但未生成视频文件")
+    if progress_callback:
+        await progress_callback(92.0)
 
+    # ffmpeg 合成 H.264 MP4（恒定质量，键控帧率与截图一致）
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f'track_{track_id}_animation_{timestamp}.webm'
+    filename = f'track_{track_id}_animation_{timestamp}.mp4'
     final_path = export_dir / filename
-    video_files[0].rename(final_path)
+    result = subprocess.run(
+        [
+            'ffmpeg', '-y',
+            '-framerate', str(EXPORT_FPS),
+            '-i', str(frames_dir / '%06d.jpg'),
+            '-c:v', 'libx264',
+            '-crf', FFMPEG_CRF,
+            '-preset', 'medium',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+            str(final_path),
+        ],
+        capture_output=True, timeout=1800,
+    )
+    if result.returncode != 0 or not final_path.exists():
+        stderr_tail = result.stderr.decode(errors='ignore')[-400:]
+        raise RuntimeError(f"ffmpeg 合成失败: {stderr_tail}")
 
-    # 清理录制目录
-    record_dir.rmdir()
+    if progress_callback:
+        await progress_callback(100.0)
 
-    # 裁剪录制开头的遮罩期（从地图起点画面开始），ffmpeg 不可用时跳过
-    trim_offset = ready_offset + 0.5
-    if trim_offset > 1.0 and shutil.which('ffmpeg'):
-        trimmed_path = export_dir / f'trim_{filename}'
-        result = subprocess.run(
-            ['ffmpeg', '-y', '-i', str(final_path), '-ss', str(trim_offset),
-             '-c', 'copy', str(trimmed_path)],
-            capture_output=True, timeout=600,
-        )
-        if result.returncode == 0 and trimmed_path.exists() and trimmed_path.stat().st_size > 1000:
-            trimmed_path.replace(final_path)
+    # 清理帧目录
+    shutil.rmtree(frames_dir, ignore_errors=True)
 
     return f'animation/{filename}'

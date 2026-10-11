@@ -4374,9 +4374,10 @@ body.export-mode .fixed-left .chart-card {
   display: none;
 }
 
-/* 隐藏 UniversalMap 控件（图层切换、居中、全屏、动画入口按钮） */
+/* 隐藏 UniversalMap 控件（图层切换、引擎切换、居中、全屏、动画入口按钮） */
 body.export-mode .desktop-layer-selector,
 body.export-mode .mobile-layer-selector,
+body.export-mode .engine-switch,
 body.export-mode .fit-bounds-btn,
 body.export-mode .fullscreen-btn,
 body.export-mode .animation-play-btn {
