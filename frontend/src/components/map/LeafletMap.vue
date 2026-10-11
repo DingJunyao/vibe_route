@@ -46,6 +46,10 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet-rotate/dist/leaflet-rotate-src.js'
 import 'proj4leaflet'
 import 'leaflet.chinatmsproviders'
+
+// 瓦片保留缓冲加大（默认 2 行）：回放预热/平移时尽量多保留周边瓦片，
+// 减少录制期间的重复请求（对海报等场景无副作用，仅多占些内存）
+L.TileLayer.mergeOptions({ keepBuffer: 8 })
 import { useConfigStore } from '@/stores/config'
 import { FullScreen } from '@element-plus/icons-vue'
 import type { MapLayerConfig, CRSType } from '@/api/admin'
@@ -518,12 +522,13 @@ const animationAdapter: AnimationMapAdapter = {
     map.value.fitBounds(bounds, { padding: L.point(padX, padY), animate: false })
   },
 
-  // 等待地图渲染就绪（逐帧导出用）：无加载中瓦片 + 瓦片淡入完成 + 渲染 flush
+  // 等待地图渲染就绪（逐帧导出/预热用）：无加载中瓦片 + 瓦片淡入完成 + 渲染 flush
   async waitForIdle() {
     if (!map.value) return
     const container = map.value.getContainer()
     const start = Date.now()
-    while (Date.now() - start < 3000) {
+    // 慢网络下单批瓦片可能需要数秒，上限放宽到 8s（超时通常意味着个别瓦片失败，交由门控兜底）
+    while (Date.now() - start < 8000) {
       const pending = container.querySelectorAll('.leaflet-tile:not(.leaflet-tile-loaded)').length
       if (pending === 0) break
       await new Promise((r) => setTimeout(r, 60))
@@ -1216,11 +1221,15 @@ function addTileLayer(layerId: string) {
           attribution: layerConfig.attribution,
         }).addTo(map.value)
       } else if (layerConfig.id === 'google') {
-        // Google 地图
-        chinaProvider('Google.Normal.Map', {
+        // Google 地图：直连 mt0-3.google.com 四主机分片（与原 chinaProvider 的
+        // www.google.cn 单主机同源同参数）——单主机 6 并发 + 302 重定向会成为
+        // 回放/导出快速平移时的瓦片吞吐瓶颈（请求队列堆积、已加载数量冻结）
+        L.tileLayer('https://mt{s}.google.com/vt/lyrs=m@189&gl=cn&x={x}&y={y}&z={z}', {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
           attribution: layerConfig.attribution,
+          subdomains: ['0', '1', '2', '3'],
+          keepBuffer: 8,
         }).addTo(map.value)
       } else if (layerConfig.id === 'amap_satellite') {
         // 高德卫星图 + 注记
@@ -1245,15 +1254,20 @@ function addTileLayer(layerId: string) {
           minZoom: layerConfig.min_zoom,
         }).addTo(map.value)
       } else if (layerConfig.id === 'google_satellite') {
-        // Google 卫星图 + 注记
-        chinaProvider('Google.Satellite.Map', {
+        // Google 卫星图 + 注记：同上，直连 mt0-3 四主机分片
+        const googleSatOptions = {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
           attribution: layerConfig.attribution,
-        }).addTo(map.value)
-        chinaProvider('Google.Satellite.Annot', {
+          subdomains: ['0', '1', '2', '3'],
+          keepBuffer: 8,
+        }
+        L.tileLayer('https://mt{s}.google.com/vt/lyrs=s@189&gl=cn&x={x}&y={y}&z={z}', googleSatOptions).addTo(map.value)
+        L.tileLayer('https://mt{s}.google.com/vt/lyrs=y@189&gl=cn&x={x}&y={y}&z={z}', {
           maxZoom: layerConfig.max_zoom,
           minZoom: layerConfig.min_zoom,
+          subdomains: ['0', '1', '2', '3'],
+          keepBuffer: 8,
         }).addTo(map.value)
       } else if (layerConfig.id === 'tencent_satellite') {
         // 腾讯卫星图

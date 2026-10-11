@@ -45,6 +45,10 @@
 - `api_base_url` 可配置（大陆部署可指向自建反向代理），SDK 与 Leaflet 共用 `google` 图层配置
 - SDK 坐标↔像素转换依赖 OverlayView 投影助手（地图 `projection` 就绪后可用）
 - SDK 模式下海报生成、动画视频导出强制后端 Playwright（同百度 Legacy 原因：前端捕获 CORS/渲染限制）
+- **Leaflet 瓦片源为 `mt{0-3}.google.com` 四主机直连分片**（2026-10-11 起，替代 chinaProvider 的
+  `www.google.cn` 单主机）——单主机 6 并发 + 302 重定向会成为回放/导出快速平移时的瓦片吞吐瓶颈
+  （请求队列堆积、已加载数量冻结在初始值，画面大面积灰块）；四主机 24 并发实测 6 倍速平移下
+  pending 恒为 0。需代理可达 google.com（原 www.google.cn 亦 302 至 google.com，无行为回退）
 
 ## 百度地图特殊处理
 

@@ -31,34 +31,63 @@ FRAME_JPEG_QUALITY = 92         # 逐帧截图 JPEG 质量
 SCREENCAST_JPEG_QUALITY = 90    # 流式录制 CDP screencast JPEG 质量
 FRAME_MODE_MAX_FRAMES = 900     # 逐帧模式帧数上限（约 30s @30fps），更长输出走流式录制
 FFMPEG_CRF = '16'               # H.264 恒定质量（越小越清晰）
+WARM_LEAD_OUTPUT_S = 45.0       # 预热页领先主录制页的输出时间（秒）
+WARM_FOLLOW_INTERVAL_S = 2.0    # 预热页跟随定位间隔（秒）
 
 # 流式录制：CDP screencast 每帧事件回调 → ffmpeg stdin 的传输任务
-def _create_frame_pump(
-    queue: asyncio.Queue,
+def _start_frame_pump(
     cdp,
-    ffmpeg_proc: asyncio.subprocess.Process,
-) -> asyncio.Task:
+    ffmpeg_stdin,
+) -> tuple:
     """
-    从队列取 screencast 帧写入 ffmpeg stdin（挂钟时间戳由 -use_wallclock_as_timestamps 赋予）
-    并回执 screencastFrameAck（回执滞后即对 compositor 形成背压，编码慢时自动降帧不丢时间轴）
-    """
+    启动帧搬运线程：从同步队列取 screencast 帧写入 ffmpeg stdin
+    （挂钟时间戳由 -use_wallclock_as_timestamps 赋予），随后调度 screencastFrameAck。
 
-    async def pump() -> None:
+    base64 解码与管道写放在独立线程（阻塞写天然形成对编码器的背压），
+    事件循环每帧只剩入队与 ACK 调度——避免 HTTP 接口在录制期间被饿死。
+
+    Returns:
+        (on_frame, stop)：on_frame 为 CDP screencastFrame 事件回调；stop 用于收尾
+    """
+    import queue as pyqueue
+    import threading
+
+    sync_q: pyqueue.Queue = pyqueue.Queue(maxsize=400)
+    loop = asyncio.get_running_loop()
+
+    def ack(session_id: str) -> None:
+        async def _ack() -> None:
+            try:
+                await cdp.send('Page.screencastFrameAck', {'sessionId': session_id})
+            except Exception:
+                pass
+        loop.create_task(_ack())
+
+    def worker() -> None:
         while True:
-            params = await queue.get()
+            params = sync_q.get()
             if params is None:
                 break
             try:
-                jpeg = base64.b64decode(params['data'])
-                ffmpeg_proc.stdin.write(jpeg)
-                await ffmpeg_proc.stdin.drain()
-                await cdp.send('Page.screencastFrameAck', {'sessionId': params['sessionId']})
-            except (BrokenPipeError, ConnectionResetError):
+                ffmpeg_stdin.write(base64.b64decode(params['data']))
+            except (BrokenPipeError, OSError, ValueError):
                 break
-            except Exception:
-                continue
+            ack(params['sessionId'])
 
-    return asyncio.create_task(pump())
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    def on_frame(params) -> None:
+        # 队列满时立即回执丢弃该帧（挂钟时间轴下表现为一瞬停帧），防止内存堆积
+        try:
+            sync_q.put_nowait(params)
+        except pyqueue.Full:
+            ack(params['sessionId'])
+
+    def stop() -> None:
+        sync_q.put(None)
+
+    return on_frame, stop
 
 
 def _capture_in_proactor_loop(
@@ -195,13 +224,17 @@ async def _open_export_page(
     # 页面存在持续轮询/WebSocket 连接，networkidle 永不满足，改用 domcontentloaded
     await page.goto(url, wait_until='domcontentloaded', timeout=60000)
 
-    # 等待页面就绪（前端设置 exportState='ready'）
+    await _wait_export_ready(page, track_id)
+    return browser, context, page
+
+
+async def _wait_export_ready(page, track_id: int) -> None:
+    """等待页面就绪（前端设置 exportState='ready'）"""
     ready_deadline = time.time() + 60
     state = None
     while time.time() < ready_deadline:
         current_path = await page.evaluate("window.location.pathname")
         if not current_path.startswith(f'/tracks/{track_id}'):
-            await browser.close()
             raise RuntimeError(f"导出页面跳转，当前路径: {current_path}")
 
         state = await page.evaluate("document.body?.dataset?.exportState || null")
@@ -210,10 +243,7 @@ async def _open_export_page(
         await asyncio.sleep(1)
 
     if state != 'ready':
-        await browser.close()
         raise RuntimeError(f"导出页面未就绪（state={state or 'unknown'}）")
-
-    return browser, context, page
 
 
 async def _capture_frame_mode(
@@ -262,31 +292,50 @@ async def _capture_screencast_mode(
     """
     流式录制：页面实时播放，CDP screencast JPEG 帧直通 ffmpeg stdin
     （挂钟时间戳，不落盘中间帧），耗时 ≈ 输出时长，支持数小时输出
+
+    瓦片预热：录制全程开启「预热页」——同一上下文中的另一份同轨迹页面，
+    由后端驱动它始终定位于主录制页前方 WARM_LEAD_OUTPUT_S（输出时间）的位置：
+    小步寻址不触发 Leaflet 的瓦片请求中止，沿途瓦片（含旋转扩展范围与缩放
+    档位变化）提前载入浏览器缓存（瓦片 max-age 3600），主录制页请求时命中
+    缓存瞬时完成。预热页异常不阻断导出（瓦片门控兜底）。
     """
-    ffmpeg_proc = await asyncio.create_subprocess_exec(
-        'ffmpeg', '-y',
-        '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
-        '-f', 'mjpeg', '-use_wallclock_as_timestamps', '1',
-        '-i', 'pipe:0',
-        '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'superfast',
-        '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-        str(final_path),
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
+    speed = max(request.speed, 0.25)
+    start_ms = max(0.0, request.start_time)
+    out_duration_s = max(0.0, (duration_ms - start_ms) / 1000.0 / speed)
+
+    # 阶段二：开启预热页（进度 2-8），初始定位于主录制页前方
+    warm_page = None
+    try:
+        warm_url = _build_export_url(track_id, request, width, height)
+        warm_page = await context.new_page()
+        await warm_page.goto(warm_url, wait_until='domcontentloaded', timeout=60000)
+        await _wait_export_ready(warm_page, track_id)
+        warm_target_ms = min(start_ms + WARM_LEAD_OUTPUT_S * speed * 1000, duration_ms)
+        await warm_page.evaluate("(t) => window.__seekExportPosition(t)", warm_target_ms)
+        if progress_callback:
+            await progress_callback(8.0)
+    except Exception as e:
+        # 预热页失败不阻断导出（瓦片门控兜底）
+        print(f"[playwright_export] 预热页开启失败（门控兜底）: {e}")
+        warm_page = None
+
+    ffmpeg_proc = subprocess.Popen(
+        [
+            'ffmpeg', '-y',
+            '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
+            '-f', 'mjpeg', '-use_wallclock_as_timestamps', '1',
+            '-i', 'pipe:0',
+            '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'superfast',
+            '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+            str(final_path),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
 
     cdp = await context.new_cdp_session(page)
-    queue: asyncio.Queue = asyncio.Queue(maxsize=600)
-
-    def on_screencast_frame(params) -> None:
-        # 队列满时立即回执丢弃该帧（挂钟时间轴下表现为一瞬停帧），防止内存堆积
-        try:
-            queue.put_nowait(params)
-        except asyncio.QueueFull:
-            asyncio.ensure_future(
-                cdp.send('Page.screencastFrameAck', {'sessionId': params['sessionId']})
-            )
+    on_screencast_frame, stop_frame_pump = _start_frame_pump(cdp, ffmpeg_proc.stdin)
 
     cdp.on('Page.screencastFrame', on_screencast_frame)
     await cdp.send('Page.startScreencast', {
@@ -294,10 +343,8 @@ async def _capture_screencast_mode(
         'quality': SCREENCAST_JPEG_QUALITY,
         'maxWidth': width,
         'maxHeight': height,
-        'everyNthFrame': 2,  # 头less rAF 约 60fps，减半至 ~30fps 降低编码压力
+        'everyNthFrame': 3,  # 头less rAF 约 60fps，降至 ~20fps 降低事件循环与编码压力
     })
-
-    pump_task = _create_frame_pump(queue, cdp, ffmpeg_proc)
 
     if progress_callback:
         await progress_callback(10.0)
@@ -305,11 +352,11 @@ async def _capture_screencast_mode(
     # 触发播放（页面 rAF 驱动；导出模式下推进会被瓦片就绪门控短暂暂停）
     await page.evaluate("window.__startExportPlayback && window.__startExportPlayback()")
 
-    speed = max(request.speed, 0.25)
-    out_duration_s = (duration_ms - max(0.0, request.start_time)) / 1000.0 / speed
+    out_duration_s = (duration_ms - start_ms) / 1000.0 / speed
     timeout_s = out_duration_s * 3 + 300
     deadline = time.time() + timeout_s
     state = None
+    poll_i = 0
     while time.time() < deadline:
         current_path = await page.evaluate("window.location.pathname")
         if not current_path.startswith(f'/tracks/{track_id}'):
@@ -319,15 +366,36 @@ async def _capture_screencast_mode(
         if state in ('completed', 'failed'):
             break
 
+        pct = 0.0
         try:
-            pct = await page.evaluate(
+            pct = float(await page.evaluate(
                 "parseFloat(document.body?.dataset?.exportProgress || '0') || 0"
-            )
+            ))
             if progress_callback:
                 await progress_callback(10.0 + pct * 0.8)
         except Exception:
             pass  # 页面暂不可读时忽略，下轮再试
 
+        # 预热页跟随：定位到主录制页前方 WARM_LEAD_OUTPUT_S（输出时间）的位置，
+        # 该处瓦片提前入缓存；小步寻址避免 Leaflet 中止在途请求。
+        # 接近末端时缩小领先量紧贴主录制页（对末段做第二次覆盖，重试失败的瓦片）
+        if warm_page is not None and pct > 0 and poll_i % max(1, int(WARM_FOLLOW_INTERVAL_S)) == 0:
+            try:
+                out_t = out_duration_s * pct / 100.0
+                remaining_output = out_duration_s - out_t
+                lead_s = WARM_LEAD_OUTPUT_S if remaining_output > 90.0 else max(10.0, remaining_output * 0.4)
+                warm_target_ms = min(
+                    start_ms + (out_t + lead_s) * speed * 1000,
+                    duration_ms,
+                )
+                await warm_page.evaluate(
+                    "(t) => window.__seekExportPosition && window.__seekExportPosition(t)",
+                    warm_target_ms,
+                )
+            except Exception:
+                pass  # 预热页异常不影响录制（门控兜底）
+
+        poll_i += 1
         await asyncio.sleep(1)
 
     if state != 'completed':
@@ -335,14 +403,21 @@ async def _capture_screencast_mode(
             f"动画导出{'失败' if state == 'failed' else '超时'}（state={state or 'unknown'}）"
         )
 
+    # 收尾录制：关闭预热页（释放 CPU 供编码；异常时 context.close 统一兜底）
+    if warm_page is not None:
+        try:
+            await warm_page.close()
+        except Exception:
+            pass
+        warm_page = None
+
     # 停止采集，收尾编码
     await cdp.send('Page.stopScreencast')
-    await queue.put(None)
-    await pump_task
+    stop_frame_pump()
     ffmpeg_proc.stdin.close()
-    await ffmpeg_proc.wait()
-    if ffmpeg_proc.returncode != 0 or not final_path.exists():
-        stderr_tail = (await ffmpeg_proc.stderr.read()).decode(errors='ignore')[-400:]
+    ffmpeg_returncode = ffmpeg_proc.wait(timeout=300)
+    if ffmpeg_returncode != 0 or not final_path.exists():
+        stderr_tail = ffmpeg_proc.stderr.read().decode(errors='ignore')[-400:]
         raise RuntimeError(f"ffmpeg 流式合成失败: {stderr_tail}")
 
     if progress_callback:

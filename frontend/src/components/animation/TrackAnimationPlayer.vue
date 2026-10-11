@@ -314,9 +314,10 @@ function pendingTileCount(): number {
 }
 
 // 瓦片门控起始时间：持续超过 TILE_GATE_TIMEOUT_MS 后放行推进，
-// 防止加载失败（永不进入 loaded 状态）的瓦片把播放永久卡死
+// 防止加载失败（永不进入 loaded 状态）的瓦片把播放永久卡死。
+// 慢网络下宁可画面停顿也不录进灰块，上限放宽到 30s
 let tileGateSince = 0
-const TILE_GATE_TIMEOUT_MS = 2500
+const TILE_GATE_TIMEOUT_MS = 30000
 
 // 动画循环
 function animationLoop(timestamp: number) {
@@ -438,6 +439,12 @@ onMounted(() => {
       updateAnimation(true)
       await waitForMapIdle()
     }
+    // 预热页专用：仅定位不等待（快速扫掠/跟随主录制页前方位置，把瓦片请求排入浏览器缓存）
+    ;(window as any).__seekExportPosition = (t: number) => {
+      animationStore.setPlaybackState('isPlaying', false)
+      animationStore.setPlaybackState('currentTime', t)
+      updateAnimation(true)
+    }
   }
 })
 
@@ -447,6 +454,7 @@ onUnmounted(() => {
   }
   if (props.exportMode) {
     delete (window as any).__seekExportFrame
+    delete (window as any).__seekExportPosition
   }
 })
 
