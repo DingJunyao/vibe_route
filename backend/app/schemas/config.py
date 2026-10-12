@@ -84,6 +84,9 @@ class ConfigResponse(BaseModel):
     show_road_sign_in_region_tree: bool = True
     spatial_backend: str = "auto"
     allow_server_poster: bool = True  # 是否允许服务器生成海报
+    animation_export_max_concurrency: int = Field(default=1, description="录屏任务同时录制数上限")
+    animation_export_retention_days: int = Field(default=30, description="录屏文件保存天数（0 = 永久）")
+    animation_export_max_queued_per_user: int = Field(default=3, description="单用户最大排队任务数（0 = 不限制）")
     indonesia_road_sign: IndonesiaRoadSignConfig = Field(default_factory=IndonesiaRoadSignConfig)
 
     class Config:
@@ -102,6 +105,9 @@ class ConfigUpdate(BaseModel):
     show_road_sign_in_region_tree: Optional[bool] = None
     spatial_backend: Optional[str] = None
     allow_server_poster: Optional[bool] = None  # 是否允许服务器生成海报
+    animation_export_max_concurrency: Optional[int] = Field(default=None, ge=1, le=8)
+    animation_export_retention_days: Optional[int] = Field(default=None, ge=0)
+    animation_export_max_queued_per_user: Optional[int] = Field(default=None, ge=0)
     indonesia_road_sign: Optional[IndonesiaRoadSignConfig] = None
 
 

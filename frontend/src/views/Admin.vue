@@ -26,6 +26,12 @@
                   </el-icon>
                   轨迹列表
                 </el-dropdown-item>
+                <el-dropdown-item command="recordings">
+                  <el-icon>
+                    <List />
+                  </el-icon>
+                  录屏任务
+                </el-dropdown-item>
                 <el-dropdown-item command="logout">
                   <el-icon>
                     <SwitchButton />
@@ -78,6 +84,23 @@
                     <el-form-item label="允许服务器生成">
                       <el-switch v-model="config.allow_server_poster" />
                       <span class="form-tip">允许用户使用服务器生成海报。关闭后，用户只能使用浏览器生成，且无法在百度地图或移动设备上导出海报</span>
+                    </el-form-item>
+                  </div>
+
+                  <!-- 录屏任务设置 -->
+                  <div class="form-section">
+                    <div class="section-title">录屏任务设置</div>
+                    <el-form-item label="并发录制数">
+                      <el-input-number v-model="config.animation_export_max_concurrency" :min="1" :max="8" />
+                      <span class="form-tip">同时录制的任务数上限（1-8，每个任务会启动一个无头浏览器，保存后立即生效）</span>
+                    </el-form-item>
+                    <el-form-item label="文件保存天数">
+                      <el-input-number v-model="config.animation_export_retention_days" :min="0" :max="365" />
+                      <span class="form-tip">录屏文件从任务完成起保留的天数，到期自动清理；0 表示永久保留</span>
+                    </el-form-item>
+                    <el-form-item label="单用户排队上限">
+                      <el-input-number v-model="config.animation_export_max_queued_per_user" :min="0" :max="50" />
+                      <span class="form-tip">单个用户最多同时排队的任务数，防止占满队列；0 表示不限制</span>
                     </el-form-item>
                   </div>
 
@@ -941,6 +964,63 @@
             </div>
           </el-tab-pane>
 
+          <!-- 录屏任务 -->
+          <el-tab-pane label="录屏任务" name="recordings">
+            <div class="recordings-tab-content">
+              <div class="recordings-toolbar">
+                <el-select v-model="recStatusFilter" placeholder="状态筛选" clearable style="width: 140px"
+                  @change="handleRecFilterChange">
+                  <el-option label="排队中" value="pending" />
+                  <el-option label="录制中" value="processing" />
+                  <el-option label="已完成" value="completed" />
+                  <el-option label="失败" value="failed" />
+                  <el-option label="已取消" value="cancelled" />
+                  <el-option label="已过期" value="expired" />
+                </el-select>
+                <el-input v-model="recUsernameFilter" placeholder="按用户名搜索" clearable style="width: 180px"
+                  :prefix-icon="Search" @input="handleRecSearchInput" />
+                <div class="toolbar-spacer"></div>
+                <el-button type="warning" :loading="recCleanupLoading" @click="handleCleanupRecordingFiles">
+                  清理过期文件
+                </el-button>
+                <el-button @click="loadRecordingTasks()">刷新</el-button>
+              </div>
+
+              <el-table :data="recTasks" v-loading="recLoading" style="width: 100%" class="recordings-table">
+                <el-table-column prop="track_title" label="轨迹" min-width="160" show-overflow-tooltip />
+                <el-table-column prop="username" label="用户" width="130" show-overflow-tooltip />
+                <el-table-column label="状态" width="170">
+                  <template #default="{ row }">
+                    <div class="rec-status-cell">
+                      <el-tag :type="recStatusTagType(row.status)" size="small">{{ recStatusText(row) }}</el-tag>
+                      <el-progress v-if="row.status === 'processing'" :percentage="Math.round(row.progress)"
+                        :stroke-width="6" class="rec-status-progress" />
+                    </div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="创建时间" width="160">
+                  <template #default="{ row }">{{ formatRecTime(row.created_at) }}</template>
+                </el-table-column>
+                <el-table-column label="耗时" width="90">
+                  <template #default="{ row }">{{ formatRecDuration(row) }}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="90" fixed="right">
+                  <template #default="{ row }">
+                    <el-button v-if="row.status === 'pending' || row.status === 'processing'" type="warning"
+                      size="small" text @click="handleCancelRecordingTask(row)">取消</el-button>
+                    <el-button v-else type="danger" size="small" text @click="handleDeleteRecordingTask(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <div class="pagination">
+                <el-pagination v-model:current-page="recPage" v-model:page-size="recPageSize" :total="recTotal"
+                  :page-sizes="[10, 20, 50]" layout="total, sizes, prev, pager, next"
+                  @current-change="loadRecordingTasks()" @size-change="handleRecSizeChange" />
+              </div>
+            </div>
+          </el-tab-pane>
+
           <!-- 边界数据管理（已弃用，保留代码但不显示） -->
           <!-- @deprecated 此功能已被 DataV GeoJSON 在线导入取代，保留代码以备不时之需 -->
           <el-tab-pane v-if="false" label="边界数据" name="bounds-data">
@@ -1165,9 +1245,10 @@
 import { ref, reactive, onMounted, computed, onUnmounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled, Refresh } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask, type AdminDivisionStatusResponse, type ImportTaskProgress } from '@/api/admin'
+import { animationTaskApi, type AnimationExportTask, type AnimationTaskStatus } from '@/api/animationTask'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
 import { formatDateTime } from '@/utils/format'
@@ -1319,6 +1400,9 @@ const config = reactive<SystemConfig>({
   map_layers: {},
   spatial_backend: 'auto',
   allow_server_poster: true,  // 默认允许服务器生成海报
+  animation_export_max_concurrency: 1,
+  animation_export_retention_days: 30,
+  animation_export_max_queued_per_user: 3,
 })
 
 // 所有地图层列表（按固定顺序）
@@ -1375,6 +1459,189 @@ const inviteCodeForm = reactive({
 // 字体列表
 const fonts = ref<FontInfo[]>([])
 const activeFonts = ref<FontConfig>({ font_a: undefined, font_b: undefined, font_c: undefined })
+
+// ========== 录屏任务（全部用户） ==========
+const recTasks = ref<AnimationExportTask[]>([])
+const recTotal = ref(0)
+const recPage = ref(1)
+const recPageSize = ref(20)
+const recStatusFilter = ref<AnimationTaskStatus | ''>('')
+const recUsernameFilter = ref('')
+const recLoading = ref(false)
+const recCleanupLoading = ref(false)
+let recPollTimer: ReturnType<typeof setInterval> | null = null
+let recSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+const REC_POLL_INTERVAL = 3000
+
+async function loadRecordingTasks() {
+  recLoading.value = true
+  try {
+    const result = await animationTaskApi.adminList({
+      page: recPage.value,
+      page_size: recPageSize.value,
+      status: recStatusFilter.value,
+      username: recUsernameFilter.value,
+    })
+    if (!isMounted.value) return
+    recTotal.value = result.total
+    recTasks.value = result.items
+  } catch {
+    // 错误已在拦截器中处理
+  } finally {
+    recLoading.value = false
+  }
+  syncRecPolling()
+}
+
+// 有排队/录制中的任务时轮询刷新
+function syncRecPolling() {
+  const hasActive = recTasks.value.some(t => t.status === 'pending' || t.status === 'processing')
+  if (hasActive && recPollTimer === null) {
+    recPollTimer = setInterval(() => {
+      if (document.hidden) return
+      loadRecordingTasks()
+    }, REC_POLL_INTERVAL)
+  } else if (!hasActive && recPollTimer !== null) {
+    clearInterval(recPollTimer)
+    recPollTimer = null
+  }
+}
+
+function stopRecPolling() {
+  if (recPollTimer !== null) {
+    clearInterval(recPollTimer)
+    recPollTimer = null
+  }
+}
+
+function handleRecFilterChange() {
+  recPage.value = 1
+  loadRecordingTasks()
+}
+
+function handleRecSearchInput() {
+  if (recSearchTimer) clearTimeout(recSearchTimer)
+  recSearchTimer = setTimeout(() => {
+    recPage.value = 1
+    loadRecordingTasks()
+  }, 500)
+}
+
+function handleRecSizeChange() {
+  recPage.value = 1
+  loadRecordingTasks()
+}
+
+function recStatusTagType(status: AnimationTaskStatus) {
+  switch (status) {
+    case 'completed': return 'success'
+    case 'failed': return 'danger'
+    case 'pending': return 'warning'
+    case 'processing': return 'primary'
+    default: return 'info'
+  }
+}
+
+function recStatusText(task: AnimationExportTask): string {
+  switch (task.status) {
+    case 'pending':
+      return task.queue_position && task.queue_position > 1
+        ? `排队中 · 第 ${task.queue_position} 位`
+        : '排队中'
+    case 'processing': return `录制中 ${Math.round(task.progress)}%`
+    case 'completed': return '已完成'
+    case 'failed': return '失败'
+    case 'cancelled': return '已取消'
+    case 'expired': return '已过期'
+    default: return task.status
+  }
+}
+
+function formatRecTime(value?: string | null): string {
+  if (!value) return '-'
+  const d = new Date(value)
+  if (isNaN(d.getTime())) return value
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function formatRecDuration(task: AnimationExportTask): string {
+  if (!task.started_at || !task.finished_at) return ''
+  const ms = new Date(task.finished_at).getTime() - new Date(task.started_at).getTime()
+  if (!(ms > 0)) return ''
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 60) return `${totalSec}s`
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  if (min < 60) return `${min}m${sec}s`
+  return `${Math.floor(min / 60)}h${min % 60}m`
+}
+
+async function handleCancelRecordingTask(task: AnimationExportTask) {
+  try {
+    await ElMessageBox.confirm(
+      task.status === 'processing' ? '任务正在录制中，确定要取消吗？' : '确定要取消这个排队中的任务吗？',
+      '取消任务',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await animationTaskApi.cancelOrDelete(task.task_id)
+    ElMessage.success('任务已取消')
+    loadRecordingTasks()
+  } catch {
+    // 错误已在拦截器中处理
+  }
+}
+
+async function handleDeleteRecordingTask(task: AnimationExportTask) {
+  try {
+    await ElMessageBox.confirm(
+      task.status === 'completed' ? '删除后该用户的视频文件将被清除且无法恢复，确定删除吗？' : '确定删除这条任务记录吗？',
+      '删除任务',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await animationTaskApi.cancelOrDelete(task.task_id)
+    ElMessage.success('删除成功')
+    if (recTasks.value.length === 1 && recPage.value > 1) {
+      recPage.value -= 1
+    }
+    loadRecordingTasks()
+  } catch {
+    // 错误已在拦截器中处理
+  }
+}
+
+async function handleCleanupRecordingFiles() {
+  try {
+    await ElMessageBox.confirm(
+      '立即清理所有超过保存时限的录屏文件（文件保留天数可在系统配置中设置），确定执行吗？',
+      '清理过期文件',
+      { type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  recCleanupLoading.value = true
+  try {
+    const result = await animationTaskApi.adminCleanup()
+    ElMessage.success(`已清理 ${result.cleaned} 个过期任务文件`)
+    if (activeTab.value === 'recordings') {
+      loadRecordingTasks()
+    }
+  } catch {
+    // 错误已在拦截器中处理
+  } finally {
+    recCleanupLoading.value = false
+  }
+}
 
 // 检测系统配置是否有未保存的更改
 function hasUnsavedConfigChanges(): boolean {
@@ -2115,6 +2382,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'tracks') {
     router.push('/tracks')
+  } else if (command === 'recordings') {
+    router.push('/recordings')
   }
 }
 
@@ -2378,6 +2647,13 @@ watch(activeTab, async (newTab, oldTab) => {
     loadBoundsStats()
   }
 
+  // 切换到录屏任务 tab 时加载，离开时停止轮询
+  if (newTab === 'recordings') {
+    loadRecordingTasks()
+  } else if (oldTab === 'recordings') {
+    stopRecPolling()
+  }
+
   if (oldTab === 'config' && hasUnsavedConfigChanges()) {
     const action = await showUnsavedChangesDialog()
     if (action === 'leave') {
@@ -2450,6 +2726,11 @@ onBeforeUnmount(() => {
 onUnmounted(() => {
   boundsImportPolling.value = false
   cleanupDatavPolling()
+  stopRecPolling()
+  if (recSearchTimer) {
+    clearTimeout(recSearchTimer)
+    recSearchTimer = null
+  }
   window.removeEventListener('resize', handleResize)
   window.removeEventListener('beforeunload', handleBeforeUnload)
   // 清理 PostGIS 同步定时器
@@ -3524,6 +3805,42 @@ onUnmounted(() => {
   gap: 8px;
   flex-shrink: 0;
   flex-wrap: nowrap;
+}
+
+/* 录屏任务 tab 样式 */
+.recordings-tab-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.recordings-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.recordings-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.rec-status-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rec-status-progress {
+  width: 80px;
 }
 
 /* 特殊地名映射样式（桌面端） */

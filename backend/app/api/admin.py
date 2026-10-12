@@ -320,6 +320,9 @@ async def get_config(
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
         allow_server_poster=configs.get("allow_server_poster", True),
+        animation_export_max_concurrency=configs.get("animation_export_max_concurrency", 1),
+        animation_export_retention_days=configs.get("animation_export_retention_days", 30),
+        animation_export_max_queued_per_user=configs.get("animation_export_max_queued_per_user", 3),
         indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
     )
 
@@ -340,6 +343,14 @@ async def update_config(
 
     configs = await config_service.update_config(db, update_data, current_admin.id)
 
+    # 录屏任务相关配置变更后立即重新调度（并发数调大即刻补位）
+    if any(k.startswith('animation_export') for k in update_data):
+        from ..services.animation_export import animation_export_service
+        try:
+            await animation_export_service.dispatch()
+        except Exception:
+            pass
+
     # 获取字体配置
     font_config = configs.get("font_config", {})
     if isinstance(font_config, str):
@@ -357,6 +368,9 @@ async def update_config(
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         spatial_backend=configs.get("spatial_backend", "auto"),
         allow_server_poster=configs.get("allow_server_poster", True),
+        animation_export_max_concurrency=configs.get("animation_export_max_concurrency", 1),
+        animation_export_retention_days=configs.get("animation_export_retention_days", 30),
+        animation_export_max_queued_per_user=configs.get("animation_export_max_queued_per_user", 3),
         indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
     )
 

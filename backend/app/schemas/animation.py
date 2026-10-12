@@ -1,5 +1,6 @@
 # backend/app/schemas/animation.py
 
+from datetime import datetime
 from pydantic import BaseModel
 from typing import Literal, Optional
 
@@ -22,15 +23,29 @@ class AnimationExportRequest(BaseModel):
     viewport_width: Optional[float] = None  # 详情页地图画幅宽度（像素），用于 zoom 修正
     viewport_height: Optional[float] = None  # 详情页地图画幅高度（像素）
 
+AnimationExportTaskStatus = Literal['pending', 'processing', 'completed', 'failed', 'cancelled', 'expired']
+
 class AnimationExportTask(BaseModel):
     """动画导出任务"""
     task_id: str
-    status: Literal['pending', 'processing', 'completed', 'failed', 'cancelled']
+    status: AnimationExportTaskStatus
     progress: float = 0.0
     download_url: Optional[str] = None
     error: Optional[str] = None
+    track_id: Optional[int] = None
+    track_title: Optional[str] = None
+    username: Optional[str] = None          # 仅管理员任务列表填充
+    queue_position: Optional[int] = None    # 排队位次（仅 pending 且查询详情时填充）
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+class AnimationExportTaskList(BaseModel):
+    """动画导出任务分页列表"""
+    total: int
+    items: list[AnimationExportTask]
 
 class AnimationExportProgress(BaseModel):
     """动画导出进度"""
     progress: float = 0.0
-    status: Literal['pending', 'processing', 'completed', 'failed', 'cancelled'] = 'pending'
+    status: AnimationExportTaskStatus = 'pending'

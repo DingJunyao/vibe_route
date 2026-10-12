@@ -4,98 +4,14 @@ import { http } from '@/api/request'
 import { useAnimationStore } from '@/stores/animation'
 import { getGlobalViewState } from '@/composables/animation/useAnimationMap'
 import { getBackendOrigin } from '@/utils/origin'
-import type { Resolution, ExportConfig, ExportOptions } from '@/types/animation'
+import type { ExportConfig, ExportOptions } from '@/types/animation'
 
 interface AnimationTask {
   task_id: string
-  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired'
   progress: number
   download_url?: string
   error?: string
-}
-
-/**
- * 检查浏览器是否支持 MediaRecorder
- */
-export function checkMediaRecorderSupport(): boolean {
-  return typeof MediaRecorder !== 'undefined' &&
-    typeof MediaRecorder.isTypeSupported === 'function'
-}
-
-/**
- * 获取支持的媒体类型
- */
-export function getSupportedMimeType(): string {
-  const preferred = [
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm;codecs=h264',
-    'video/mp4',
-    'video/webm',
-  ]
-
-  for (const type of preferred) {
-    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) {
-      return type
-    }
-  }
-
-  return 'video/webm'
-}
-
-/**
- * 将 canvas 转换为视频
- */
-export async function canvasToVideo(
-  canvas: HTMLCanvasElement,
-  duration: number,
-  config: ExportConfig,
-  onProgress: (progress: number) => void
-): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    const stream = canvas.captureStream(30)
-    const mimeType = getSupportedMimeType()
-
-    let mediaRecorder: MediaRecorder | null
-
-    try {
-      mediaRecorder = new MediaRecorder(stream, { mimeType })
-    } catch (e) {
-      console.warn('Failed to create MediaRecorder with mimeType:', mimeType, e)
-      mediaRecorder = new MediaRecorder(stream)
-    }
-
-    const chunks: Blob[] = []
-
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) {
-        chunks.push(e.data)
-        const totalSize = chunks.reduce((sum, c) => sum + c.size, 0)
-        const progress = (totalSize / (duration * 1000 * 1024)) * 100
-        onProgress(Math.min(100, progress))
-      }
-    }
-
-    mediaRecorder.onstop = () => {
-      const blob = new Blob(chunks, { type: mimeType })
-      stream.getTracks().forEach(track => track.stop())
-      resolve(blob)
-    }
-
-    mediaRecorder.onerror = (e) => {
-      console.error('MediaRecorder error:', e)
-      reject(e)
-    }
-
-    mediaRecorder.start()
-
-    // 记录完成后停止
-    setTimeout(() => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop()
-      }
-    }, duration + 500) // 额外 500ms 确保完整录制
-  })
 }
 
 /**
@@ -122,13 +38,13 @@ export function buildExportConfig(options: ExportOptions): ExportConfig {
 }
 
 /**
- * 使用后端 Playwright 导出（推荐用于百度地图）
+ * 提交导出任务：进入后端录屏任务队列后立即返回，
+ * 不在当前页面等待与轮询——进度、下载、取消在「录屏任务」页进行
  */
-export async function exportWithPlaywright(
+export async function startExportTask(
   trackId: number,
-  config: ExportConfig,
-  onProgress: (progress: number) => void
-): Promise<string> {
+  config: ExportConfig
+): Promise<AnimationTask> {
   const {
     resolution,
     showHUD,
@@ -147,7 +63,7 @@ export async function exportWithPlaywright(
   } = config
 
   // 调用后端 API 启动导出（走统一客户端，自动携带认证头）
-  const task = await http.post<AnimationTask>(
+  return await http.post<AnimationTask>(
     '/animation/export',
     {
       resolution,
@@ -171,47 +87,10 @@ export async function exportWithPlaywright(
       skipProgress: true,
     },
   )
-
-  // 轮询导出进度
-  while (task.status === 'pending' || task.status === 'processing') {
-    await new Promise(resolve => setTimeout(resolve, 1000))
-
-    const progressData = await http.get<AnimationTask>(
-      `/animation/export/${task.task_id}`,
-      { skipProgress: true },
-    )
-    task.status = progressData.status
-    task.progress = progressData.progress
-    task.download_url = progressData.download_url
-    task.error = progressData.error
-
-    onProgress(progressData.progress)
-  }
-
-  if (task.status === 'failed') {
-    throw new Error(task.error || 'Export failed')
-  }
-
-  if (task.status === 'cancelled') {
-    throw new Error('导出已取消')
-  }
-
-  if (!task.download_url) {
-    throw new Error('Export completed but no download URL provided')
-  }
-
-  return task.download_url
 }
 
 /**
- * 取消后端导出任务
- */
-export async function cancelBackendExport(taskId: string): Promise<void> {
-  await http.delete(`/animation/export/${taskId}`, { skipProgress: true })
-}
-
-/**
- * 下载文件
+ * 下载任务结果文件
  *
  * 通过 fetch → Blob → 同源 URL 触发下载：
  * - 后端返回的受保护下载路径需拼上后端 origin，

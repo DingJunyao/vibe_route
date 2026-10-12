@@ -1,0 +1,7 @@
+-- 018: animation_export_tasks 任务化扩展列（录屏任务队列）
+-- SQLite 手动执行脚本（与 alembic upgrade 二选一）
+
+ALTER TABLE animation_export_tasks ADD COLUMN started_at DATETIME NULL;
+ALTER TABLE animation_export_tasks ADD COLUMN finished_at DATETIME NULL;
+ALTER TABLE animation_export_tasks ADD COLUMN params TEXT NULL;
+ALTER TABLE animation_export_tasks ADD COLUMN auth_token TEXT NULL;

@@ -58,6 +58,10 @@
                 <el-icon><Setting /></el-icon>
                 设置
               </el-dropdown-item>
+              <el-dropdown-item command="recordings">
+                <el-icon><Film /></el-icon>
+                录屏任务
+              </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -389,6 +393,7 @@ import {
   VideoPlay,
   DocumentCopy,
   Document,
+  Film,
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
@@ -747,6 +752,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'recordings') {
+    router.push('/recordings')
   } else if (command === 'settings') {
     router.push('/settings')
   } else if (command === 'tracks') {

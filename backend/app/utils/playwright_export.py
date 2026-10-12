@@ -97,6 +97,7 @@ def _capture_in_proactor_loop(
     request: AnimationExportRequest,
     progress_callback: Optional[Callable[[float], None]],
     task_id: str = '',
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     在独立线程的 Proactor 事件循环中执行录制
@@ -105,12 +106,13 @@ def _capture_in_proactor_loop(
     无法启动 Playwright 浏览器子进程；此处直接实例化 Proactor 循环规避。
     注意：不能通过 set_event_loop_policy 设置（debugpy 会拦截该调用），
     因此直接用构造器创建，绕过 policy 机制。
+    线程无法被 asyncio 取消，取消依赖 cancel_check 的协作式检查。
     """
     loop = asyncio.ProactorEventLoop()
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(
-            _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id)
+            _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check)
         )
     finally:
         loop.close()
@@ -124,6 +126,7 @@ async def capture_animation_video(
     request: AnimationExportRequest,
     progress_callback: Optional[Callable[[float], None]] = None,
     task_id: str = '',
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     使用 Playwright 录制动画视频，合成为 H.264 MP4
@@ -141,6 +144,8 @@ async def capture_animation_video(
         token: 用户 token（注入页面 localStorage 以复用登录会话）
         request: 导出请求（含分辨率、倍速与视图状态）
         progress_callback: 进度回调（0-100）
+        task_id: 任务 ID（用于文件命名与逐帧目录隔离）
+        cancel_check: 取消检查（返回 True 时尽快抛出中止录制），线程路径必须提供
 
     Returns:
         下载路径（相对于 EXPORT_DIR，例如 animation/xxx.mp4）
@@ -153,8 +158,10 @@ async def capture_animation_video(
             token,
             request,
             progress_callback,
+            task_id,
+            cancel_check,
         )
-    return await _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id)
+    return await _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check)
 
 
 def _build_export_url(track_id: int, request: AnimationExportRequest, width: int, height: int) -> str:
@@ -254,6 +261,7 @@ async def _capture_frame_mode(
     request: AnimationExportRequest,
     frames_dir: Path,
     progress_callback: Callable[[float], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """逐帧截图：每帧 seek → 等待瓦片/渲染就绪 → 截图"""
     speed = max(request.speed, 0.25)
@@ -265,6 +273,8 @@ async def _capture_frame_mode(
 
     frame_deadline = time.time() + frame_count * 2.5 + 120
     for i in range(frame_count):
+        if cancel_check is not None and cancel_check():
+            raise RuntimeError("任务已取消")
         if time.time() > frame_deadline:
             raise RuntimeError(f"逐帧导出超时（{frame_count} 帧未在限时内完成）")
         t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
@@ -278,6 +288,36 @@ async def _capture_frame_mode(
         await progress_callback(92.0)
 
 
+async def _compose_frames_with_ffmpeg(frames_dir: Path, final_path: Path) -> None:
+    """逐帧目录合成 MP4（异步子进程：阻塞式调用会冻结整个事件循环，
+    并发录制时其他任务与 API 请求都会被卡住）"""
+    proc = await asyncio.create_subprocess_exec(
+        'ffmpeg', '-y',
+        '-framerate', str(EXPORT_FPS),
+        '-i', str(frames_dir / '%06d.jpg'),
+        '-c:v', 'libx264',
+        '-crf', FFMPEG_CRF,
+        '-preset', 'medium',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        str(final_path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
+    except asyncio.TimeoutError:
+        proc.kill()
+        try:
+            await proc.wait()
+        except Exception:
+            pass
+        raise RuntimeError("ffmpeg 合成超时")
+    if proc.returncode != 0 or not final_path.exists():
+        stderr_tail = (stderr or b'').decode(errors='ignore')[-400:]
+        raise RuntimeError(f"ffmpeg 合成失败: {stderr_tail}")
+
+
 async def _capture_screencast_mode(
     context,
     page,
@@ -288,6 +328,7 @@ async def _capture_screencast_mode(
     width: int,
     height: int,
     progress_callback: Callable[[float], None],
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
     """
     流式录制：页面实时播放，CDP screencast JPEG 帧直通 ffmpeg stdin
@@ -319,109 +360,134 @@ async def _capture_screencast_mode(
         print(f"[playwright_export] 预热页开启失败（门控兜底）: {e}")
         warm_page = None
 
-    ffmpeg_proc = subprocess.Popen(
-        [
-            'ffmpeg', '-y',
-            '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
-            '-f', 'mjpeg', '-use_wallclock_as_timestamps', '1',
-            '-i', 'pipe:0',
-            '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'superfast',
-            '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
-            str(final_path),
-        ],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-
-    cdp = await context.new_cdp_session(page)
-    on_screencast_frame, stop_frame_pump = _start_frame_pump(cdp, ffmpeg_proc.stdin)
-
-    cdp.on('Page.screencastFrame', on_screencast_frame)
-    await cdp.send('Page.startScreencast', {
-        'format': 'jpeg',
-        'quality': SCREENCAST_JPEG_QUALITY,
-        'maxWidth': width,
-        'maxHeight': height,
-        'everyNthFrame': 3,  # 头less rAF 约 60fps，降至 ~20fps 降低事件循环与编码压力
-    })
-
-    if progress_callback:
-        await progress_callback(10.0)
-
-    # 触发播放（页面 rAF 驱动；导出模式下推进会被瓦片就绪门控短暂暂停）
-    await page.evaluate("window.__startExportPlayback && window.__startExportPlayback()")
-
-    out_duration_s = (duration_ms - start_ms) / 1000.0 / speed
-    timeout_s = out_duration_s * 3 + 300
-    deadline = time.time() + timeout_s
-    state = None
-    poll_i = 0
-    while time.time() < deadline:
-        current_path = await page.evaluate("window.location.pathname")
-        if not current_path.startswith(f'/tracks/{track_id}'):
-            raise RuntimeError(f"导出页面跳转，当前路径: {current_path}")
-
-        state = await page.evaluate("document.body?.dataset?.exportState || null")
-        if state in ('completed', 'failed'):
-            break
-
-        pct = 0.0
-        try:
-            pct = float(await page.evaluate(
-                "parseFloat(document.body?.dataset?.exportProgress || '0') || 0"
-            ))
-            if progress_callback:
-                await progress_callback(10.0 + pct * 0.8)
-        except Exception:
-            pass  # 页面暂不可读时忽略，下轮再试
-
-        # 预热页跟随：定位到主录制页前方 WARM_LEAD_OUTPUT_S（输出时间）的位置，
-        # 该处瓦片提前入缓存；小步寻址避免 Leaflet 中止在途请求。
-        # 接近末端时缩小领先量紧贴主录制页（对末段做第二次覆盖，重试失败的瓦片）
-        if warm_page is not None and pct > 0 and poll_i % max(1, int(WARM_FOLLOW_INTERVAL_S)) == 0:
-            try:
-                out_t = out_duration_s * pct / 100.0
-                remaining_output = out_duration_s - out_t
-                lead_s = WARM_LEAD_OUTPUT_S if remaining_output > 90.0 else max(10.0, remaining_output * 0.4)
-                warm_target_ms = min(
-                    start_ms + (out_t + lead_s) * speed * 1000,
-                    duration_ms,
-                )
-                await warm_page.evaluate(
-                    "(t) => window.__seekExportPosition && window.__seekExportPosition(t)",
-                    warm_target_ms,
-                )
-            except Exception:
-                pass  # 预热页异常不影响录制（门控兜底）
-
-        poll_i += 1
-        await asyncio.sleep(1)
-
-    if state != 'completed':
-        raise RuntimeError(
-            f"动画导出{'失败' if state == 'failed' else '超时'}（state={state or 'unknown'}）"
+    ffmpeg_proc = None
+    stop_frame_pump = None
+    try:
+        ffmpeg_proc = subprocess.Popen(
+            [
+                'ffmpeg', '-y',
+                '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
+                '-f', 'mjpeg', '-use_wallclock_as_timestamps', '1',
+                '-i', 'pipe:0',
+                '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'superfast',
+                '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+                str(final_path),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
 
-    # 收尾录制：关闭预热页（释放 CPU 供编码；异常时 context.close 统一兜底）
-    if warm_page is not None:
+        cdp = await context.new_cdp_session(page)
+        on_screencast_frame, stop_frame_pump = _start_frame_pump(cdp, ffmpeg_proc.stdin)
+
+        cdp.on('Page.screencastFrame', on_screencast_frame)
+        await cdp.send('Page.startScreencast', {
+            'format': 'jpeg',
+            'quality': SCREENCAST_JPEG_QUALITY,
+            'maxWidth': width,
+            'maxHeight': height,
+            'everyNthFrame': 3,  # 头less rAF 约 60fps，降至 ~20fps 降低事件循环与编码压力
+        })
+
+        if progress_callback:
+            await progress_callback(10.0)
+
+        # 触发播放（页面 rAF 驱动；导出模式下推进会被瓦片就绪门控短暂暂停）
+        await page.evaluate("window.__startExportPlayback && window.__startExportPlayback()")
+
+        out_duration_s = (duration_ms - start_ms) / 1000.0 / speed
+        timeout_s = out_duration_s * 3 + 300
+        deadline = time.time() + timeout_s
+        state = None
+        poll_i = 0
+        while time.time() < deadline:
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("任务已取消")
+
+            current_path = await page.evaluate("window.location.pathname")
+            if not current_path.startswith(f'/tracks/{track_id}'):
+                raise RuntimeError(f"导出页面跳转，当前路径: {current_path}")
+
+            state = await page.evaluate("document.body?.dataset?.exportState || null")
+            if state in ('completed', 'failed'):
+                break
+
+            pct = 0.0
+            try:
+                pct = float(await page.evaluate(
+                    "parseFloat(document.body?.dataset?.exportProgress || '0') || 0"
+                ))
+                if progress_callback:
+                    await progress_callback(10.0 + pct * 0.8)
+            except Exception:
+                pass  # 页面暂不可读时忽略，下轮再试
+
+            # 预热页跟随：定位到主录制页前方 WARM_LEAD_OUTPUT_S（输出时间）的位置，
+            # 该处瓦片提前入缓存；小步寻址避免 Leaflet 中止在途请求。
+            # 接近末端时缩小领先量紧贴主录制页（对末段做第二次覆盖，重试失败的瓦片）
+            if warm_page is not None and pct > 0 and poll_i % max(1, int(WARM_FOLLOW_INTERVAL_S)) == 0:
+                try:
+                    out_t = out_duration_s * pct / 100.0
+                    remaining_output = out_duration_s - out_t
+                    lead_s = WARM_LEAD_OUTPUT_S if remaining_output > 90.0 else max(10.0, remaining_output * 0.4)
+                    warm_target_ms = min(
+                        start_ms + (out_t + lead_s) * speed * 1000,
+                        duration_ms,
+                    )
+                    await warm_page.evaluate(
+                        "(t) => window.__seekExportPosition && window.__seekExportPosition(t)",
+                        warm_target_ms,
+                    )
+                except Exception:
+                    pass  # 预热页异常不影响录制（门控兜底）
+
+            poll_i += 1
+            await asyncio.sleep(1)
+
+        if state != 'completed':
+            raise RuntimeError(
+                f"动画导出{'失败' if state == 'failed' else '超时'}（state={state or 'unknown'}）"
+            )
+
+        # 收尾录制：关闭预热页（释放 CPU 供编码；异常时 context.close 统一兜底）
+        if warm_page is not None:
+            try:
+                await warm_page.close()
+            except Exception:
+                pass
+            warm_page = None
+
+        # 停止采集，收尾编码
+        await cdp.send('Page.stopScreencast')
+        stop_frame_pump()
+        ffmpeg_proc.stdin.close()
+        # 阻塞 wait 会冻结事件循环（最长 300s），放到线程里等
+        ffmpeg_returncode = await asyncio.to_thread(ffmpeg_proc.wait, timeout=300)
+        if ffmpeg_returncode != 0 or not final_path.exists():
+            stderr_tail = ffmpeg_proc.stderr.read().decode(errors='ignore')[-400:]
+            raise RuntimeError(f"ffmpeg 流式合成失败: {stderr_tail}")
+
+        if progress_callback:
+            await progress_callback(100.0)
+    except BaseException:
+        # 取消/异常/超时：终止 ffmpeg 并清理管道，防止残留进程
         try:
-            await warm_page.close()
+            if stop_frame_pump is not None:
+                stop_frame_pump()
         except Exception:
             pass
-        warm_page = None
-
-    # 停止采集，收尾编码
-    await cdp.send('Page.stopScreencast')
-    stop_frame_pump()
-    ffmpeg_proc.stdin.close()
-    ffmpeg_returncode = ffmpeg_proc.wait(timeout=300)
-    if ffmpeg_returncode != 0 or not final_path.exists():
-        stderr_tail = ffmpeg_proc.stderr.read().decode(errors='ignore')[-400:]
-        raise RuntimeError(f"ffmpeg 流式合成失败: {stderr_tail}")
-
-    if progress_callback:
-        await progress_callback(100.0)
+        if ffmpeg_proc is not None:
+            try:
+                if ffmpeg_proc.stdin and not ffmpeg_proc.stdin.closed:
+                    ffmpeg_proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                ffmpeg_proc.kill()
+            except Exception:
+                pass
+        raise
 
 
 async def _capture_impl(
@@ -431,6 +497,7 @@ async def _capture_impl(
     request: AnimationExportRequest,
     progress_callback: Optional[Callable[[float], None]] = None,
     task_id: str = '',
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> str:
     """
     导出实现（必须在支持子进程的事件循环中运行）：
@@ -455,6 +522,7 @@ async def _capture_impl(
     # 文件名含 task_id 片段：同轨迹并发导出同秒启动时也不会互相覆盖
     filename = f'track_{track_id}_animation_{timestamp}_{task_id[:8]}.mp4'
     final_path = export_dir / filename
+    frames_dir = export_dir / 'frames' / f'{track_id}_{task_id[:8]}'
 
     async with async_playwright() as p:
         browser, context, page = await _open_export_page(
@@ -464,45 +532,49 @@ async def _capture_impl(
             if progress_callback:
                 await progress_callback(5.0)
 
-            if frame_count <= FRAME_MODE_MAX_FRAMES:
-                # 短输出：逐帧截图（质量最优、瓦片确定性加载）
-                frames_dir = export_dir / 'frames' / f'{track_id}_{task_id[:8]}'
-                frames_dir.mkdir(parents=True, exist_ok=True)
-                await _capture_frame_mode(
-                    context, page, track_id, duration_ms, request,
-                    frames_dir, progress_callback,
-                )
+            try:
+                if frame_count <= FRAME_MODE_MAX_FRAMES:
+                    # 短输出：逐帧截图（质量最优、瓦片确定性加载）
+                    frames_dir.mkdir(parents=True, exist_ok=True)
+                    await _capture_frame_mode(
+                        context, page, track_id, duration_ms, request,
+                        frames_dir, progress_callback, cancel_check,
+                    )
+                    await _compose_frames_with_ffmpeg(frames_dir, final_path)
 
-                result = subprocess.run(
-                    [
-                        'ffmpeg', '-y',
-                        '-framerate', str(EXPORT_FPS),
-                        '-i', str(frames_dir / '%06d.jpg'),
-                        '-c:v', 'libx264',
-                        '-crf', FFMPEG_CRF,
-                        '-preset', 'medium',
-                        '-pix_fmt', 'yuv420p',
-                        '-movflags', '+faststart',
-                        str(final_path),
-                    ],
-                    capture_output=True, timeout=1800,
-                )
-                if result.returncode != 0 or not final_path.exists():
-                    stderr_tail = result.stderr.decode(errors='ignore')[-400:]
-                    raise RuntimeError(f"ffmpeg 合成失败: {stderr_tail}")
-
-                if progress_callback:
-                    await progress_callback(100.0)
-                # 帧目录在合成成功后清理（失败时保留以便排查，任务失败路径统一清理）
-                shutil.rmtree(frames_dir, ignore_errors=True)
-            else:
-                # 长输出（数小时）：CDP screencast 流式录制，耗时 ≈ 输出时长
-                await _capture_screencast_mode(
-                    context, page, track_id, duration_ms, request,
-                    final_path, width, height, progress_callback,
-                )
+                    if progress_callback:
+                        await progress_callback(100.0)
+                    # 帧目录在合成成功后清理
+                    shutil.rmtree(frames_dir, ignore_errors=True)
+                else:
+                    # 长输出（数小时）：CDP screencast 流式录制，耗时 ≈ 输出时长
+                    await _capture_screencast_mode(
+                        context, page, track_id, duration_ms, request,
+                        final_path, width, height, progress_callback, cancel_check,
+                    )
+            except BaseException as e:
+                # 失败/取消不留下残缺的输出文件；取消时的逐帧目录是纯垃圾直接清掉，
+                # 其他失败保留以便排查（遗留目录由保留期清理任务兜底回收）
+                final_path.unlink(missing_ok=True)
+                if isinstance(e, asyncio.CancelledError) or (cancel_check is not None and cancel_check()):
+                    shutil.rmtree(frames_dir, ignore_errors=True)
+                raise
         finally:
-            await context.close()
-            await browser.close()
+            # 关闭动作不能被打断（取消/关闭风暴下保证浏览器退出）
+            try:
+                await asyncio.shield(_close_browser_quietly(context, browser))
+            except asyncio.CancelledError:
+                pass
 
     return f'animation/{filename}'
+
+
+async def _close_browser_quietly(context, browser) -> None:
+    try:
+        await context.close()
+    except Exception:
+        pass
+    try:
+        await browser.close()
+    except Exception:
+        pass

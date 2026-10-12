@@ -131,6 +131,10 @@
                 <el-icon><Share /></el-icon>
                 分享
               </el-dropdown-item>
+              <el-dropdown-item command="recordings">
+                <el-icon><Film /></el-icon>
+                录屏任务
+              </el-dropdown-item>
               <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
                 <el-icon><Setting /></el-icon>
                 后台管理
@@ -1110,7 +1114,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useConfigStore } from '@/stores/config'
 import { useAnimationStore } from '@/stores/animation'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
-import { exportWithPlaywright, downloadFile, generateExportFilename, buildExportConfig } from '@/utils/animation/videoExport'
+import { startExportTask, buildExportConfig } from '@/utils/animation/videoExport'
 import { calculateDuration, findPointIndexByTime, interpolatePosition } from '@/utils/animationUtils'
 import { roadSignApi } from '@/api/roadSign'
 import { parseRoadNumber } from '@/utils/roadSignParser'
@@ -1288,24 +1292,17 @@ function handleAnimationPositionChanged(position: {
 const showExportDialog = ref(false)
 const exportDialogRef = ref<InstanceType<typeof AnimationExportDialog> | null>(null)
 
-// 导出处理
+// 导出处理：提交到后端录屏任务队列，弹窗转为「已排队」，进度与下载在任务页进行
 async function handleExport(options: ExportOptions) {
+  const config = buildExportConfig(options)
+  exportDialogRef.value?.startExport()
   try {
-    // 组装完整导出配置（含当前视图状态），使用后端 Playwright 导出
-    const config = buildExportConfig(options)
-    exportDialogRef.value?.startExport()
-    const downloadUrl = await exportWithPlaywright(
-      trackId.value,
-      config,
-      (progress) => exportDialogRef.value?.updateProgress(progress)
-    )
-    await downloadFile(downloadUrl, generateExportFilename(trackId.value))
-    exportDialogRef.value?.finishSuccess()
-    ElMessage.success('导出完成')
+    await startExportTask(trackId.value, config)
+    exportDialogRef.value?.finishQueued()
   } catch (e: any) {
     console.error('Export error:', e)
-    exportDialogRef.value?.finishError()
-    ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
+    const detail = e?.response?.data?.detail || e?.message || '未知错误'
+    exportDialogRef.value?.finishError(String(detail))
   }
 }
 
@@ -1695,6 +1692,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'admin') {
     router.push('/admin')
+  } else if (command === 'recordings') {
+    router.push('/recordings')
   } else if (command === 'recordingDetail') {
     showRecordingDetail()
   } else if (command === 'edit') {

@@ -70,8 +70,7 @@ import {
   type TrackPoint,
   type MarkerPosition,
 } from '@/utils/animationUtils'
-import { exportWithPlaywright, downloadFile, generateExportFilename, buildExportConfig } from '@/utils/animation/videoExport'
-import { ElMessage } from 'element-plus'
+import { startExportTask, buildExportConfig } from '@/utils/animation/videoExport'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
 
 interface Props {
@@ -279,23 +278,18 @@ function handleExport() {
 }
 
 async function handleExportVideo(options: ExportOptions) {
+  // 统一使用后端 Playwright 导出：导出页面与用户预览完全一致，
+  // 且不受各引擎前端捕获限制（CORS 污染、DOM 渲染、瓦片跨域等）影响；
+  // 提交到录屏任务队列后立即返回，进度与下载在「录屏任务」页进行
+  const config = buildExportConfig(options)
+  exportDialogRef.value?.startExport()
   try {
-    // 统一使用后端 Playwright 导出：导出页面与用户预览完全一致，
-    // 且不受各引擎前端捕获限制（CORS 污染、DOM 渲染、瓦片跨域等）影响
-    const config = buildExportConfig(options)
-    exportDialogRef.value?.startExport()
-    const downloadUrl = await exportWithPlaywright(
-      props.trackId,
-      config,
-      (progress) => exportDialogRef.value?.updateProgress(progress)
-    )
-    await downloadFile(downloadUrl, generateExportFilename(props.trackId))
-    exportDialogRef.value?.finishSuccess()
-    ElMessage.success('导出完成')
+    await startExportTask(props.trackId, config)
+    exportDialogRef.value?.finishQueued()
   } catch (e: any) {
     console.error('Export error:', e)
-    exportDialogRef.value?.finishError()
-    ElMessage.error(`导出失败: ${e.message || '未知错误'}`)
+    const detail = e?.response?.data?.detail || e?.message || '未知错误'
+    exportDialogRef.value?.finishError(String(detail))
   }
 }
 

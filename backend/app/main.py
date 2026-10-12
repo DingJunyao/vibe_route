@@ -271,6 +271,18 @@ async def lifespan(app: FastAPI):
         track_service.spatial_service = spatial_service
         live_recording_service.spatial_service = spatial_service
 
+    # 录屏任务队列：恢复中断任务并重新调度 pending；启动保留期清理
+    from app.services.animation_export import animation_export_service
+    from app.services.recording_cleanup import recording_cleanup_service
+    try:
+        await animation_export_service.recover_on_startup()
+        await recording_cleanup_service.start()
+        cleaned = await recording_cleanup_service.cleanup_expired()
+        if cleaned:
+            logger.info(f"Startup recording cleanup: removed {cleaned} expired items")
+    except Exception as e:
+        logger.warning(f"Recording queue/cleanup init failed: {e}")
+
     try:
         yield
     finally:
@@ -291,6 +303,19 @@ async def lifespan(app: FastAPI):
             logger.info("Background tasks cancelled")
         except Exception as e:
             logger.warning(f"Error cancelling background tasks: {e}")
+
+        # 2.5 终止运行中的录屏任务并停止保留期清理
+        from app.services.animation_export import animation_export_service
+        from app.services.recording_cleanup import recording_cleanup_service
+        try:
+            await animation_export_service.cancel_all()
+            logger.info("Animation export tasks cancelled")
+        except Exception as e:
+            logger.warning(f"Error cancelling animation export tasks: {e}")
+        try:
+            await recording_cleanup_service.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping recording cleanup task: {e}")
 
         # 3. 关闭所有 WebSocket 连接
         from app.api.websocket import live_track_manager

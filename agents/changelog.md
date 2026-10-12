@@ -4,6 +4,15 @@
 
 ## 2026-10
 
+- 录屏任务化（队列 + 后台管理 + 保留期清理）（2026-10-12）：
+  - **交互重构**：导出弹窗提交即返回（「已加入录屏队列」+ 查看任务按钮），用户无需停留页面；新增 `/recordings` 录屏任务页（我的任务列表：状态/排队位次/进度条/耗时，操作：下载/取消/删除，进行中 3s 轮询），桌面表格 + 移动端卡片双渲染；入口加在各页 header 用户下拉。桌面 HUD（TrackAnimationPlayer）与移动端（TrackDetail）两个导出入口同源改造；`videoExport.ts` 删除弹窗内轮询与 MediaRecorder 死代码
+  - **队列调度**：`animation_export_tasks` 加 `started_at/finished_at/params/auth_token` 列（迁移 `018` + 三份 SQL 旁路脚本）；`services/animation_export.py` 重构为进程内调度器单例（DB 状态机 + 内存运行表，条件 UPDATE 抢占防取消竞态；**勿再 new 第二个实例**）；排队所需的导出参数与页面 token 随任务落库（token 启动后即清空）。重启恢复：processing→failed、pending→重新入队
+  - **取消即补位**：DELETE 真取消（此前只改 DB 状态，录制继续跑浪费资源）——processing 走 `asyncio.Task.cancel()` + 协作式 `cancel_check`（兼容 Windows 线程循环），录制协程清理浏览器/ffmpeg/半成品且不覆盖 cancelled 状态；取消后 `dispatch()` 立即排下一任务（实测 1.3s 补位）
+  - **并发前提修复**：逐帧模式 ffmpeg 合成从阻塞 `subprocess.run`（卡事件循环最长 1800s）改异步子进程；流式收尾 wait 移入线程
+  - **管理员**：系统配置新增 并发录制数（默认 1）/文件保存天数（默认 30，0=永久）/单用户排队上限（默认 3，超出 429）三项，保存即时生效（触发重新调度）；新增「录屏任务」tab（全部用户任务、状态/用户名筛选、取消/删除、「清理过期文件」按钮）；`GET /animation/export/admin/tasks`、`POST /animation/export/admin/cleanup`
+  - **保留期清理**：`services/recording_cleanup.py` lifespan 周期任务（6h + 启动时），超期完成任务的文件删除并标 expired（历史无 finished_at 的按 created_at 起算），顺带回收失败任务遗留逐帧目录
+  - 顺带修：下载端点 `media_type` webm→mp4 笔误
+  - 验证：vite build 通过；API 全链路冒烟（提交→并发=1 排队位次→限额 429→取消排队/取消录制中补位→完成下载 video/mp4→删除→手动清理）；lifespan 重启恢复实测（遗留 processing 被标记中断）
 - 修复导出视频四周空白（地图未铺满画幅）（2026-10-11 第四笔）：
   - **根因有二**：① 详情页布局 `.map-wrapper` 有 `max-width: 1600px` 居中（视口 1920 时左右各留 160px 的 `#f5f7fa` 页面底色）+ 卡片链路 40px 底部边距——录制画幅比地图区域大；② 此前为覆盖旋转四角把 `.map` 容器放大出画幅，但被 `.leaflet-map-container` 的 `overflow: hidden` 按布局边界裁剪，放大无效
   - **修复**：① `body.export-mode .map-content` 改 `position: fixed; inset: 0`（含回放 HUD 一起铺满视口，脱离布局流并无视非变换祖先的限宽/裁剪）；② LeafletMap `initMap` 在导出模式把 `.map` 容器放大为 **√(视口宽²+高²)** 的正方形（1920×1080 → 2203×2203，任意旋转角的理论最小覆盖），按视口中心定位（父元素 rect 修正偏移），配合容器 `overflow: hidden` 裁掉画幅外部分，地图缩放比例不变；预热页同 URL 自动生效

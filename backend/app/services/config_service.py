@@ -28,6 +28,10 @@ class ConfigService:
         "show_road_sign_in_region_tree": True,
         "spatial_backend": "auto",  # 空间计算后端: auto | python | postgis
         "allow_server_poster": True,  # 是否允许服务器生成海报
+        # 录屏（动画导出）任务
+        "animation_export_max_concurrency": 1,     # 同时录制的任务数上限
+        "animation_export_retention_days": 30,     # 录屏文件保存天数（按任务结束时间起算，0 = 永久）
+        "animation_export_max_queued_per_user": 3,  # 单用户最大排队任务数（0 = 不限制）
         "indonesia_road_sign": {
             "template": "id_sheild.svg",      # backend/data/templates/ 下模板文件名
             "tol_keywords": ["收费", "Tol"],   # TOL 判定：ASCII 词边界 + 中文子串（见 indonesia.py）

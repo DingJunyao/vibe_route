@@ -55,6 +55,9 @@ export interface SystemConfig {
   show_road_sign_in_region_tree: boolean
   spatial_backend: string  // 空间计算后端: auto | python | postgis
   allow_server_poster: boolean  // 是否允许服务器生成海报
+  animation_export_max_concurrency: number  // 录屏任务同时录制数上限
+  animation_export_retention_days: number   // 录屏文件保存天数（0 = 永久）
+  animation_export_max_queued_per_user: number  // 单用户最大排队任务数（0 = 不限制）
 }
 
 // 字体配置
@@ -111,6 +114,9 @@ export interface ConfigUpdateData {
   show_road_sign_in_region_tree?: boolean
   spatial_backend?: string
   allow_server_poster?: boolean
+  animation_export_max_concurrency?: number
+  animation_export_retention_days?: number
+  animation_export_max_queued_per_user?: number
 }
 
 // 分页响应

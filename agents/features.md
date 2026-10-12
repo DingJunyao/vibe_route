@@ -37,6 +37,16 @@
 
 ### 视频导出
 
+- **任务队列模式**（2026-10-12 起，录屏完全后台化，用户可离开页面）：
+  - **交互流**：导出弹窗提交后显示「已加入录屏队列」，用户到 `/recordings` 录屏任务页查看进度、下载、取消/删除；入口在各页 header 用户下拉「录屏任务」。桌面 HUD（TrackAnimationPlayer）与移动端（TrackDetail）两个导出入口同源走 `startExportTask`（`utils/animation/videoExport.ts`，只提交不轮询；旧的弹窗内进度轮询与 MediaRecorder 死代码已删）
+  - **调度器**：`services/animation_export.py` 模块级单例（**必须全局唯一实例**，API/lifespan/admin 共用同一 `animation_export_service`，内存 `_running` 注册表才不分裂）。任务状态落库 `animation_export_tasks`（pending → processing → completed/failed/cancelled/expired），调度器只按 `created_at` 升序把 pending 抢占为 processing（条件 UPDATE 防取消竞态）直至跑满并发数。**进程内实现，单进程 uvicorn 部署有效；若未来多副本部署需改 DB 行锁/租约或外部队列**
+  - **排队所需持久化**：任务行带 `params`（duration_ms + request JSON）与 `auth_token`（录制页登录 JWT，**启动后即清空**减少凭据存留）；`started_at`/`finished_at` 供耗时展示与保留期起算。迁移 `018_add_animation_task_times`（附 sqlite/mysql/postgresql 三份 SQL 旁路脚本）
+  - **取消即补位**：DELETE 对 pending 直接出队、对 processing 先置 cancelled 再 `asyncio.Task.cancel()` + 协作式 `cancel_check`（兼容 Windows 线程循环路径，该路径线程无法被 cancel，靠每轮轮询检查抛出）；录制协程捕获 CancelledError 清理（shield 关浏览器、kill ffmpeg、删半成品与逐帧目录），**写 failed 前复查状态防止覆盖 cancelled**；finally 中触发 `dispatch()` 立即排上下一个（实测取消后 ~1.3s 补位）
+  - **重启恢复**：lifespan 启动时遗留 processing → failed（"服务重启，任务中断"），pending → 重新入队；关闭时 cancel 全部录制
+  - **ffmpeg 异步化**：逐帧合成的 `subprocess.run`（阻塞事件循环最长 1800s）改 `asyncio.create_subprocess_exec` + `wait_for`；流式收尾 `ffmpeg.wait` 放线程。**并发 >1 的前提**
+  - **管理员配置**（configs 表，读缺失时回退默认值，管理员首次保存才落库）：`animation_export_max_concurrency` 并发录制数（默认 1，1–8，保存后即时生效——调大立即补位、调小自然收缩）、`animation_export_retention_days` 文件保存天数（默认 30，0=永久）、`animation_export_max_queued_per_user` 单用户排队上限（默认 3，0=不限制，超出 POST 返回 429）。Admin.vue「系统配置」tab 录屏任务设置区 + 「录屏任务」tab（全部用户任务表/筛选/取消/删除 + 手动清理）
+  - **保留期清理**：`services/recording_cleanup.py` lifespan 周期任务（6h + 启动时一次），completed 且 `coalesce(finished_at, created_at)` 超期 → 删文件、status=expired、download_url 置空；顺带回收失败任务遗留的逐帧目录。手动清理 `POST /api/animation/export/admin/cleanup`
+  - **API**：`GET /animation/export/my`（我的分页列表）、`GET /animation/export/{id}`（详情含 queue_position/track_title）、`GET /animation/export/admin/tasks`（管理员，状态/用户名筛选）、`DELETE /animation/export/{id}`（pending/processing=取消并补位；终态=删除记录+文件，本人或管理员）。**路由顺序：`/my`、`/admin/*` 必须注册在 `/{task_id}` 之前**
 - **双模式采集，按输出时长自动选择**（后端 Playwright → H.264 MP4）：
   - **逐帧截图**（输出 ≤30s / 900 帧）：每帧调用页面 `__seekExportFrame(t)`（seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，质量最优、瓦片确定性加载
   - **CDP screencast 流式录制**（输出 >30s，支持数小时）：页面实时播放（`__startExportPlayback`），screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳，不落盘中间帧），**耗时 ≈ 输出时长**

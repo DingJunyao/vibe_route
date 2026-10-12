@@ -7,7 +7,8 @@
     :close-on-click-modal="false"
     @close="handleClose"
   >
-    <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
+    <!-- 表单态 -->
+    <el-form v-if="state === 'form'" ref="formRef" :model="form" :rules="rules" label-width="100px">
       <el-form-item label="分辨率" prop="resolution">
         <el-select v-model="form.resolution" placeholder="选择分辨率">
           <el-option label="720p" value="720p" />
@@ -29,28 +30,49 @@
           :precision="1"
           controls-position="right"
         />
-        </el-form-item>
+      </el-form-item>
     </el-form>
 
+    <!-- 已排队态 -->
+    <el-result
+      v-else-if="state === 'queued'"
+      icon="success"
+      title="已加入录屏队列"
+      sub-title="录制在服务器后台进行，你可以离开本页面，稍后到录屏任务页查看进度并下载"
+    >
+      <template #extra>
+        <el-button type="primary" @click="goTasks">查看任务</el-button>
+        <el-button @click="handleClose">关闭</el-button>
+      </template>
+    </el-result>
+
+    <!-- 失败态 -->
+    <el-result
+      v-else
+      icon="error"
+      title="提交失败"
+      :sub-title="errorMessage || '请稍后重试'"
+    >
+      <template #extra>
+        <el-button type="primary" @click="state = 'form'">返回重试</el-button>
+        <el-button @click="handleClose">关闭</el-button>
+      </template>
+    </el-result>
+
     <template #footer>
-      <div class="dialog-footer">
+      <div class="dialog-footer" v-if="state === 'form'">
         <el-button @click="handleClose">取消</el-button>
         <el-button type="primary" :loading="exporting" @click="handleExport">
-          {{ exporting ? '导出中...' : '开始导出' }}
+          {{ exporting ? '提交中...' : '开始导出' }}
         </el-button>
       </div>
     </template>
-
-    <!-- 进度条 -->
-    <div v-if="exporting" class="progress-container">
-      <el-progress :percentage="exportProgress" :status="exportStatus" />
-      <div class="progress-text">{{ exportProgress }}% - {{ exportStatusText }}</div>
-    </div>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { Resolution, ExportOptions } from '@/types/animation'
 
 interface Props {
@@ -65,6 +87,8 @@ const emit = defineEmits<{
   (e: 'export', options: ExportOptions): void
 }>()
 
+const router = useRouter()
+
 const visible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value),
@@ -77,9 +101,11 @@ const form = ref({
   speed: 1.0,
 })
 
+// 弹窗状态：表单 / 已排队 / 提交失败
+type DialogState = 'form' | 'queued' | 'error'
+const state = ref<DialogState>('form')
 const exporting = ref(false)
-const exportProgress = ref(0)
-const exportStatus = ref<'success' | 'exception' | ''>('')
+const errorMessage = ref('')
 const formRef = ref()
 
 // 表单验证规则
@@ -87,19 +113,15 @@ const rules = {
   resolution: [{ required: true, message: '请选择分辨率', trigger: 'change' }],
 }
 
-// 计算导出状态文本
-const exportStatusText = computed(() => {
-  if (exportStatus.value === 'success') return '导出完成'
-  if (exportStatus.value === 'exception') return '导出失败'
-  return '正在处理...'
-})
-
 // 监听 visible 变化，重置状态
 watch(visible, (newVal) => {
   if (!newVal) {
     exporting.value = false
-    exportProgress.value = 0
-    exportStatus.value = ''
+    errorMessage.value = ''
+    // 关闭后延迟复位，避免关闭动画中闪变表单
+    setTimeout(() => {
+      if (!visible.value) state.value = 'form'
+    }, 300)
   }
 })
 
@@ -111,7 +133,7 @@ async function handleExport() {
   const valid = await formRef.value?.validate()
   if (!valid) return
 
-  // 导出流程由父组件执行，通过 expose 的方法驱动进度显示
+  // 导出流程由父组件执行，通过 expose 的方法驱动状态切换
   emit('export', {
     resolution: form.value.resolution,
     showHUD: form.value.showHUD,
@@ -119,31 +141,31 @@ async function handleExport() {
   })
 }
 
+function goTasks() {
+  visible.value = false
+  router.push('/recordings')
+}
+
 // 导出流程驱动接口（父组件调用）
 function startExport() {
   exporting.value = true
-  exportProgress.value = 0
-  exportStatus.value = ''
+  errorMessage.value = ''
 }
 
-function updateProgress(progress: number) {
-  exportProgress.value = Math.round(progress)
-}
-
-function finishSuccess() {
+function finishQueued() {
   exporting.value = false
-  exportStatus.value = 'success'
+  state.value = 'queued'
 }
 
-function finishError() {
+function finishError(message?: string) {
   exporting.value = false
-  exportStatus.value = 'exception'
+  errorMessage.value = message || ''
+  state.value = 'error'
 }
 
 defineExpose({
   startExport,
-  updateProgress,
-  finishSuccess,
+  finishQueued,
   finishError,
 })
 </script>
@@ -153,17 +175,6 @@ defineExpose({
   display: flex;
   justify-content: flex-end;
   gap: 10px;
-}
-
-.progress-container {
-  margin-top: 20px;
-}
-
-.progress-text {
-  text-align: center;
-  font-size: 12px;
-  margin-top: 8px;
-  color: var(--el-text-color-secondary);
 }
 
 :deep(.el-dialog__body) {

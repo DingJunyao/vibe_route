@@ -51,6 +51,8 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+# alembic 迁移的 SQLite 旁路脚本（如 018_add_animation_task_times.sql.sqlite）需要入库
+!backend/alembic/versions/*.sql.sqlite
 backend/data/*.db
 
 # User data directories (uploads, temp, exports)
