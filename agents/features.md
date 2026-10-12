@@ -43,6 +43,7 @@
   - **录制前预热页**：同一浏览器上下文中开启另一份同轨迹页面（30 倍速循环回放，或跟随主录制页前方 45s），持续把前方瓦片刷进共享浏览器缓存。**禁止用快速飞掠式预热**（高倍速扫掠会被 Leaflet 大量中止在途请求，缓存填不上还抢占带宽）；跟随式预热页异常不阻断导出（门控兜底）
 - 适配器可选 `waitForIdle()`：Leaflet 轮询无加载中瓦片 + 瓦片淡入走完（约 320ms）+ 双 rAF 渲染 flush（等待上限 8s）；未实现的引擎退化为固定 250ms 延时
 - **导出模式瓦片门控**：animationLoop 在导出模式播放中检测到加载中瓦片即暂停推进（超 **30s** 强制放行防失败瓦片卡死）；Leaflet 瓦片层全局 `keepBuffer: 8` 多保留周边瓦片
+- **画幅全覆盖**（防旋转四角空白）：`body.export-mode .map-content` 固定铺满视口（`position: fixed; inset: 0`，覆盖详情页布局的 max-width/边距）；LeafletMap 在导出模式把 `.map` 容器放大为 **√(视口宽²+高²)** 的正方形（1920×1080 → 2203×2203，任意旋转角的最小覆盖）居中于视口，`overflow: hidden` 裁掉画幅外部分。布局若未铺满视口（如 max-width 居中留白），放大容器会被裁剪回空白——两处缺一不可
 - **并发**：进度回调 ≥3s 节流写库（防 SQLite 写锁竞争）；结果文件名/帧目录编入 task_id 片段（同轨迹同秒并发不互相覆盖）；ffmpeg stdin 加 `-loglevel error -nostats` 防 stderr 缓冲死锁
 - 导出请求 `engine`（sdk/leaflet）→ 后端透传为导出页 URL 参数 → TrackDetail `exportEngine` → UniversalMap `forceEngine` prop，保证导出画面引擎与点击导出时一致；无该参数时回退旧行为（本地偏好，Playwright 无 localStorage → 默认 SDK）
 - **导出画面隐藏控件**（body.export-mode CSS）：图层切换、**引擎切换（.engine-switch）**、居中/全屏/动画入口、各家缩放控件；Leaflet 指南针在 `buildMapOptions` 用 `rotateControl: false` 全局关闭（插件 rotate:true 时默认自动添加）

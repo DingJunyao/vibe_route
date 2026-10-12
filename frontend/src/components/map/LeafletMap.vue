@@ -601,6 +601,28 @@ function initMap() {
   // 检查是否为海报生成模式
   const isPosterMode = (window as any).__posterMode === true
 
+  // 导出模式：地图容器放大为能覆盖任意旋转角度画幅的正方形（边长=√(宽²+高²)），
+  // 居中于录制视口——视频录制时画面随回放方向旋转，若容器与画幅同尺寸，旋转后的
+  // 瓦片矩形覆盖不到四角（左右下出现空白）。放大后无论转到什么方位，视口始终
+  // 落在瓦片范围内（容器超出部分被 overflow: hidden 裁掉，地图缩放比例不变）。
+  // 预热页走同一导出 URL，自动获得同样放大的覆盖范围。
+  const isExportMode = document.body.classList.contains('export-mode')
+  if (isExportMode && !isPosterMode && mapContainer.value) {
+    const frameW = window.innerWidth
+    const frameH = window.innerHeight
+    const side = Math.ceil(Math.sqrt(frameW * frameW + frameH * frameH))
+    const frameParent = mapContainer.value.parentElement
+    if (frameParent) {
+      // 以视口中心为基准居中（父元素在视口内可能有小偏移，如卡片内边距）
+      const rect = frameParent.getBoundingClientRect()
+      mapContainer.value.style.position = 'absolute'
+      mapContainer.value.style.width = `${side}px`
+      mapContainer.value.style.height = `${side}px`
+      mapContainer.value.style.left = `${Math.round(frameW / 2 - rect.left - side / 2)}px`
+      mapContainer.value.style.top = `${Math.round(frameH / 2 - rect.top - side / 2)}px`
+    }
+  }
+
   // 创建地图（共用 buildMapOptions，rotate: true 启用 leaflet-rotate 旋转能力）
   map.value = L.map(mapContainer.value, buildMapOptions(crs, isPosterMode))
   // 地图重建后旋转复位为正北朝上
@@ -2917,6 +2939,8 @@ watch(() => props.highlightPointIndex, (newIndex) => {
   width: 100%;
   height: 100%;
   position: relative;
+  /* 导出模式下地图容器被放大出画幅（覆盖旋转四角），裁掉溢出部分 */
+  overflow: hidden;
 }
 
 .map {

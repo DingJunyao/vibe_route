@@ -4361,6 +4361,20 @@ body.export-mode .fixed-left .map-card .el-card__body {
   overflow: visible;
 }
 
+/* 导出模式：地图内容区（含回放 HUD）固定铺满整个视口。
+   详情页布局的 .map-wrapper 有 max-width: 1600px 居中（视口 1920 时左右各留 160px）、
+   卡片链路存在少量边距——录制画幅会比地图区域大，放大出画幅的地图也被布局边界裁剪，
+   画面四周因此出现纯色空白。fixed 定位脱离布局流并无视非变换祖先的裁剪/限宽。 */
+body.export-mode .map-content {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  margin: 0;
+  z-index: 60;
+}
+
 /* 隐藏页面头部、右侧面板、图表卡片 */
 body.export-mode .track-detail-container .el-header {
   display: none;
