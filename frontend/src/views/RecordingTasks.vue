@@ -298,7 +298,7 @@ function formatDuration(task: AnimationExportTask): string {
 async function handleDownload(task: AnimationExportTask) {
   try {
     await downloadFile(
-      `/animation/export/${task.task_id}/download`,
+      `/api/animation/export/${task.task_id}/download`,
       generateExportFilename(task.track_id || 0)
     )
   } catch (e: any) {
@@ -467,7 +467,7 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
-.list-card :deep(.el-card__body) {
+.list-card > :deep(.el-card__body) {
   height: 100%;
   overflow-y: auto;
   padding: 0;

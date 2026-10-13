@@ -3656,11 +3656,6 @@ onUnmounted(() => {
     align-items: flex-start;
   }
 
-  /* 表格隐藏，使用移动端卡片列表 */
-  .el-table {
-    display: none;
-  }
-
   /* 边界数据统计表格在移动端仍然显示 */
   .bounds-stats .el-table {
     display: block !important;

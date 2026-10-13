@@ -4,6 +4,8 @@
 
 ## 2026-10
 
+- 修复录屏任务窄屏样式（2026-10-13）：录屏任务页将外层卡片 body 的 `padding: 0` 收窄为直接子元素，避免嵌套任务卡片继承零内边距；后台管理录屏任务表格不再被移动端通用 `.el-table { display: none }` 意外隐藏。Vite 构建通过。
+- 修复录屏任务下载 404（2026-10-13）：任务页下载链接遗漏 `/api` 前缀，`downloadFile()` 直连后端 origin 后命中不存在路由；已补齐路径并通过 Vite 构建。
 - 录屏任务化（队列 + 后台管理 + 保留期清理）（2026-10-12）：
   - **交互重构**：导出弹窗提交即返回（「已加入录屏队列」+ 查看任务按钮），用户无需停留页面；新增 `/recordings` 录屏任务页（我的任务列表：状态/排队位次/进度条/耗时，操作：下载/取消/删除，进行中 3s 轮询），桌面表格 + 移动端卡片双渲染；入口加在各页 header 用户下拉。桌面 HUD（TrackAnimationPlayer）与移动端（TrackDetail）两个导出入口同源改造；`videoExport.ts` 删除弹窗内轮询与 MediaRecorder 死代码
   - **队列调度**：`animation_export_tasks` 加 `started_at/finished_at/params/auth_token` 列（迁移 `018` + 三份 SQL 旁路脚本）；`services/animation_export.py` 重构为进程内调度器单例（DB 状态机 + 内存运行表，条件 UPDATE 抢占防取消竞态；**勿再 new 第二个实例**）；排队所需的导出参数与页面 token 随任务落库（token 启动后即清空）。重启恢复：processing→failed、pending→重新入队
