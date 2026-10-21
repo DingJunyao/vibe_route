@@ -871,6 +871,44 @@ class TrackService:
             'total_elevation_gain': row.total_elevation_gain or 0,
         }
 
+    async def get_heatmap_points(self, db: AsyncSession, user_id: int, max_points: int = 50000) -> dict:
+        """获取用户全部轨迹点（WGS84），用于足迹热力图
+
+        点数超过 max_points 时按 id 等距抽样（id 全局自增、单轨迹内连续，
+        取模后各轨迹内仍近似均匀，热力密度形状不受影响）。
+        """
+        count_result = await db.execute(
+            select(func.count(TrackPoint.id))
+            .join(Track, TrackPoint.track_id == Track.id)
+            .where(and_(Track.user_id == user_id, Track.is_valid == True, TrackPoint.is_valid == True))
+        )
+        total = count_result.scalar() or 0
+        if total == 0:
+            return {'total_points': 0, 'returned_points': 0, 'sampled': False, 'points': []}
+
+        stride = -(-total // max_points)  # ceil(total / max_points)
+        query = (
+            select(TrackPoint.longitude_wgs84, TrackPoint.latitude_wgs84)
+            .join(Track, TrackPoint.track_id == Track.id)
+            .where(and_(Track.user_id == user_id, Track.is_valid == True, TrackPoint.is_valid == True))
+        )
+        if stride > 1:
+            query = query.where(TrackPoint.id % stride == 0)
+
+        result = await db.execute(query)
+        points = []
+        for lng, lat in result:
+            if lng is None or lat is None:
+                continue
+            points.append([round(lng, 6), round(lat, 6)])
+
+        return {
+            'total_points': total,
+            'returned_points': len(points),
+            'sampled': stride > 1,
+            'points': points,
+        }
+
     async def get_live_recording_stats(self, db: AsyncSession, user_id: int) -> dict:
         """获取用户实时记录的统计（从关联的当前轨迹获取）"""
         from app.models.live_recording import LiveRecording

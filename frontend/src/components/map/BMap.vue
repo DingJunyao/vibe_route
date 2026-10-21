@@ -11,6 +11,8 @@ import { useConfigStore } from '@/stores/config'
 import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84 } from '@/utils/coordTransform'
+import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
+import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
@@ -124,6 +126,8 @@ interface Props {
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
   emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
+  heatmapPoints?: [number, number][] | null  // 足迹热力图数据（[lng, lat] WGS84）
+  displayMode?: 'tracks' | 'heatmap'  // 主页显示模式：轨迹线 / 足迹热力图
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -140,6 +144,8 @@ const props = withDefaults(defineProps<Props>(), {
   disablePointHover: false,
   emitMapClick: false,
   customOverlays: () => [],
+  heatmapPoints: null,
+  displayMode: 'tracks',
 })
 
 const configStore = useConfigStore()
@@ -162,6 +168,12 @@ let wheelEventHandler: ((e: WheelEvent) => void) | null = null  // 滚轮事件�
 let customOverlayMarkers: any[] = []  // 自定义覆盖层标记（用于绘制路径模式）
 let customOverlayPolylines: any[] = []  // 自定义覆盖层折线（用于绘制路径模式）
 let hasAutoFocused = false  // 标记是否已自动聚焦过（避免用户编辑时重复聚焦）
+
+// 足迹热力图（主页 heatmap 模式）：自绘 canvas 叠层
+let heatCanvas: HTMLCanvasElement | null = null
+let heatRedrawTimer: number | null = null
+let heatFollow: HeatFollowState | null = null
+let heatZooming = false  // 缩放动画期间不做平移跟随（位移与缩放叠加会错位）
 
 // 动画相关状态
 let animationPassedPolyline: any = null
@@ -1597,8 +1609,24 @@ async function initMap() {
       console.log('[BMap] Legacy 版本已添加滚轮缩放支持')
     }
 
-    // 绘制轨迹
-    drawTracks()
+    // 热力叠层：拖动中用 transform 平移跟随，松手/缩放结束后重绘校准
+    BMapInstance.addEventListener('movestart', beginHeatFollow)
+    BMapInstance.addEventListener('moving', updateHeatFollow)
+    BMapInstance.addEventListener('moveend', () => {
+      endHeatFollow()
+      redrawHeatmap()
+    })
+    BMapInstance.addEventListener('zoomstart', () => {
+      heatZooming = true
+      endHeatFollow()
+    })
+    BMapInstance.addEventListener('zoomend', () => {
+      heatZooming = false
+      redrawHeatmap()
+    })
+
+    // 按当前显示模式绘制（热力图 / 轨迹）：init 时 heatmapPoints 可能已就绪
+    updateTracks()
     // 绘制自定义覆盖层（用于绘制路径模式）
     // 延迟调用，确保 customOverlays prop 已传递
     // 百度地图脚本加载需要时间，可能需要多次尝试
@@ -1967,7 +1995,131 @@ function clearTracks() {
 
 // 更新轨迹
 function updateTracks() {
+  if (props.displayMode === 'heatmap') {
+    drawHeatmap()
+    return
+  }
+  removeHeatmap()
   drawTracks()
+}
+
+// 移除热力图叠层（自绘 canvas）
+function removeHeatmap() {
+  heatCanvas?.remove()
+  heatCanvas = null
+  if (heatRedrawTimer !== null) {
+    cancelAnimationFrame(heatRedrawTimer)
+    heatRedrawTimer = null
+  }
+}
+
+// 重绘热力（视野/尺寸变化时调用，rAF 合并多次事件）
+function redrawHeatmap() {
+  if (heatRedrawTimer !== null) return
+  heatRedrawTimer = requestAnimationFrame(() => {
+    heatRedrawTimer = null
+    paintHeatmap()
+  })
+}
+
+// 百度点投影（GL 用 pointToOverlayPixel，Legacy 用 pointToPixel）
+function projectBaiduPoint(lng: number, lat: number): { x: number; y: number } | null {
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  if (!BMapClass || !BMapInstance) return null
+  const pt = new BMapClass.Point(lng, lat)
+  return BMapInstance.pointToPixel ? BMapInstance.pointToPixel(pt) : BMapInstance.pointToOverlayPixel(pt)
+}
+
+// 拖动开始：记录地图中心的屏幕位置作为跟随锚点
+function beginHeatFollow() {
+  if (heatZooming || props.displayMode !== 'heatmap' || !heatCanvas || !BMapInstance) return
+  const center = BMapInstance.getCenter()
+  if (!center) return
+  const px = projectBaiduPoint(center.lng, center.lat)
+  if (!px) return
+  heatFollow = createHeatFollow(center.lng, center.lat, px.x, px.y)
+}
+
+// 拖动中：按锚点位移平移画布（每帧只投影一个点）
+function updateHeatFollow() {
+  if (!heatFollow || !heatCanvas) return
+  const px = projectBaiduPoint(heatFollow.lng, heatFollow.lat)
+  if (!px) return
+  applyHeatFollow(heatFollow, heatCanvas, px.x, px.y)
+}
+
+function endHeatFollow() {
+  heatFollow = null
+  clearHeatTransform(heatCanvas)
+}
+
+// 投影到屏幕并绘制（GL 用 pointToOverlayPixel，Legacy 用 pointToPixel）
+function paintHeatmap() {
+  const container = mapContainer.value
+  if (!container || !BMapInstance || props.displayMode !== 'heatmap') return
+  const points = props.heatmapPoints || []
+  if (points.length === 0) return
+
+  if (!heatCanvas) {
+    heatCanvas = document.createElement('canvas')
+    heatCanvas.style.position = 'absolute'
+    heatCanvas.style.left = '0'
+    heatCanvas.style.top = '0'
+    heatCanvas.style.pointerEvents = 'none'
+    heatCanvas.style.zIndex = '150'
+    container.appendChild(heatCanvas)
+  }
+
+  const width = container.clientWidth
+  const height = container.clientHeight
+  if (width === 0 || height === 0) return
+  clearHeatTransform(heatCanvas)
+  if (heatCanvas.width !== width) heatCanvas.width = width
+  if (heatCanvas.height !== height) heatCanvas.height = height
+
+  const BMapClass = isLegacyMode.value ? (window as any).BMap : (window as any).BMapGL
+  if (!BMapClass) return
+  const project = (lng: number, lat: number) => {
+    const pt = new BMapClass.Point(lng, lat)
+    return BMapInstance.pointToPixel ? BMapInstance.pointToPixel(pt) : BMapInstance.pointToOverlayPixel(pt)
+  }
+
+  const projected: Array<{ x: number; y: number; weight: number }> = []
+  for (const [lng, lat] of points) {
+    const [bdLng, bdLat] = wgs84ToBd09(lng, lat)
+    const px = project(bdLng, bdLat)
+    if (!px || typeof px.x !== 'number' || typeof px.y !== 'number') continue
+    projected.push({ x: px.x, y: px.y, weight: 1 })
+  }
+
+  renderHeatCanvas(heatCanvas, projected, {
+    radius: 22,
+    blur: 16,
+    opacity: HEATMAP_OPACITY,
+    gradient: HEATMAP_GRADIENT,
+  })
+}
+
+// 绘制足迹热力图：自绘 canvas 叠层（GL 与 Legacy 共用同一渲染器，渐变一致）
+function drawHeatmap() {
+  if (!BMapInstance) return
+
+  const points = props.heatmapPoints || []
+  clearTracks()
+  removeHeatmap()
+  if (points.length === 0) return
+
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+  for (const [lng, lat] of points) {
+    const [bdLng, bdLat] = wgs84ToBd09(lng, lat)
+    if (bdLat < minLat) minLat = bdLat
+    if (bdLat > maxLat) maxLat = bdLat
+    if (bdLng < minLon) minLon = bdLng
+    if (bdLng > maxLon) maxLon = bdLng
+  }
+
+  fitToBounds({ minLat, maxLat, minLon, maxLon }, 10)
+  paintHeatmap()
 }
 
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
@@ -2080,8 +2232,21 @@ function drawCustomOverlays() {
 
 // 监听 tracks 变化
 watch(() => props.tracks, () => {
+  // 热力图模式与轨迹数据无关：避免轨迹点增量加载时反复重建热力层
+  if (props.displayMode === 'heatmap') return
   updateTracks()
 }, { deep: true })
+
+// 监听显示模式与热力图数据变化（主页足迹热力图）
+watch(() => props.displayMode, () => {
+  updateTracks()
+})
+
+watch(() => props.heatmapPoints, () => {
+  if (props.displayMode === 'heatmap') {
+    updateTracks()
+  }
+})
 
 watch(() => props.highlightTrackId, () => {
   updateTracks()
@@ -2179,6 +2344,9 @@ watchEffect(() => {
 })
 
 onUnmounted(() => {
+  // 清理热力图图层
+  removeHeatmap()
+
   // 清理动画元素
   if (animationPassedPolyline) {
     BMapInstance?.removeOverlay(animationPassedPolyline)
@@ -2219,6 +2387,8 @@ function resize() {
     // 百度地图会自动调整大小，这里可以调用 reset 来确保地图正确显示
     // 但为了避免改变用户当前视角，我们不做额外操作
   }
+  // 热力画布尺寸跟随容器
+  if (props.displayMode === 'heatmap') redrawHeatmap()
 }
 
 // 将所有轨迹居中显示（四周留指定百分比空间）

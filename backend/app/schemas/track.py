@@ -187,6 +187,14 @@ class TrackStatsResponse(BaseModel):
     total_elevation_loss: Optional[float] = 0  # 米
 
 
+class TrackHeatmapResponse(BaseModel):
+    """足迹热力图数据响应 schema（主页跨轨迹聚合展示）"""
+    total_points: int  # 用户全部有效轨迹点数
+    returned_points: int  # 实际返回点数（抽样后）
+    sampled: bool  # 是否经过等距抽样
+    points: List[List[float]]  # [lng, lat] WGS84 坐标，保留 6 位小数
+
+
 class RegionNode(BaseModel):
     """区域树节点"""
     id: str

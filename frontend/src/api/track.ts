@@ -124,6 +124,13 @@ export interface TrackPointsResponse {
   points: TrackPoint[]
 }
 
+export interface TrackHeatmapResponse {
+  total_points: number
+  returned_points: number
+  sampled: boolean
+  points: [number, number][]  // [lng, lat] WGS84
+}
+
 export interface FillProgressResponse {
   track_id: number
   progress: {
@@ -329,6 +336,11 @@ export const trackApi = {
   // 获取轨迹点
   getPoints(trackId: number, crs: string = 'wgs84'): Promise<TrackPointsResponse> {
     return http.get(`/tracks/${trackId}/points`, { params: { crs } })
+  },
+
+  // 获取足迹热力图数据（当前用户全部轨迹点，WGS84）
+  getHeatmap(maxPoints: number = 50000): Promise<TrackHeatmapResponse> {
+    return http.get('/tracks/heatmap', { params: { max_points: maxPoints } })
   },
 
   // 下载轨迹

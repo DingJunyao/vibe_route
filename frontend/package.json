@@ -31,6 +31,7 @@
     "leaflet": "^1.9.4",
     "leaflet-rotate": "^0.2.8",
     "leaflet.chinatmsproviders": "^3.0.6",
+    "leaflet.heat": "^0.2.0",
     "pinia": "^2.1.7",
     "proj4leaflet": "^1.0.2",
     "qrcode": "^1.5.4",

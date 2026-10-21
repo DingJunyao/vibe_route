@@ -29,6 +29,9 @@
 | Zoom 范围 | 3-20 | 3-20 | 3-18 | 3-20 | 3-20 | 1-20 |
 | 事件监听 | DOM 捕获 | addEventListener | addEventListener | DOM 容器 | 地图实例 `addListener` | 地图实例 |
 | 回放旋转 | `setRotation(-θ)` | `setHeading(θ)` | 不支持 | `setRotation(-θ)` | `setHeading(θ)` | leaflet-rotate `setBearing(-θ)` |
+| 热力图 | 自绘 canvas + `lngLatToContainer` | 自绘 canvas + `pointToOverlayPixel` | 自绘 canvas + `pointToPixel` | 自绘 canvas + `projectToContainer` | 自绘 canvas + OverlayView 投影 | `leaflet.heat` |
+
+> 除 Leaflet 外，热力图统一用自绘 canvas 叠层（`utils/heatmapCanvas.ts`）以保证各引擎渐变一致：SDK 自带热力层归一化口径差异大（高德插件缩放后不重投影、腾讯 max 口径不同、MapVGL 偏冷、Google 已移除 HeatmapLayer）。高德**不要用 Loca**（依赖 renderer 的 WebGL gl 上下文，2D 地图上构造即报 `reading 'gl'`）。详见 features.md「足迹热力图」。
 
 ## 地图引擎切换（SDK / Leaflet）
 

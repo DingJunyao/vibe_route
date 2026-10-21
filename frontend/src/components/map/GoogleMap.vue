@@ -165,6 +165,8 @@ import { useConfigStore } from '@/stores/config'
 import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
+import { renderHeatCanvas } from '@/utils/heatmapCanvas'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
 // 类型定义
@@ -271,6 +273,8 @@ interface Props {
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
   emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
+  heatmapPoints?: [number, number][] | null  // 足迹热力图数据（[lng, lat] WGS84）
+  displayMode?: 'tracks' | 'heatmap'  // 主页显示模式：轨迹线 / 足迹热力图
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -288,6 +292,8 @@ const props = withDefaults(defineProps<Props>(), {
   disablePointHover: false,
   emitMapClick: false,
   customOverlays: () => [],
+  heatmapPoints: null,
+  displayMode: 'tracks',
 })
 
 const configStore = useConfigStore()
@@ -298,6 +304,7 @@ const customTooltip = ref<HTMLElement>()
 let googleMapInstance: any = null
 let projectionHelper: any = null  // OverlayView 投影助手（坐标↔像素转换）
 let polylineLayers: any[] = []  // 轨迹折线图层（每条轨迹一个 Polyline）
+let heatLayer: any = null  // 足迹热力图叠加层（OverlayView + canvas）
 let coloredPolylineLayers: any[] = []  // 多段彩色高亮图层
 let highlightPolylineLayer: any = null  // 路径段高亮图层
 let customOverlayMarkers: any[] = []  // 自定义覆盖层标记
@@ -1559,8 +1566,107 @@ function drawTracks() {
 
 // 更新轨迹
 function updateTracks() {
+  if (props.displayMode === 'heatmap') {
+    drawHeatmap()
+    return
+  }
+  removeHeatmap()
   drawTracks()
   drawCustomOverlays()
+}
+
+// 移除热力图图层
+function removeHeatmap() {
+  if (heatLayer) {
+    try {
+      heatLayer.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+  }
+  heatLayer = null
+}
+
+// 绘制足迹热力图
+// Google Maps JS API ≥3.65 已移除 visualization.HeatmapLayer（v=weekly 已是更高版本），
+// 改用 OverlayView + canvas 自绘（坐标 WGS84 无需转换）
+function drawHeatmap() {
+  if (!googleMapInstance) return
+
+  const points = props.heatmapPoints || []
+
+  // 清除轨迹图层（与 drawTracks 同口径，仅主线/高亮两类）
+  polylineLayers.forEach(layer => {
+    try { layer.setMap(null) } catch { /* ignore */ }
+  })
+  polylineLayers = []
+  if (highlightPolylineLayer) {
+    highlightPolylineLayer.setMap(null)
+    highlightPolylineLayer = null
+  }
+  coloredPolylineLayers.forEach(layer => {
+    try { layer.setMap(null) } catch { /* ignore */ }
+  })
+  coloredPolylineLayers = []
+  removeHeatmap()
+  if (points.length === 0) return
+
+  try {
+    const google = (window as any).google
+    const canvas = document.createElement('canvas')
+    canvas.style.position = 'absolute'
+    canvas.style.left = '0'
+    canvas.style.top = '0'
+    canvas.style.pointerEvents = 'none'
+
+    const overlay = new google.maps.OverlayView()
+    overlay.onAdd = function () {
+      const panes = this.getPanes?.()
+      const pane = panes?.overlayLayer || panes?.overlayMouseTarget
+      pane?.appendChild(canvas)
+    }
+    overlay.draw = function () {
+      const projection = this.getProjection?.()
+      const div = googleMapInstance?.getDiv?.()
+      if (!projection || !div) return
+      const w = div.clientWidth
+      const h = div.clientHeight
+      if (w === 0 || h === 0) return
+      canvas.width = w
+      canvas.height = h
+
+      const rendered: Array<{ x: number; y: number; weight: number }> = []
+      for (const [lng, lat] of points) {
+        const px = projection.fromLatLngToContainerPixel(new google.maps.LatLng(lat, lng))
+        if (!px) continue
+        // 视口外一定范围的点不参与绘制（画布外不可见）
+        if (px.x < -60 || px.x > w + 60 || px.y < -60 || px.y > h + 60) continue
+        rendered.push({ x: px.x, y: px.y, weight: 1 })
+      }
+      renderHeatCanvas(canvas, rendered, {
+        radius: 22,
+        blur: 16,
+        opacity: HEATMAP_OPACITY,
+        gradient: HEATMAP_GRADIENT,
+      })
+    }
+    overlay.onRemove = function () {
+      canvas.remove()
+    }
+    overlay.setMap(googleMapInstance)
+    heatLayer = overlay
+
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+    for (const [lng, lat] of points) {
+      if (lat < minLat) minLat = lat
+      if (lat > maxLat) maxLat = lat
+      if (lng < minLon) minLon = lng
+      if (lng > maxLon) maxLon = lng
+    }
+    fitToBounds({ minLat, maxLat, minLon, maxLon }, 10)
+  } catch (e) {
+    console.warn('[GoogleMap] 热力图绘制失败:', e)
+  }
 }
 
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
@@ -1667,8 +1773,21 @@ function drawCustomOverlays() {
 
 // 监听 tracks 变化
 watch(() => props.tracks, () => {
+  // 热力图模式与轨迹数据无关：避免轨迹点增量加载时反复重建热力层
+  if (props.displayMode === 'heatmap') return
   updateTracks()
 }, { deep: true })
+
+// 监听显示模式与热力图数据变化（主页足迹热力图）
+watch(() => props.displayMode, () => {
+  updateTracks()
+})
+
+watch(() => props.heatmapPoints, () => {
+  if (props.displayMode === 'heatmap') {
+    updateTracks()
+  }
+})
 
 watch(() => props.highlightTrackId, () => {
   updateTracks()
@@ -1698,6 +1817,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 清理热力图图层
+  removeHeatmap()
+
   // 清理动画元素
   if (animationPassedPolyline) {
     animationPassedPolyline.setMap(null)

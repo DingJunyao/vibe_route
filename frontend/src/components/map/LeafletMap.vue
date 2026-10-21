@@ -46,6 +46,8 @@ import 'leaflet/dist/leaflet.css'
 import 'leaflet-rotate/dist/leaflet-rotate-src.js'
 import 'proj4leaflet'
 import 'leaflet.chinatmsproviders'
+// leaflet.heat：足迹热力图（与上述插件同为全局 L 侧挂载，需在 leaflet 之后导入）
+import 'leaflet.heat'
 
 // 瓦片保留缓冲加大（默认 2 行）：回放预热/平移时尽量多保留周边瓦片，
 // 减少录制期间的重复请求（对海报等场景无副作用，仅多占些内存）
@@ -57,7 +59,8 @@ import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } fr
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import type { MarkerPosition } from '@/types/animation'
-// import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
+import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
+import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 
 // 类型定义
 interface Point {
@@ -129,6 +132,8 @@ interface Props {
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
   emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
+  heatmapPoints?: [number, number][] | null  // 足迹热力图数据（[lng, lat] WGS84）
+  displayMode?: 'tracks' | 'heatmap'  // 主页显示模式：轨迹线 / 足迹热力图
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -147,6 +152,8 @@ const props = withDefaults(defineProps<Props>(), {
   disablePointHover: false,
   emitMapClick: false,
   customOverlays: () => [],
+  heatmapPoints: null,
+  displayMode: 'tracks',
 })
 
 const emit = defineEmits<{
@@ -163,6 +170,8 @@ const configStore = useConfigStore()
 const mapContainer = ref<HTMLElement>()
 const map = ref<L.Map | null>(null)
 const polylineLayers = ref<Map<number, L.Polyline>>(new Map())
+
+const heatLayer = ref<any>(null)  // 足迹热力图图层（L.heatLayer）
 const markers = ref<L.Marker[]>([])
 const highlightPolyline = ref<L.Polyline | null>(null)  // 路径段高亮图层
 const coloredPolylines = ref<L.Polyline[]>([])  // 多段彩色高亮图层
@@ -1956,8 +1965,8 @@ function recreateMap() {
     })
   }
 
-  // 重新绘制轨迹
-  drawTracks()
+  // 重新绘制（热力图模式下按新底图 CRS 重绘热力）
+  updateTracks()
 }
 
 // 切换全屏
@@ -2538,8 +2547,83 @@ function clearTracks() {
 
 // 更新轨迹（当底图切换或数据变化时）
 function updateTracks() {
+  if (props.displayMode === 'heatmap') {
+    drawHeatmap()
+    return
+  }
+  removeHeatmap()
   drawTracks()
   drawCustomOverlays()
+}
+
+// 移除热力图图层
+function removeHeatmap() {
+  if (heatLayer.value && map.value) {
+    try {
+      map.value.removeLayer(heatLayer.value)
+    } catch { /* ignore */ }
+  }
+  heatLayer.value = null
+}
+
+// 按当前底图坐标系转换热力点（与 getCoordsByCRS 的坐标选择规则一致）
+function convertHeatPoint(lng: number, lat: number, crs: CRSType, mapId?: string): [number, number] {
+  const isTianditu = mapId === 'tianditu' || mapId?.startsWith('tianditu')
+  if (crs === 'bd09') {
+    return wgs84ToBd09(lng, lat)
+  }
+  if (crs === 'gcj02' && !isTianditu) {
+    return wgs84ToGcj02(lng, lat)
+  }
+  return [lng, lat]
+}
+
+// 绘制足迹热力图（L.heatLayer，随底图 CRS 转换坐标）
+function drawHeatmap() {
+  if (!map.value) return
+
+  const points = props.heatmapPoints || []
+  clearTracks()
+  removeHeatmap()
+  if (points.length === 0) return
+
+  try {
+    const Lg = (window as any).L
+    if (!Lg?.heatLayer) {
+      throw new Error('leaflet.heat 插件不可用')
+    }
+
+    const crs = (currentLayerConfig.value?.crs || 'wgs84') as CRSType
+    const mapId = currentLayerConfig.value?.id
+
+    let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+    const latLngs: [number, number, number][] = []
+    for (const [lng, lat] of points) {
+      const [cLng, cLat] = convertHeatPoint(lng, lat, crs, mapId)
+      if (isNaN(cLat) || isNaN(cLng)) continue
+      latLngs.push([cLat, cLng, 1])
+      if (cLat < minLat) minLat = cLat
+      if (cLat > maxLat) maxLat = cLat
+      if (cLng < minLon) minLon = cLng
+      if (cLng > maxLon) maxLon = cLng
+    }
+    if (latLngs.length === 0) return
+
+    heatLayer.value = Lg.heatLayer(latLngs, {
+      radius: 22,
+      blur: 16,
+      maxZoom: 15,
+      minOpacity: 0.15,
+      gradient: HEATMAP_GRADIENT,
+    }).addTo(map.value)
+    // leaflet.heat 无整层透明度选项，直接作用于它的 canvas
+    const heatCanvas = (heatLayer.value as any)?._canvas as HTMLElement | undefined
+    if (heatCanvas) heatCanvas.style.opacity = String(HEATMAP_OPACITY)
+
+    fitToBounds({ minLat, maxLat, minLon, maxLon }, 10)
+  } catch (e) {
+    console.warn('[LeafletMap] 热力图绘制失败:', e)
+  }
 }
 
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
@@ -2623,7 +2707,20 @@ function drawCustomOverlays() {
 
 // 监听变化
 watch(() => props.tracks, () => {
+  // 热力图模式与轨迹数据无关：避免轨迹点增量加载时反复重建热力层
+  if (props.displayMode === 'heatmap') return
   updateTracks()
+})
+
+// 监听显示模式与热力图数据变化（主页足迹热力图）
+watch(() => props.displayMode, () => {
+  updateTracks()
+})
+
+watch(() => props.heatmapPoints, () => {
+  if (props.displayMode === 'heatmap') {
+    updateTracks()
+  }
 })
 
 watch(() => props.highlightTrackId, () => {
@@ -2886,6 +2983,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 清理热力图图层
+  removeHeatmap()
+
   // 清理动画元素
   if (animationPassedPolyline) {
     map.value?.removeLayer(animationPassedPolyline)

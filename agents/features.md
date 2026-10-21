@@ -1,5 +1,54 @@
 # 功能模块
 
+## 足迹热力图（主页）
+
+将走过的地方以密度热力图展示（跨轨迹聚合），主页在「热力图 / 轨迹」间切换，**默认热力图**。
+
+### 后端
+
+- 端点 `GET /api/tracks/heatmap?max_points=50000`（响应 `TrackHeatmapResponse`：`total_points` / `returned_points` / `sampled` / `points`）
+- 跨轨迹聚合当前用户全部有效点，join `tracks` 过滤 `Track.user_id` + 两侧 `is_valid`
+- 超过 `max_points` 时按 `TrackPoint.id % stride == 0` 等距抽样（id 全局自增，抽样后单轨迹内近似均匀，热力密度形状不变）
+- 统一输出 WGS84 `[lng, lat]`，保留 6 位小数；无表结构变更
+- **路由必须注册在 `/{track_id}` 之前**（否则 heatmap 被解析为 track_id）
+- 实测规模：302,650 点 → 43,235 点，985KB，0.6–0.9s
+
+### 前端
+
+- `Home.vue`：`displayMode: 'tracks' | 'heatmap'`（默认 heatmap）；挂载即并行拉取热力数据，切到轨迹模式才逐条取点（`fetchAllTracksPoints` + 500 点采样只在轨迹模式触发）
+- `UniversalMap`：`displayMode` / `heatmapPoints` / `enableDisplaySwitch` props，切换按钮组 emit `display-mode-change`
+- 五引擎各自实现 `drawHeatmap()` / `removeHeatmap()`，并在 `updateTracks()` 顶部按模式分流；**`props.tracks` 深度 watcher 在 heatmap 模式直接 return**（否则轨迹点增量加载会反复重建热力层）
+- 共享：`utils/heatmapStyle.ts`（`HEATMAP_GRADIENT` 柔和色带：雾蓝→青绿→草绿→沙黄→杏→胭脂；`HEATMAP_OPACITY = 0.5` 整层不透明度）；`utils/heatmapCanvas.ts`（`renderHeatCanvas`：网格聚合 + 98 分位归一化 + 50% 透明度，Google/高德/百度/腾讯共用）
+- **init / 底图切换的重绘入口必须走 `updateTracks()`**（按 displayMode 分流）：BMap 的 `initMap`、Leaflet 的 `switchLayer` 早期直接调 `drawTracks()`，导致「组件挂载时 heatmapPoints 已就绪」或「热力模式下切底图」时画出轨迹而非热力（已修）
+- 透明度：canvas 渲染器在 colorize 阶段把 alpha 乘 `HEATMAP_OPACITY`；Leaflet 直接给插件 canvas 设 `style.opacity`
+
+### 各引擎实现
+
+**除 Leaflet 外的所有引擎共用自绘 canvas 叠层**（`utils/heatmapCanvas.ts`），不再使用各家 SDK 自带热力层——它们的归一化口径差异极大（高德插件缩放后不重投影、腾讯 `max` 口径不同、MapVGL 整体偏冷、Google `visualization.HeatmapLayer` 已移除），无法调出统一的渐变。
+
+| 引擎 | 实现 | 要点 |
+|------|------|------|
+| 高德 | canvas 叠层 + `lngLatToContainer` 投影 | canvas 挂在地图容器（`position:absolute; z-index:150; pointer-events:none`）；`moveend/zoomend` 触发重绘；`mapmove` 期间不重绘（事件密度低，避免每帧投影 4 万点）。**不要用 Loca**（依赖 renderer 的 WebGL gl 上下文，2D/无硬件加速环境构造即报 `reading 'gl'`），也不要用 `AMap.HeatMap`（移除后残留 `canvas.heatmap-canvas`，且缩放后不重投影） |
+| 百度 GL | 同上，投影用 `pointToOverlayPixel` | 与 Legacy 共用同一套代码，按 `isLegacyMode` 选择 `BMapGL/BMap` 命名空间；**不依赖 MapVGL**（官方 CDN 已 404） |
+| 百度 Legacy | 同上，投影用 `pointToPixel` | 不再加载 BMapLib HeatmapOverlay |
+| 腾讯 | 同上，投影用 `projectToContainer` | 不再依赖 `TMap.visualization.Heat`（gljs 无需再带 `libraries=visualization`） |
+| Google | 同上，用 `OverlayView.draw()` 的 `fromLatLngToContainerPixel` 投影 | Maps JS API ≥3.65 已移除 `visualization.HeatmapLayer` |
+| Leaflet | `leaflet.heat`（npm 依赖） | 全局 L 侧挂载，须在 `leaflet` 之后导入；坐标按当前底图 CRS 转换（gcj02/bd09/wgs84，天地图用 wgs84）；整层透明度直接设插件 canvas 的 `style.opacity` |
+
+**归一化（各引擎一致）**：屏幕坐标按 `radius/2` 网格聚合 → 取聚合权重的 98 分位 × `SATURATION_FACTOR`(1.2) 作为上限 → 每格画一个热力圆。这样任意缩放级别都能展开完整色带，不会出现「整片饱和成红色」或「整层看不见」。
+
+**生命周期**：init / 底图切换的重绘入口必须走 `updateTracks()`（按 displayMode 分流）；`removeHeatmap()` 移除 canvas 并取消待执行的 rAF；组件卸载时同样清理。
+
+**拖动跟随**：canvas 是屏幕坐标系叠层，拖动时若不处理会「地图动、热力不动，松手才跳」。统一做法是拖动期间给 canvas 设 `transform: translate(dx, dy)` 跟随（每帧只算一个位移，不重投影 4 万点），松手/缩放结束后清除 transform 并重绘校准。位移来源按引擎区分：
+- **高德**：拖动期间 `getCenter()` 与 `lngLatToContainer()` 都是滞后值（松手才提交），不能用；改用 `dragging` 事件里的 `event.pixel`（指针容器像素）差值。
+- **百度 / 腾讯**：拖动中投影随地图实时更新，用「地图中心的投影位移」即可。
+- 缩放期间不做平移跟随（`heatZooming` 标志），缩放结束后统一重绘。
+
+### 验证状态
+
+- 已实测（headless Chromium 截图 + 热力↔轨迹往返）：Leaflet、高德、腾讯、**百度 GL**（本机库已配 baidu ak，mapvgl 本地 chunk 加载正常）；详情页 / 移动端 390px 无回归
+- 未实测：百度 Legacy、Google（本机 Google Maps SDK 无法加载）；百度 GL/腾讯/高德/Leaflet 已实测
+
 ## 轨迹回放（动画）
 
 ### 架构

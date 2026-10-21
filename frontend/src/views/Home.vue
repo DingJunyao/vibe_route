@@ -159,19 +159,36 @@
         <el-card class="map-card" shadow="never">
           <template #header>
             <div class="map-header">
-              <span v-if="!loadingTracks">所有轨迹</span>
-              <span v-else class="loading-title">
-                <el-icon class="is-loading"><Loading /></el-icon>
-                正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
-              </span>
+              <template v-if="displayMode === 'heatmap'">
+                <span v-if="!heatmapLoading">足迹热力图</span>
+                <span v-else class="loading-title">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  正在加载足迹数据……
+                </span>
+              </template>
+              <template v-else>
+                <span v-if="!loadingTracks">所有轨迹</span>
+                <span v-else class="loading-title">
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                  正在加载所有轨迹……（{{ loadedTrackCount }}/{{ tracks.length }}）
+                </span>
+              </template>
             </div>
           </template>
-          <!-- 有数据时显示地图 -->
-          <div v-if="tracksWithPoints.length > 0 || loadingTracks" class="map-container">
-            <UniversalMap :tracks="tracksWithPoints" mode="home" @track-click="handleTrackClick" />
+          <!-- 有数据时显示地图（热力图模式有轨迹列表即可显示） -->
+          <div v-if="tracks.length > 0 && (displayMode === 'heatmap' || tracksWithPoints.length > 0 || loadingTracks)" class="map-container">
+            <UniversalMap
+              :tracks="tracksWithPoints"
+              mode="home"
+              :display-mode="displayMode"
+              :heatmap-points="heatmapPoints"
+              :enable-display-switch="true"
+              @display-mode-change="handleDisplayModeChange"
+              @track-click="handleTrackClick"
+            />
           </div>
           <!-- 无数据时显示空状态 -->
-          <el-empty v-else description="暂无轨迹，请先上传">
+          <el-empty v-else-if="tracks.length === 0" description="暂无轨迹，请先上传">
             <el-button type="primary" @click="$router.push('/upload')">
               上传第一条轨迹
             </el-button>
@@ -442,6 +459,12 @@ const tracks = ref<UnifiedTrack[]>([])
 const tracksPoints = ref<Map<number, TrackPoint[]>>(new Map())
 const loadingTracks = ref(false)
 const loadedTrackCount = ref(0)
+
+// 主页显示模式（默认足迹热力图），可切换为轨迹线
+const displayMode = ref<'tracks' | 'heatmap'>('heatmap')
+const heatmapPoints = ref<[number, number][] | null>(null)
+const heatmapLoading = ref(false)
+let heatmapLoaded = false
 
 // 初始加载状态（首次加载统计数据和轨迹列表）
 const initialLoading = ref(true)
@@ -894,6 +917,36 @@ function samplePoints(points: TrackPoint[], maxPoints: number = 500): TrackPoint
   return sampled
 }
 
+// 获取足迹热力图数据（一次请求聚合当前用户全部轨迹点）
+async function fetchHeatmap() {
+  if (heatmapLoaded || heatmapLoading.value || !isMounted.value) return
+
+  heatmapLoading.value = true
+  try {
+    const response = await trackApi.getHeatmap()
+    if (isMounted.value) {
+      heatmapPoints.value = response.points
+      heatmapLoaded = true
+    }
+  } catch (error) {
+    console.error('Failed to load heatmap points:', error)
+  } finally {
+    if (isMounted.value) {
+      heatmapLoading.value = false
+    }
+  }
+}
+
+// 切换显示模式（热力图 / 轨迹），按需加载数据
+function handleDisplayModeChange(mode: 'tracks' | 'heatmap') {
+  displayMode.value = mode
+  if (mode === 'heatmap') {
+    fetchHeatmap()
+  } else if (tracksPoints.value.size === 0 && tracks.value.length > 0 && !loadingTracks.value) {
+    fetchAllTracksPoints()
+  }
+}
+
 // 获取所有轨迹的点数据（限制并发数量，避免阻塞其他请求）
 async function fetchAllTracksPoints() {
   if (tracks.value.length === 0) return
@@ -959,6 +1012,11 @@ async function fetchAllTracksPoints() {
 }
 
 onMounted(() => {
+  // 热力图数据与统计/轨迹列表并行加载（热力图为默认展示模式，无需等待列表）
+  if (displayMode.value === 'heatmap') {
+    fetchHeatmap()
+  }
+
   // 使用 Promise.all 同时加载数据，等待两者都完成后才结束初始加载状态
   Promise.all([
     trackApi.getStats(),
@@ -973,8 +1031,10 @@ onMounted(() => {
           const timeB = b.start_time ? new Date(b.start_time).getTime() : 0
           return timeA - timeB
         })
-        // 异步获取轨迹点数据
-        fetchAllTracksPoints()
+        // 异步获取地图数据：默认热力图模式已在挂载时并行加载；轨迹模式逐条取点
+        if (displayMode.value !== 'heatmap' && tracks.value.length > 0) {
+          fetchAllTracksPoints()
+        }
         // 初始加载完成
         initialLoading.value = false
       }

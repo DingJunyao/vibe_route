@@ -21,6 +21,7 @@ from app.schemas.track import (
     TrackListResponse,
     TrackPointResponse,
     TrackStatsResponse,
+    TrackHeatmapResponse,
     RegionTreeResponse,
     UnifiedTrackListResponse,
     ShareStatusResponse,
@@ -342,6 +343,20 @@ async def get_track_stats(
         total_duration=stats['total_duration'],
         total_elevation_gain=stats['total_elevation_gain'],
     )
+
+
+@router.get("/heatmap", response_model=TrackHeatmapResponse)
+async def get_track_heatmap(
+    max_points: int = Query(50000, ge=1000, le=200000, description="最大返回点数，超出时按 id 等距抽样"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    获取当前用户全部轨迹点（WGS84），用于主页足迹热力图
+
+    注意：必须注册在 /{track_id} 之前，否则 heatmap 会被解析为 track_id
+    """
+    return await track_service.get_heatmap_points(db, current_user.id, max_points)
 
 
 @router.post("/merge/preview", response_model=MergePreviewResponse)

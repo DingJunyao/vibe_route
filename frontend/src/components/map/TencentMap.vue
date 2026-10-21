@@ -376,7 +376,9 @@ import { escapeHtml } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
 import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
-import { gcj02ToWgs84 } from '@/utils/coordTransform'
+import { gcj02ToWgs84, wgs84ToGcj02 } from '@/utils/coordTransform'
+import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
+import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
@@ -483,6 +485,8 @@ interface Props {
   disablePointHover?: boolean  // 禁用轨迹点悬停显示（用于绘制路径模式）
   emitMapClick?: boolean  // 始终发射 map-click 事件（用于点击交互页面，不依赖绘制路径模式）
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
+  heatmapPoints?: [number, number][] | null  // 足迹热力图数据（[lng, lat] WGS84）
+  displayMode?: 'tracks' | 'heatmap'  // 主页显示模式：轨迹线 / 足迹热力图
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -500,6 +504,8 @@ const props = withDefaults(defineProps<Props>(), {
   disablePointHover: false,
   emitMapClick: false,
   customOverlays: () => [],
+  heatmapPoints: null,
+  displayMode: 'tracks',
 })
 
 const configStore = useConfigStore()
@@ -511,6 +517,11 @@ let TMapInstance: any = null
 let polylineLayer: any = null
 let coloredPolylineLayers: any[] = []  // 多段彩色高亮图层
 let highlightPolylineLayer: any = null  // 路径段高亮图层
+// 足迹热力图（主页 heatmap 模式）：自绘 canvas 叠层
+let heatCanvas: HTMLCanvasElement | null = null
+let heatRedrawTimer: number | null = null
+let heatFollow: HeatFollowState | null = null
+let heatZooming = false  // 缩放动画期间不做平移跟随（位移与缩放叠加会错位）
 let customOverlayMarkers: any = null  // 自定义覆盖层标记 (MultiMarker)
 let customOverlayPolylines: any[] = []  // 自定义覆盖层折线
 let mouseMarker: any = null  // 腾讯地图 Marker 实例
@@ -1797,6 +1808,26 @@ async function initMap() {
     TMapInstance.on('moveend', updateTooltipPosition)
     TMapInstance.on('zoomend', updateTooltipPosition)
 
+    // 热力叠层：拖动中用 transform 平移跟随，松手/缩放结束后重绘校准
+    TMapInstance.on('panstart', beginHeatFollow)
+    TMapInstance.on('pan', updateHeatFollow)
+    TMapInstance.on('panend', () => {
+      endHeatFollow()
+      redrawHeatmap()
+    })
+    TMapInstance.on('zoomstart', () => {
+      heatZooming = true
+      endHeatFollow()
+    })
+    TMapInstance.on('zoomend', () => {
+      heatZooming = false
+      redrawHeatmap()
+    })
+    // 兜底：程序化/惯性结束仍以 moveend 校准
+    TMapInstance.on('moveend', () => {
+      if (!heatFollow) redrawHeatmap()
+    })
+
     // 调试日志
     TMapInstance.on('moveend', () => {
       try {
@@ -2113,8 +2144,142 @@ function drawTracks() {
 
 // 更新轨迹
 function updateTracks() {
+  if (props.displayMode === 'heatmap') {
+    drawHeatmap()
+    return
+  }
+  removeHeatmap()
   drawTracks()
   drawCustomOverlays()
+}
+
+// 移除热力图叠层（自绘 canvas）
+function removeHeatmap() {
+  heatCanvas?.remove()
+  heatCanvas = null
+  if (heatRedrawTimer !== null) {
+    cancelAnimationFrame(heatRedrawTimer)
+    heatRedrawTimer = null
+  }
+}
+
+// 重绘热力（视野/尺寸变化时调用，rAF 合并多次事件）
+function redrawHeatmap() {
+  if (heatRedrawTimer !== null) return
+  heatRedrawTimer = requestAnimationFrame(() => {
+    heatRedrawTimer = null
+    paintHeatmap()
+  })
+}
+
+// 腾讯点投影
+function projectTencentPoint(lng: number, lat: number): { x: number; y: number } | null {
+  if (!TMapInstance) return null
+  const TMap = (window as any).TMap
+  return TMapInstance.projectToContainer(new TMap.LatLng(lat, lng))
+}
+
+// 拖动开始：记录地图中心的屏幕位置作为跟随锚点
+function beginHeatFollow() {
+  if (heatZooming || props.displayMode !== 'heatmap' || !heatCanvas || !TMapInstance) return
+  const center = TMapInstance.getCenter()
+  if (!center) return
+  const px = projectTencentPoint(center.lng, center.lat)
+  if (!px) return
+  heatFollow = createHeatFollow(center.lng, center.lat, px.x, px.y)
+}
+
+// 拖动中：按锚点位移平移画布（每帧只投影一个点）
+function updateHeatFollow() {
+  if (!heatFollow || !heatCanvas) return
+  const px = projectTencentPoint(heatFollow.lng, heatFollow.lat)
+  if (!px) return
+  applyHeatFollow(heatFollow, heatCanvas, px.x, px.y)
+}
+
+function endHeatFollow() {
+  heatFollow = null
+  clearHeatTransform(heatCanvas)
+}
+
+// 投影到屏幕并绘制（统一 canvas 渲染器，渐变与 Leaflet 一致）
+function paintHeatmap() {
+  const container = mapContainer.value
+  if (!container || !TMapInstance || props.displayMode !== 'heatmap') return
+  const points = props.heatmapPoints || []
+  if (points.length === 0) return
+
+  if (!heatCanvas) {
+    heatCanvas = document.createElement('canvas')
+    heatCanvas.style.position = 'absolute'
+    heatCanvas.style.left = '0'
+    heatCanvas.style.top = '0'
+    heatCanvas.style.pointerEvents = 'none'
+    heatCanvas.style.zIndex = '150'
+    container.appendChild(heatCanvas)
+  }
+
+  const width = container.clientWidth
+  const height = container.clientHeight
+  if (width === 0 || height === 0) return
+  clearHeatTransform(heatCanvas)
+  if (heatCanvas.width !== width) heatCanvas.width = width
+  if (heatCanvas.height !== height) heatCanvas.height = height
+
+  const TMap = (window as any).TMap
+  const projected: Array<{ x: number; y: number; weight: number }> = []
+  for (const [lng, lat] of points) {
+    const [gcjLng, gcjLat] = wgs84ToGcj02(lng, lat)
+    const px = TMapInstance.projectToContainer(new TMap.LatLng(gcjLat, gcjLng))
+    if (!px || typeof px.x !== 'number' || typeof px.y !== 'number') continue
+    projected.push({ x: px.x, y: px.y, weight: 1 })
+  }
+
+  renderHeatCanvas(heatCanvas, projected, {
+    radius: 22,
+    blur: 16,
+    opacity: HEATMAP_OPACITY,
+    gradient: HEATMAP_GRADIENT,
+  })
+}
+
+// 绘制足迹热力图：自绘 canvas 叠层（SDK 自带 Heat 的归一化偏饱和，弃用）
+function drawHeatmap() {
+  if (!TMapInstance) return
+
+  const points = props.heatmapPoints || []
+
+  // 清除轨迹图层（与 drawTracks 同口径，仅主线/高亮三类）
+  if (polylineLayer) {
+    polylineLayer.setMap(null)
+    polylineLayer = null
+  }
+  if (highlightPolylineLayer) {
+    highlightPolylineLayer.setMap(null)
+    highlightPolylineLayer = null
+  }
+  coloredPolylineLayers.forEach(layer => {
+    try {
+      layer.setMap(null)
+    } catch (e) {
+      // ignore
+    }
+  })
+  coloredPolylineLayers = []
+  removeHeatmap()
+  if (points.length === 0) return
+
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
+  for (const [lng, lat] of points) {
+    const [gcjLng, gcjLat] = wgs84ToGcj02(lng, lat)
+    if (gcjLat < minLat) minLat = gcjLat
+    if (gcjLat > maxLat) maxLat = gcjLat
+    if (gcjLng < minLon) minLon = gcjLng
+    if (gcjLng > maxLon) maxLon = gcjLng
+  }
+
+  fitToBounds({ minLat, maxLat, minLon, maxLon }, 10)
+  paintHeatmap()
 }
 
 // 绘制自定义覆盖层（用于绘制路径模式的控制点和曲线）
@@ -2256,8 +2421,21 @@ function drawCustomOverlays() {
 
 // 监听 tracks 变化
 watch(() => props.tracks, () => {
+  // 热力图模式与轨迹数据无关：避免轨迹点增量加载时反复重建热力层
+  if (props.displayMode === 'heatmap') return
   updateTracks()
 }, { deep: true })
+
+// 监听显示模式与热力图数据变化（主页足迹热力图）
+watch(() => props.displayMode, () => {
+  updateTracks()
+})
+
+watch(() => props.heatmapPoints, () => {
+  if (props.displayMode === 'heatmap') {
+    updateTracks()
+  }
+})
 
 watch(() => props.highlightTrackId, () => {
   updateTracks()
@@ -2287,6 +2465,9 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  // 清理热力图图层
+  removeHeatmap()
+
   // 清理动画元素
   if (animationPassedPolyline) {
     animationPassedPolyline.setMap(null)
@@ -2344,6 +2525,8 @@ function resize() {
   if (TMapInstance) {
     // 腾讯地图会自动调整大小
   }
+  // 热力画布尺寸跟随容器
+  if (props.displayMode === 'heatmap') redrawHeatmap()
 }
 
 // 将所有轨迹居中显示（四周留 5% 空间）

@@ -17,6 +17,8 @@
       :disable-point-hover="disablePointHover"
       :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
+      :display-mode="displayMode"
+      :heatmap-points="heatmapPoints"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -39,6 +41,8 @@
       :disable-point-hover="disablePointHover"
       :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
+      :display-mode="displayMode"
+      :heatmap-points="heatmapPoints"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -62,6 +66,8 @@
       :disable-point-hover="disablePointHover"
       :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
+      :display-mode="displayMode"
+      :heatmap-points="heatmapPoints"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -84,6 +90,8 @@
       :disable-point-hover="disablePointHover"
       :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
+      :display-mode="displayMode"
+      :heatmap-points="heatmapPoints"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -108,6 +116,8 @@
       :disable-point-hover="disablePointHover"
       :emit-map-click="emitMapClick"
       :custom-overlays="customOverlays"
+      :display-mode="displayMode"
+      :heatmap-points="heatmapPoints"
       @point-hover="handlePointHover"
       @track-hover="handleTrackHover"
       @track-click="handleTrackClick"
@@ -115,6 +125,19 @@
     />
     <!-- 通用地图选择器 -->
     <div class="map-controls">
+      <!-- 显示模式切换（主页：足迹热力图 / 轨迹线） -->
+      <el-button-group v-if="enableDisplaySwitch" size="small" class="display-mode-switch">
+        <el-button
+          :type="displayMode === 'heatmap' ? 'primary' : ''"
+          title="以足迹密度热力图展示走过的地方"
+          @click="setDisplayMode('heatmap')"
+        >热力图</el-button>
+        <el-button
+          :type="displayMode === 'tracks' ? 'primary' : ''"
+          title="以轨迹线展示所有轨迹"
+          @click="setDisplayMode('tracks')"
+        >轨迹</el-button>
+      </el-button-group>
       <!-- 查看详情按钮（嵌入模式） -->
       <el-button
         v-if="viewDetailsUrl"
@@ -302,6 +325,9 @@ interface Props {
   customOverlays?: CustomOverlay[]  // 自定义覆盖层（用于绘制路径模式的控制点和曲线）
   enableAnimation?: boolean  // 是否启用动画回放功能（仅轨迹详情页需要）
   forceEngine?: 'sdk' | 'leaflet'  // 强制使用的地图引擎（导出模式下由 URL 指定，优先于本地偏好）
+  displayMode?: 'tracks' | 'heatmap'  // 显示模式：轨迹线 / 足迹热力图（主页）
+  heatmapPoints?: [number, number][] | null  // 足迹热力图数据（[lng, lat] WGS84）
+  enableDisplaySwitch?: boolean  // 是否显示"热力图/轨迹"切换按钮（仅主页）
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -322,6 +348,9 @@ const props = withDefaults(defineProps<Props>(), {
   customOverlays: () => [],
   enableAnimation: false,
   forceEngine: undefined,
+  displayMode: 'tracks',
+  heatmapPoints: null,
+  enableDisplaySwitch: false,
 })
 
 // 定义 emit 事件
@@ -332,6 +361,7 @@ const emit = defineEmits<{
   (e: 'clear-segment-highlight'): void
   (e: 'map-click', lng: number, lat: number): void  // 地图点击事件（用于添加控制点）
   (e: 'map-provider-changed', provider: string): void  // 地图提供商变化
+  (e: 'display-mode-change', mode: 'tracks' | 'heatmap'): void  // 主页显示模式切换
 }>()
 
 const configStore = useConfigStore()
@@ -712,6 +742,12 @@ function switchLayer(layerId: string) {
 // 处理下拉选择变化
 function handleLayerChange(layerId: string) {
   switchLayer(layerId)
+}
+
+// 切换显示模式（热力图 / 轨迹，由父组件更新 displayMode prop）
+function setDisplayMode(mode: 'tracks' | 'heatmap') {
+  if (mode === props.displayMode) return
+  emit('display-mode-change', mode)
 }
 
 // 切换全屏
@@ -1106,6 +1142,11 @@ defineExpose({
 }
 
 .engine-switch {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.display-mode-switch {
   display: flex;
   flex-shrink: 0;
 }

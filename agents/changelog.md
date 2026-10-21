@@ -4,6 +4,28 @@
 
 ## 2026-10
 
+- 热力图拖动跟随（2026-10-21 第四笔）：
+  - **问题**：热力 canvas 是屏幕坐标系叠层，此前只在 `moveend/zoomend` 重绘 → 拖动时地图在动、热力不动，松手才跳到新位置
+  - **修复**：拖动期间用 CSS `translate(dx, dy)` 平移画布（每帧只算位移，不重投影 4 万点），松手后清除 transform 并重绘校准。位移来源：百度/腾讯用地图中心的投影位移；**高德特殊**——拖动期间 `getCenter()`/`lngLatToContainer()` 均为滞后值，改用 `dragging` 事件携带的 `event.pixel`（指针容器像素）差值
+  - 缩放期间暂停跟随（`heatZooming`），`zoomend` 统一重绘
+  - 验证：三引擎拖动中 `canvas.style.transform` 分别为 translate(240/320px 量级)、松手后归零并重绘；截图确认热力随地图同步移动
+- 热力图改用统一 canvas 渲染器（2026-10-21 第三笔）：
+  - **问题**：SDK 自带热力层在各引擎「几乎没有渐变、整片发红」——各家归一化口径差异过大，且同一引擎不同缩放级别表现也不同（高德 `AMap.HeatMap` 缩放后不重投影、城市尺度整层消失；腾讯 `max` 口径不同；MapVGL 偏冷）
+  - **方案**：除 Leaflet 外全部改为**自绘 canvas 叠层**（`utils/heatmapCanvas.ts`）：屏幕坐标按 `radius/2` 网格聚合 → 98 分位 × 1.2 作归一化上限 → 每格一个热力圆 → 色带 + 50% 透明度。任意缩放都能展开完整渐变，且各引擎观感一致
+  - **各引擎投影**：高德 `lngLatToContainer`、百度 GL `pointToOverlayPixel` / Legacy `pointToPixel`、腾讯 `projectToContainer`、Google `OverlayView.fromLatLngToContainerPixel`；叠层挂在各自地图容器（`absolute; z-index:150; pointer-events:none`），`moveend/zoomend` 重绘（rAF 合并），卸载/切回轨迹时移除 canvas
+  - **顺带移除依赖**：`mapvgl`（官方 CDN 已 404）、BMapLib HeatmapOverlay、腾讯 gljs 的 `libraries=visualization`、`AMap.HeatMap` 插件（其后遗症：`canvas.heatmap-canvas` 残留、缩放不重投影、插件回调重复造图层全部一并消除）
+  - 验证：vite build 通过；高德/百度 GL/腾讯/Leaflet 在「大陆 + 城市」两档缩放截图确认渐变完整、无饱和色块；热力↔轨迹往返后叠层数量 1→0→1（OpenStreetMap 走 leaflet.heat 不受影响）
+- 热力图修复百度 SDK 绘制 + 柔和配色（2026-10-21 第二笔）：
+  - **百度 CDN 失效**：`https://mapv.baidu.com/gl/static/script/mapvgl.min.js` 已返回 404 → 改 `npm install mapvgl` 并 `import('mapvgl')` 动态加载（独立 chunk 约 595KB，仅百度 GL 热力图时下载），不再依赖外部 CDN；`mapvgl` 归一化口径偏冷，改用约 1km 网格（`estimateHeatMax(points, 0.01)`）+ `size: 40` + `minOpacity: 0.08`
+  - **挂载/切底图不画热力**：BMap `initMap` 与 Leaflet `switchLayer` 的收尾直接调 `drawTracks()`，绕过 displayMode 分流——组件挂载时 heatmapPoints 已就绪（切换图层场景）就永远画不出热力；统一改为 `updateTracks()`
+  - **配色与透明度**：色带从高饱和蓝→红改为柔和色（雾蓝 `#8fc0dd` → 青绿 `#7cc6b8` → 草绿 `#c3d78f` → 沙黄 `#ecd393` → 杏 `#e9ab84` → 胭脂 `#cd8f8f`），并统一 `HEATMAP_OPACITY = 0.5`；各引擎落地方式见 features.md
+  - 验证：vite build 通过；百度 GL 底图 + 热力渲染、mapvgl chunk 加载、Leaflet/高德/腾讯配色截图逐引擎核对；热力↔轨迹往返无残留
+- 主页足迹热力图（2026-10-21）：
+  - **后端**：新增 `GET /api/tracks/heatmap?max_points=50000`（`TrackHeatmapResponse`：total_points/returned_points/sampled/points）。跨轨迹聚合当前用户全部有效轨迹点，按 `TrackPoint.id % stride` 等距抽样（id 全局自增，抽样后各轨迹内近似均匀，密度形状不变），坐标统一 WGS84 输出 6 位小数。**路由必须注册在 `/{track_id}` 之前**。实测 302,650 点→抽样 43,235 点、985KB、0.6–0.9s。无表结构变更、无需迁移
+  - **前端**：主页新增「热力图 / 轨迹」切换按钮组（`UniversalMap` 的 `enableDisplaySwitch` + `display-mode-change` 事件，默认**热力图**）；`Home.vue` 并行拉取热力数据，切到轨迹模式才逐条取点（原逐条 500 点采样路径保留）。五引擎各自实现 `drawHeatmap/removeHeatmap`，`tracks` 深度 watcher 在 heatmap 模式下直接 return（防轨迹点增量加载反复重建热力层）
+  - **各引擎实现**：高德用 `AMap.HeatMap` 插件（**不用 Loca**：Loca 依赖地图 renderer 的 WebGL gl 上下文，2D/无硬件加速环境构造即报 `reading 'gl'`，且 `setViewMode` 动态切 3D 有崩溃 bug）；百度 GL 用 MapVGL `HeatmapLayer`、Legacy 用 BMapLib `HeatmapOverlay`；腾讯 `TMap.visualization.Heat`（gljs 需加 `libraries=visualization`）；Google 用 OverlayView + canvas 自绘（`visualization.HeatmapLayer` 在 JS API ≥3.65 已移除）；Leaflet 用 `leaflet.heat`（新增依赖）
+  - **踩坑（均已修）**：① `AMap.HeatMap` 的 `setMap(null)/hide()/removeFromMap()` 都不移除渲染画布（`canvas.heatmap-canvas` 会残留），切回轨迹时须手动清理该 DOM；② 该插件按**建图层时的投影**绘制且缩放后不重投影 → 必须先 `setBounds` 定视野、下一帧再建图层；③ 插件回调/脚本并发会造出多个无人引用的图层 → 加载请求去重 + 渲染前清理；④ 高德 `fitToBounds` 的缩放缓算按单城市尺度写，跨省/跨国会固定 zoom 10 并把中心丢到海上 → 热力路径改用原生 `setBounds`
+  - 验证：Vite 构建通过；headless Chromium 实测 Leaflet / 高德 / 腾讯热力图正常，热力↔轨迹往返无残留、AMap 切回热力视野正确；百度走 Leaflet 瓦片路径正常（该账号未配百度 SDK key，GL/Legacy 分支未实测）；**Google SDK 在本机无法加载（网络/密钥），Google 分支未实测**；详情页、移动端 390px 布局无回归
 - 修复录屏任务窄屏样式（2026-10-13）：录屏任务页将外层卡片 body 的 `padding: 0` 收窄为直接子元素，避免嵌套任务卡片继承零内边距；后台管理录屏任务表格不再被移动端通用 `.el-table { display: none }` 意外隐藏。Vite 构建通过。
 - 修复录屏任务下载 404（2026-10-13）：任务页下载链接遗漏 `/api` 前缀，`downloadFile()` 直连后端 origin 后命中不存在路由；已补齐路径并通过 Vite 构建。
 - 录屏任务化（队列 + 后台管理 + 保留期清理）（2026-10-12）：
