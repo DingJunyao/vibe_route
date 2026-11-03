@@ -69,9 +69,6 @@ class Settings(BaseSettings):
             )
         raise ValueError(f"Unsupported database type: {self.DATABASE_TYPE}")
 
-    # Redis 配置 (用于 Celery)
-    REDIS_URL: str = "redis://localhost:6379/0"
-
     # 文件存储配置
     DATA_DIR: str = "data"
     UPLOAD_DIR: str = "data/uploads"

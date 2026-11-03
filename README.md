@@ -270,7 +270,7 @@ python3 -m venv venv
 source venv/bin/activate
 
 # 4. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt>=3.2.0,<4.0.0 python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile slowapi python-multipart --index-url https://pypi.org/simple
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy asyncpg pymysql psycopg2-binary bcrypt==4.0.1 python-jose[cryptography] passlib[bcrypt] pydantic pydantic-settings email-validator httpx gpxpy lxml shapely svgwrite fonttools pillow pyyaml pypinyin loguru openpyxl rarfile slowapi python-multipart --index-url https://pypi.org/simple
 
 # 5. svgpathtools 从 GitHub 安装（PyPI 版本不兼容）
 pip install "svgpathtools @ https://github.com/bcwhite-code/svgpathtools/archive/refs/heads/master.zip"
@@ -330,6 +330,9 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # 安装依赖
 pip install -r requirements.txt
+
+# 测试（可选）：安装 dev 依赖
+# pip install -r requirements-dev.txt
 
 # 复制配置文件
 cp .env.example .env

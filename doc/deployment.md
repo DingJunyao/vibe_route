@@ -57,7 +57,7 @@ source $HOME/.cargo/env
 sudo apt-get install -y build-essential libffi-dev python3-dev libpq-dev
 
 # 3. 从 PyPI 安装所有依赖（避免 piwheels 元数据问题）
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy asyncpg pymysql psycopg2-binary bcrypt==4.0.1 python-jose[cryptography] passlib[bcrypt] pydantic pydantic-settings email-validator httpx gpxpy lxml shapely svgwrite fonttools pillow pyyaml pypinyin loguru openpyxl rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 ```
 
 ### 支持的数据库
@@ -110,7 +110,7 @@ venv\Scripts\activate
 # 安装依赖
 
 # ARM 架构：从 PyPI 安装（避免 piwheels 元数据问题）
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy asyncpg pymysql psycopg2-binary bcrypt==4.0.1 python-jose[cryptography] passlib[bcrypt] pydantic pydantic-settings email-validator httpx gpxpy lxml shapely svgwrite fonttools pillow pyyaml pypinyin loguru openpyxl rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 
 # x86/x64 架构：可使用 requirements.txt
 # pip install -r requirements.txt
@@ -507,7 +507,7 @@ proxy_set_header Connection "upgrade";
 **解决方案**：直接从 PyPI 安装所有依赖
 
 ```bash
-pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy aiomysql asyncpg pymysql psycopg2-binary bcrypt python-jose[cryptography] passlib[bcrypt] python-dotenv celery redis pydantic pydantic-settings email-validator httpx aiofiles requests gpxpy lxml pandas geopandas shapely svgwrite fonttools pillow cairosvg imageio numpy tqdm pyyaml pypinyin loguru openpyxl pytest pytest-asyncio rarfile playwright==1.58.0 --index-url https://pypi.org/simple
+pip install fastapi uvicorn[standard] sqlalchemy alembic aiosqlite asyncmy asyncpg pymysql psycopg2-binary bcrypt==4.0.1 python-jose[cryptography] passlib[bcrypt] pydantic pydantic-settings email-validator httpx gpxpy lxml shapely svgwrite fonttools pillow pyyaml pypinyin loguru openpyxl rarfile playwright==1.58.0 --index-url https://pypi.org/simple
 ```
 
 **问题 2**：bcrypt 版本兼容性问题。

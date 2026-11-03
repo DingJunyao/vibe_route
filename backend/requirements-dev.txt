@@ -1,0 +1,7 @@
+# 开发/测试依赖：不进生产镜像（Dockerfile 只装 requirements.txt）。
+# 用法：
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   uv sync            （[dependency-groups] dev 默认安装）
+-r requirements.txt
+pytest
+pytest-asyncio

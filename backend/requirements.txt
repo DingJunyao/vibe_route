@@ -1,5 +1,7 @@
 # 与 pyproject.toml 的 dependencies 保持等价：新增依赖时两边同步修改，
-# 保证 `pip install -r requirements.txt`、`pip install .`、`uv sync` 结果一致。
+# 保证 `pip install -r requirements.txt`、`pip install .` 结果一致。
+# 测试依赖（pytest/pytest-asyncio）在 requirements-dev.txt 与 pyproject 的
+# [dependency-groups] dev 中，不进生产镜像（Dockerfile 只装本文件）。
 
 # FastAPI 和服务器
 fastapi
@@ -14,7 +16,6 @@ alembic
 # 数据库驱动 (支持多数据库)
 aiosqlite
 asyncmy  # x86 平台推荐（高性能），ARM 需 Rust 编译
-aiomysql  # ARM 平台备用（纯 Python）
 asyncpg  # PostgreSQL 异步驱动，ARM 需 Rust 编译
 
 # Alembic 同步驱动 (用于数据库迁移)
@@ -25,28 +26,19 @@ psycopg2-binary  # PostgreSQL 同步驱动，ARM 需编译
 bcrypt==4.0.1
 python-jose[cryptography]
 passlib[bcrypt]
-python-dotenv
-
-# 任务队列
-celery
-redis
 
 # 验证
 pydantic
-pydantic-settings
+pydantic-settings  # env_file 功能所需；其传递依赖已含 python-dotenv，无需单列
 email-validator
 
 # HTTP 客户端
 httpx
-aiofiles
-requests
 
 # gpxutil 核心依赖
 gpxpy
 lxml
-pandas
-geopandas
-shapely
+shapely  # 传递依赖已含 numpy
 
 # SVG 生成
 svgwrite
@@ -55,20 +47,12 @@ fonttools
 
 # 图像处理
 pillow
-cairosvg
-imageio
-numpy
 
 # 其他工具
-tqdm
 pyyaml
 pypinyin
 loguru
 openpyxl
-
-# 测试
-pytest
-pytest-asyncio
 
 # 解压
 rarfile

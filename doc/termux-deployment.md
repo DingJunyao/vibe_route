@@ -123,15 +123,15 @@ source venv/bin/activate
 ```bash
 # 从 PyPI 安装所有依赖（避免 piwheels 问题）
 pip install fastapi uvicorn[standard] sqlalchemy alembic \
-    aiosqlite aiomysql asyncpg pymysql psycopg2-binary \
-    bcrypt>=3.2.0,<4.0.0 \
+    aiosqlite asyncpg pymysql psycopg2-binary \
+    bcrypt==4.0.1 \
     python-jose[cryptography] passlib[bcrypt] \
-    python-dotenv celery redis pydantic pydantic-settings \
-    email-validator httpx aiofiles requests \
-    gpxpy lxml pandas geopandas shapely \
-    svgwrite cairosvg fonttools pillow imageio \
-    numpy tqdm pyyaml pypinyin loguru \
-    openpyxl pytest pytest-asyncio rarfile \
+    pydantic pydantic-settings \
+    email-validator httpx \
+    gpxpy lxml shapely \
+    svgwrite fonttools pillow \
+    pyyaml pypinyin loguru \
+    openpyxl rarfile \
     slowapi python-multipart \
     --index-url https://pypi.org/simple
 

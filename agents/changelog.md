@@ -2,6 +2,16 @@
 
 详细历史版本已归档到根目录 [`AGENTS_ARCHIVE_2026-02-16.md`](../AGENTS_ARCHIVE_2026-02-16.md)（原 `CLAUDE_ARCHIVE_2026-02-16.md`），以下是简要记录：
 
+## 2026-11
+
+- Docker/后端依赖清理（2026-11-03）：
+  - **ffmpeg 缺口修复**：动画导出 `backend/app/utils/playwright_export.py` 直接 `subprocess.Popen(['ffmpeg', ...])`（CDP screencast 帧直通编码 H.264），生产镜像此前无 ffmpeg → 容器内导出必挂 `FileNotFoundError`；Dockerfile backend 层 apt 增加 `ffmpeg`（bookworm 自带 libx264）。playwright 自带的 ffmpeg 不在 PATH，代码无 fallback
+  - **libcairo2 移除**：cairosvg 已零引用；chromium 的 Debian 12 依赖清单本身含 `libcairo2`，由 `playwright --with-deps` 安装。中文字体由 --with-deps 的 `fonts-wqy-zenhei` 等提供
+  - **依赖瘦身**（`backend/requirements.txt` ↔ `backend/pyproject.toml` 同步）：删除全代码 0 引用的 `celery`、`redis`、`requests`、`aiofiles`、`pandas`、`geopandas`、`imageio`、`cairosvg`、`tqdm`、`aiomysql`（config 只生成 `mysql+asyncmy`，无代码路径）；`numpy`（shapely 传递依赖）、`python-dotenv`（pydantic-settings 传递依赖）不再单列；顺带删除无人消费的 `REDIS_URL`（config.py、.env.example；.env 等本地副本未动）
+  - **测试依赖出镜像**：`pytest`/`pytest-asyncio` 移到 pyproject `[dependency-groups] dev` + 新增 `backend/requirements-dev.txt`；生产镜像只装 requirements.txt。注意 pytest-asyncio 有实际使用（tests `@pytest.mark.asyncio`），只移位不删除
+  - **文档同步**：README ARM 安装命令、doc/deployment.md ×3、doc/termux-deployment.md 清掉已删除依赖，bcrypt 统一为 `==4.0.1`；README x86 段补 requirements-dev.txt 提示
+  - 验证：程序化核对 requirements.txt ↔ pyproject dependencies 逐项等价；config.py py_compile 通过；132 个 .py 全量扫描确认删除项零引用（含 tests/scripts/alembic）。Docker 镜像未实际构建验证（本机无构建环境）
+
 ## 2026-10
 
 - 热力图拖动跟随（2026-10-21 第四笔）：

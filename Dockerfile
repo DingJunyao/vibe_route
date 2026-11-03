@@ -45,11 +45,13 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 装依赖：requirements 已含各数据库驱动（aiosqlite/asyncmy/asyncpg 等），换库只改环境变量
-# libcairo2：cairosvg 运行时依赖；playwright 浏览器用 --with-deps 自行安装系统依赖
+# ffmpeg：动画导出（utils/playwright_export.py）用 CDP screencast 直通 ffmpeg 编码 H.264，
+#   必须在 PATH 上（playwright 自带的 ffmpeg 不在 PATH）；bookworm 的 ffmpeg 自带 libx264。
+#   chromium 运行库与中文字体（fonts-wqy-zenhei 等）由 playwright --with-deps 自行安装
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
     && apt-get update \
-    && apt-get install -y --no-install-recommends libcairo2 \
+    && apt-get install -y --no-install-recommends ffmpeg \
     && python -m playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
