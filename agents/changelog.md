@@ -11,6 +11,7 @@
   - **测试依赖出镜像**：`pytest`/`pytest-asyncio` 移到 pyproject `[dependency-groups] dev` + 新增 `backend/requirements-dev.txt`；生产镜像只装 requirements.txt。注意 pytest-asyncio 有实际使用（tests `@pytest.mark.asyncio`），只移位不删除
   - **文档同步**：README ARM 安装命令、doc/deployment.md ×3、doc/termux-deployment.md 清掉已删除依赖，bcrypt 统一为 `==4.0.1`；README x86 段补 requirements-dev.txt 提示
   - 验证：程序化核对 requirements.txt ↔ pyproject dependencies 逐项等价；config.py py_compile 通过；132 个 .py 全量扫描确认删除项零引用（含 tests/scripts/alembic）。Docker 镜像未实际构建验证（本机无构建环境）
+- Docker CI 构建修复（2026-11-03）：`COPY backend/alembic.ini` 在 CI 失败——该文件被 .gitignore:99 排除（历史决策：config 不入库，DB URL 由 env.py 从应用配置读取），本地有未跟踪副本故本地构建正常。新增入库模板 `backend/alembic.ini.example`（与本地文件一致、无敏感信息），Dockerfile 改为 `COPY backend/alembic.ini.example ./alembic.ini`；容器内不自动跑迁移，保留 docker exec 手动迁移能力
 
 ## 2026-10
 

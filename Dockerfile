@@ -56,9 +56,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && rm -rf /var/lib/apt/lists/*
 
 # 拷应用代码
+# alembic.ini 被 gitignore（.gitignore:99），CI 构建需从入库的模板复制
 COPY backend/app ./app
 COPY backend/alembic ./alembic
-COPY backend/alembic.ini ./
+COPY backend/alembic.ini.example ./alembic.ini
 COPY backend/scripts ./scripts
 
 # 持久化目录（开箱即用前提；compose 挂载点会覆盖这些路径）

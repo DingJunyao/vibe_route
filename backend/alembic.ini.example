@@ -1,0 +1,66 @@
+# Alembic Configuration File
+
+[alembic]
+# Migration scripts directory
+script_location = alembic
+
+# Migration script template file (use default if not exists)
+# file_template = %%(rev)s_%%(slug)s
+
+# sys.path path for importing modules
+prepend_sys_path = .
+
+# Timezone setting
+# timezone =
+
+# Maximum character length for logging in migration scripts
+# truncate_slug_length = 40
+
+# Set to 'true' to re-render revision scripts on each run
+# revision_environment = false
+
+# Set to 'true' to require confirmation when running 'downgrade'
+# sourceless = false
+
+# Version path separator (defaults to os.pathsep)
+# version_path_separator = os.pathsep
+
+# Output encoding
+# output_encoding = utf-8
+
+[post_write_hooks]
+# post_write_hooks defines hooks to execute after script generation
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
