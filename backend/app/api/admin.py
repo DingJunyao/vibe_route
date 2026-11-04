@@ -627,8 +627,16 @@ async def get_fonts(
     if isinstance(id_config, str):
         import json
         id_config = json.loads(id_config)
+
+    # font_config 可能经 PUT /config 整体回存而带有 id_upper/id_lower 键，
+    # 直接展开会与下面的显式参数重复，触发 "got multiple values for
+    # keyword argument"；id 字体以 indonesia_road_sign 为权威来源，
+    # 合并前先剔除 font_config 中的同名键。
+    base_font_config = dict(font_config or {})
+    base_font_config.pop('id_upper', None)
+    base_font_config.pop('id_lower', None)
     active_fonts = FontConfig(
-        **(font_config or {}),
+        **base_font_config,
         id_upper=id_config.get('font_upper') or 'ClearviewHwy1W.ttf',
         id_lower=id_config.get('font_lower') or 'ClearviewHwy2W.ttf',
     )
