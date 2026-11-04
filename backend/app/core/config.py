@@ -2,6 +2,7 @@
 应用配置模块
 支持多数据库类型：SQLite、MySQL、PostgreSQL
 """
+from pathlib import Path
 from typing import Literal, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -113,3 +114,23 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# 随应用打包的路牌模板目录（app/assets/road_sign_templates/）。
+# 不放 data/ 下：.dockerignore 排除 backend/data，且 Docker 里 data/ 会被挂载卷覆盖，
+# 打包进 app/ 才能保证镜像内开箱即用。
+BUNDLED_ROAD_SIGN_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / 'assets' / 'road_sign_templates'
+
+
+def resolve_road_sign_template(name: str) -> Path:
+    """解析路牌模板文件路径。
+
+    优先 data/templates/（兼容旧部署手工放置/定制过的模板），
+    不存在时回落到随应用打包的 app/assets/road_sign_templates/。
+    两者都缺失时返回 data 路径，保持原有「文件不存在」的报错行为。
+    """
+    legacy = Path(settings.ROAD_SIGN_DIR).parent / 'templates' / name
+    if legacy.exists():
+        return legacy
+    bundled = BUNDLED_ROAD_SIGN_TEMPLATES_DIR / name
+    return bundled if bundled.exists() else legacy

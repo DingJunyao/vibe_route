@@ -59,7 +59,7 @@ class FontConfig(BaseModel):
 
 class IndonesiaRoadSignConfig(BaseModel):
     """印尼道路盾牌配置 schema"""
-    template: Optional[str] = Field(None, description="盾牌模板文件名（data/templates/ 下）")
+    template: Optional[str] = Field(None, description="盾牌模板文件名（随应用打包 app/assets/road_sign_templates/，可放 data/templates/ 覆盖）")
     tol_keywords: Optional[List[str]] = Field(None, description="TOL 判定关键词（ASCII 词边界 + 中文子串）")
     font_upper: Optional[str] = Field(None, description="色带小字字体文件名（data/fonts/ 下）")
     font_lower: Optional[str] = Field(None, description="白色区大字字体文件名（data/fonts/ 下）")

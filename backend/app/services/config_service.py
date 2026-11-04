@@ -33,7 +33,7 @@ class ConfigService:
         "animation_export_retention_days": 30,     # 录屏文件保存天数（按任务结束时间起算，0 = 永久）
         "animation_export_max_queued_per_user": 3,  # 单用户最大排队任务数（0 = 不限制）
         "indonesia_road_sign": {
-            "template": "id_sheild.svg",      # backend/data/templates/ 下模板文件名
+            "template": "id_sheild.svg",      # 随应用打包于 app/assets/road_sign_templates/，可放 data/templates/ 覆盖
             "tol_keywords": ["收费", "Tol"],   # TOL 判定：ASCII 词边界 + 中文子串（见 indonesia.py）
             "font_upper": "ClearviewHwy1W.ttf",  # 色带小字（backend/data/fonts/ 下）
             "font_lower": "ClearviewHwy2W.ttf",  # 白色区大字

@@ -17,7 +17,7 @@ from svgpathtools import parse_path
 from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
 
-from app.core.config import settings
+from app.core.config import resolve_road_sign_template, settings
 from app.gpxutil_wrapper.indonesia import (
     REGION_CN, REGION_ID, IndonesiaRoadLevel, parse_indonesia_road_num,
 )
@@ -37,8 +37,8 @@ INDONESIA_PROVINCE_BLUE = '#003E86'  # 印尼省道（PROVINSI）色带蓝
 INDONESIA_BANNER_RED = '#B5273C'
 
 
-# 模板路径
-TEMPLATE_DIR = Path(settings.ROAD_SIGN_DIR).parent / 'templates'
+# 模板路径：优先 data/templates/（旧部署手工定制），缺省用随应用打包的 app/assets/road_sign_templates/
+# （原 TEMPLATE_DIR 常量已移除，改用 resolve_road_sign_template 逐文件解析，见 app/core/config.py）
 
 # 普通道路标志尺寸和位置
 WAY_NUM_WIDTH = 400
@@ -265,7 +265,7 @@ def generate_way_num_sign(
         background_color = WHITE
         stroke_color = BLACK
 
-    template_path = TEMPLATE_DIR / 'way_num.svg'
+    template_path = resolve_road_sign_template('way_num.svg')
 
     if template_path.exists():
         from svgpathtools import svg2paths
@@ -484,7 +484,7 @@ def generate_expwy_sign(
 
     # 获取模板文件
     template_name = f'expwy_{template_index}.svg'
-    template_path = TEMPLATE_DIR / template_name
+    template_path = resolve_road_sign_template(template_name)
 
     if template_path.exists():
         from svgpathtools import svg2paths

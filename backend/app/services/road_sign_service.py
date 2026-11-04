@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.road_sign import RoadSignCache
 from app.gpxutil_wrapper.svg_gen import generate_road_sign
-from app.core.config import settings
+from app.core.config import resolve_road_sign_template, settings
 from app.services.config_service import config_service
 from loguru import logger
 
@@ -121,12 +121,13 @@ class RoadSignService:
                 logger.warning(f"Failed to read cached sign {cache_key}: {e}")
 
 
-        # 印尼配置：文件名解析为 DATA_DIR 下的资源路径（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
+        # 印尼配置：模板用 resolve_road_sign_template（data/templates/ 优先，缺省随应用打包），
+        # 字体仍是 DATA_DIR 下的用户数据（DATA_DIR 默认 'data'，相对路径随 cwd 解析）
         indonesia_config = None
         if region == 'id':
             id_cfg = configs.get('indonesia_road_sign') or {}
             base_dir = Path(settings.DATA_DIR)
-            template_file = base_dir / 'templates' / (id_cfg.get('template') or 'id_sheild.svg')
+            template_file = resolve_road_sign_template(id_cfg.get('template') or 'id_sheild.svg')
             upper_file = base_dir / 'fonts' / (id_cfg.get('font_upper') or 'ClearviewHwy1W.ttf')
             lower_file = base_dir / 'fonts' / (id_cfg.get('font_lower') or 'ClearviewHwy2W.ttf')
             missing = [str(f) for f in (template_file, upper_file, lower_file) if not f.exists()]
