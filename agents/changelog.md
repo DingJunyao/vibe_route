@@ -4,12 +4,21 @@
 
 ## 2026-11
 
+- 路牌模板随应用打包（2026-11-04 第二笔）：
+  - **问题**：路牌 SVG 模板（id_sheild、expwy_1/2/4(+_name)、way_num 共 8 个）放在 `backend/data/templates/`，而 `.dockerignore` 排除 `backend/data`，且 Docker 里 `data/` 会被挂载卷覆盖 → 镜像内根本没有模板，全新部署时 CN 路牌静默降级、印尼盾牌直接 `FileNotFoundError`
+  - **修复**：`git mv` 到 `backend/app/assets/road_sign_templates/` 随 `COPY backend/app ./app` 进镜像；`app/core/config.py` 新增 `BUNDLED_ROAD_SIGN_TEMPLATES_DIR` + `resolve_road_sign_template()`（`data/templates/` 优先，兼容旧部署手工定制；缺省用打包资源；两者都缺失时仍返回 data 路径保持原报错行为）；`road_sign_service.py` 印尼模板解析与 `svg_gen.py` 两处模板路径改走 resolver（原 `TEMPLATE_DIR` 常量移除）；`config_service.py` 默认值注释与 schema description 同步
+  - **验证**：py_compile 全过；干净环境（无 data 目录）下 8 个模板全部回落到打包目录、`data/templates/` 覆盖优先生效、缺失模板仍指向 data 路径；本地无 conda/venv，svg_gen 完整导入未测（依赖 svgwrite，纯语法/逻辑层面已覆盖）
+- 字体列表接口 500 修复（2026-11-04）：
+  - **问题**：`GET /api/admin/fonts` 报 `TypeError: FontConfig() got multiple values for keyword argument 'id_upper'`——DB 里 `font_config` 经 `PUT /config` 整体回存后带有 `id_upper/id_lower` 键（前端设置表单把 `FontConfig` schema 全字段原样回传，含 null），`get_fonts`（`backend/app/api/admin.py:630`）构造响应时 `**(font_config)` 与显式 `id_upper=`/`id_lower=` 参数重复。Docker 镜像（1a0b674 构建）部署后管理页字体列表 500，上传字体后读不出列表
+  - **修复**：`get_fonts` 合并前先 `base_font_config.pop('id_upper'/'id_lower')`——id 字体权威来源是 `indonesia_road_sign.font_upper/font_lower`（`set_active_font` 只写这个键），`font_config` 里的同名键本就是回存残留；不改 DB，读路径自愈
+  - **验证**：py_compile 通过 + 纯 Python 复现旧错/新逻辑正确；Synology 生产容器内以生产 DB 直接调用 `get_fonts()` 返回 2 个字体文件与正确 active 配置；容器重启后 `/api/admin/fonts` 恢复正常（未认证 401、认证请求不再 500）
 - Docker/后端依赖清理（2026-11-03）：
   - **ffmpeg 缺口修复**：动画导出 `backend/app/utils/playwright_export.py` 直接 `subprocess.Popen(['ffmpeg', ...])`（CDP screencast 帧直通编码 H.264），生产镜像此前无 ffmpeg → 容器内导出必挂 `FileNotFoundError`；Dockerfile backend 层 apt 增加 `ffmpeg`（bookworm 自带 libx264）。playwright 自带的 ffmpeg 不在 PATH，代码无 fallback
   - **libcairo2 移除**：cairosvg 已零引用；chromium 的 Debian 12 依赖清单本身含 `libcairo2`，由 `playwright --with-deps` 安装。中文字体由 --with-deps 的 `fonts-wqy-zenhei` 等提供
   - **依赖瘦身**（`backend/requirements.txt` ↔ `backend/pyproject.toml` 同步）：删除全代码 0 引用的 `celery`、`redis`、`requests`、`aiofiles`、`pandas`、`geopandas`、`imageio`、`cairosvg`、`tqdm`、`aiomysql`（config 只生成 `mysql+asyncmy`，无代码路径）；`numpy`（shapely 传递依赖）、`python-dotenv`（pydantic-settings 传递依赖）不再单列；顺带删除无人消费的 `REDIS_URL`（config.py、.env.example；.env 等本地副本未动）
   - **测试依赖出镜像**：`pytest`/`pytest-asyncio` 移到 pyproject `[dependency-groups] dev` + 新增 `backend/requirements-dev.txt`；生产镜像只装 requirements.txt。注意 pytest-asyncio 有实际使用（tests `@pytest.mark.asyncio`），只移位不删除
   - **文档同步**：README ARM 安装命令、doc/deployment.md ×3、doc/termux-deployment.md 清掉已删除依赖，bcrypt 统一为 `==4.0.1`；README x86 段补 requirements-dev.txt 提示
+  - **升级注意**：本地 `.env*`（gitignore，不在仓库内）若保留 `REDIS_URL`，pydantic-settings 默认 `extra=forbid` 会直接启动报错 `redis_url Extra inputs are not permitted`；需删除该行（本次已清理开发机 4 个 env 文件）
   - 验证：程序化核对 requirements.txt ↔ pyproject dependencies 逐项等价；config.py py_compile 通过；132 个 .py 全量扫描确认删除项零引用（含 tests/scripts/alembic）。Docker 镜像未实际构建验证（本机无构建环境）
 - Docker CI 构建修复（2026-11-03）：`COPY backend/alembic.ini` 在 CI 失败——该文件被 .gitignore:99 排除（历史决策：config 不入库，DB URL 由 env.py 从应用配置读取），本地有未跟踪副本故本地构建正常。新增入库模板 `backend/alembic.ini.example`（与本地文件一致、无敏感信息），Dockerfile 改为 `COPY backend/alembic.ini.example ./alembic.ini`；容器内不自动跑迁移，保留 docker exec 手动迁移能力
 
