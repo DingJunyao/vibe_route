@@ -1,7 +1,7 @@
 """
 分享服务层
 """
-import random
+import secrets
 import string
 from datetime import datetime, timezone
 from typing import Optional
@@ -18,7 +18,8 @@ def generate_share_token(length: int = 8) -> str:
     charset = string.ascii_uppercase.replace('O', '').replace('I', '') + string.digits.replace('0', '').replace('1', '')
     # 添加小写字母以增加空间
     charset += string.ascii_lowercase.replace('l', '').replace('o', '')
-    return ''.join(random.choices(charset, k=length))
+    # secrets 保证令牌的密码学随机性（分享链接是唯一的访问凭据）
+    return ''.join(secrets.choice(charset) for _ in range(length))
 
 
 async def ensure_unique_token(db: AsyncSession, length: int = 8, max_attempts: int = 10) -> str:
