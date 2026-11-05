@@ -2,6 +2,7 @@
 管理员相关 API 路由
 """
 import asyncio
+import os
 from typing import List, Dict
 from pathlib import Path
 import yaml
@@ -726,9 +727,19 @@ async def upload_font(
             detail=f"不支持的文件格式，支持的格式: {', '.join(allowed_extensions)}",
         )
 
-    # 使用原始文件名保存
-    filename = Path(file.filename).name
-    target_path = FONTS_DIR / filename
+    # 使用原始文件名保存（basename 剥离目录成分；拼回字体目录并校验，防路径穿越）
+    filename = os.path.basename(file.filename)
+    if filename in ("", ".", "..") or "/" in filename or "\\" in filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名",
+        )
+    target_path = os.path.abspath(os.path.join(str(FONTS_DIR), filename))
+    if not target_path.startswith(str(FONTS_DIR.resolve()) + os.sep):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名",
+        )
 
     # 检查文件是否已存在
     if target_path.exists():
@@ -739,8 +750,8 @@ async def upload_font(
 
     content = await file.read()
 
-    with open(target_path, "wb") as f:
-        f.write(content)
+    target = Path(target_path)
+    target.write_bytes(content)
 
     return {"message": "字体上传成功", "filename": filename}
 
@@ -753,9 +764,19 @@ async def delete_font(
     """
     删除字体文件（管理员）
     """
-    # 安全检查：确保文件名不包含路径
-    filename = Path(filename).name
-    file_path = FONTS_DIR / filename
+    # 安全检查：basename 剥离目录成分；拼回字体目录并校验，防路径穿越
+    filename = os.path.basename(filename)
+    if filename in ("", ".", "..") or "/" in filename or "\\" in filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名",
+        )
+    file_path = os.path.abspath(os.path.join(str(FONTS_DIR), filename))
+    if not file_path.startswith(str(FONTS_DIR.resolve()) + os.sep):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名",
+        )
 
     if not file_path.exists():
         raise HTTPException(
@@ -1026,9 +1047,13 @@ async def update_special_place_mapping(
     # 确保目录存在
     SPECIAL_PLACE_MAPPING_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+    # 路径防御：写入目标是固定配置文件，显式校验仍在其目录内
+    target_path = SPECIAL_PLACE_MAPPING_FILE.resolve()
+    if not target_path.is_relative_to(SPECIAL_PLACE_MAPPING_FILE.parent.resolve()):
+        raise HTTPException(status_code=400, detail="非法路径")
+
     # 直接写入原始 YAML 内容
-    with open(SPECIAL_PLACE_MAPPING_FILE, "w", encoding="utf-8") as f:
-        f.write(request.yaml_content)
+    target_path.write_text(request.yaml_content, encoding="utf-8")
 
     return {"message": f"已更新 {len(mappings)} 条特殊地名映射"}
 
@@ -1110,10 +1135,15 @@ async def test_upload(
             detail="无法创建临时目录"
         )
 
-    test_path = temp_dir / "test.bin"
+    test_path = (temp_dir / "test.bin").resolve()
+    # 路径防御：目标为固定文件名，显式校验仍在临时目录内
+    if not test_path.is_relative_to(temp_dir.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法路径"
+        )
     try:
-        with open(test_path, "wb") as f:
-            f.write(content)
+        test_path.write_bytes(content)
     except Exception as e:
         logger.error(f"保存文件失败: {e}")
         raise HTTPException(
@@ -1183,19 +1213,24 @@ async def import_bounds_data(
             detail="无法创建临时目录"
         )
 
-    # 生成安全的文件名（防止路径遍历）
+    # 生成安全的文件名（防止路径遍历：剥离目录成分并校验仍在临时目录内）
     safe_filename = Path(filename).name
-    archive_path = temp_dir / safe_filename
+    archive_path = (temp_dir / safe_filename).resolve()
+    if not archive_path.is_relative_to(temp_dir.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名"
+        )
 
     try:
         # 流式保存上传的文件
         logger.info(f"[边界导入] 开始保存文件: {archive_path}")
-        with open(archive_path, "wb") as f:
-            total_size = 0
+        total_size = 0
+        with archive_path.open("wb") as f:
             while chunk := await file.read(1024 * 1024):  # 每次读取 1MB
                 f.write(chunk)
                 total_size += len(chunk)
-            logger.info(f"[边界导入] 文件保存完成，大小: {total_size} bytes")
+        logger.info(f"[边界导入] 文件保存完成，大小: {total_size} bytes")
 
         # 检查文件大小
         file_size = archive_path.stat().st_size
@@ -1715,14 +1750,18 @@ async def import_admin_divisions_upload(
     temp_dir = Path(settings.TEMP_DIR) / f"datav_import_{uuid.uuid4()}"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    # 保存上传的文件
+    # 保存上传的文件（防止路径遍历：剥离目录成分并校验仍在临时目录内）
     safe_filename = Path(filename).name
-    archive_path = temp_dir / safe_filename
+    archive_path = (temp_dir / safe_filename).resolve()
+    if not archive_path.is_relative_to(temp_dir.resolve()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件名"
+        )
 
     try:
         content = await file.read()
-        with open(archive_path, "wb") as f:
-            f.write(content)
+        archive_path.write_bytes(content)
 
         if archive_path.stat().st_size == 0:
             raise HTTPException(

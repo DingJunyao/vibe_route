@@ -134,7 +134,11 @@ def _convert_gb5765_fonts_to_woff2():
     
     for font_name in gb_fonts:
         source_path = fonts_dir / font_name
-        woff2_path = woff2_dir / font_name.replace('.ttf', '.woff2')
+        # 路径防御：缓存名固定来自白名单字体名，显式校验仍位于缓存目录内
+        woff2_path = (woff2_dir / font_name.replace('.ttf', '.woff2')).resolve()
+        if not woff2_path.is_relative_to(woff2_dir.resolve()):
+            print(f"ERROR: invalid font cache path for {font_name}, skipping")
+            continue
         
         # Check if WOFF2 already exists and is up to date
         need_conversion = True
@@ -213,8 +217,7 @@ def _convert_gb5765_fonts_to_woff2():
             woff2_content = woff2_output.getvalue()
             
             # Write to cache directory
-            with open(woff2_path, 'wb') as f:
-                f.write(woff2_content)
+            woff2_path.write_bytes(woff2_content)
             
             print(f"  {font_name}: Converted to WOFF2 ({len(woff2_content)} bytes, removed {len(problematic_tables)} tables)")
         except Exception as e:

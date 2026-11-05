@@ -599,12 +599,16 @@ class FontService:
         upload_dir = upload_root / str(user_id)
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        file_path = resolve_contained_path(upload_dir, upload_dir / filename)
+        file_path = resolve_contained_path(upload_dir, upload_dir / Path(filename).name)
         if file_path is None:
             raise HTTPException(400, "字体文件路径无效")
 
-        with open(file_path, 'wb') as f:
-            f.write(file_content)
+        # 路径穿越防御（显式二次校验）：文件名来自外部输入，必须仍位于用户字体目录内
+        file_path = file_path.resolve()
+        if not file_path.is_relative_to(upload_dir.resolve()):
+            raise HTTPException(400, "字体文件路径无效")
+
+        file_path.write_bytes(file_content)
 
         # 读取字体元数据
         font_name = filename.rsplit('.', 1)[0]  # 默认使用文件名（去掉扩展名）

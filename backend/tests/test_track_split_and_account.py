@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from xml.etree import ElementTree
+from defusedxml import ElementTree
 
 import pytest
 

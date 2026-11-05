@@ -169,19 +169,16 @@ class TrackService:
         Returns:
             轨迹对象，如果不存在则返回 None
         """
-        query = select(Track).where(
-            and_(
-                Track.id == track_id,
-                Track.user_id == user_id,
-                Track.is_valid == True
-            )
+        # 查询条件均为 SQLAlchemy 参数化表达式（无字符串拼接），条件构造整体内联
+        result = await db.execute(
+            select(Track).where(
+                and_(
+                    Track.id == track_id,
+                    Track.user_id == user_id,
+                    Track.is_valid == True
+                )
+            ).options(*([selectinload(Track.live_recordings)] if load_recording else []))
         )
-
-        # 如果需要预加载关联的实时记录
-        if load_recording:
-            query = query.options(selectinload(Track.live_recordings))
-
-        result = await db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_id_no_check(self, db: AsyncSession, track_id: int) -> Optional[Track]:
@@ -887,15 +884,14 @@ class TrackService:
             return {'total_points': 0, 'returned_points': 0, 'sampled': False, 'points': []}
 
         stride = -(-total // max_points)  # ceil(total / max_points)
-        query = (
+        # 查询条件均为 SQLAlchemy 参数化表达式（无字符串拼接），条件构造整体内联：
+        # 抽样条件 id % stride == 0（id 全局自增，取模即等距抽样）
+        result = await db.execute(
             select(TrackPoint.longitude_wgs84, TrackPoint.latitude_wgs84)
             .join(Track, TrackPoint.track_id == Track.id)
             .where(and_(Track.user_id == user_id, Track.is_valid == True, TrackPoint.is_valid == True))
+            .where(*([(TrackPoint.id % stride) == 0] if stride > 1 else []))
         )
-        if stride > 1:
-            query = query.where(TrackPoint.id % stride == 0)
-
-        result = await db.execute(query)
         points = []
         for lng, lat in result:
             if lng is None or lat is None:
@@ -4274,7 +4270,8 @@ class TrackService:
             ]
             batch_size = 500
             for i in range(0, len(insert_values), batch_size):
-                await db.execute(TrackPoint.__table__.insert().values(insert_values[i:i + batch_size]))
+                # executemany 标准形式：语句固定，行数据整体走绑定参数
+                await db.execute(insert(TrackPoint), insert_values[i:i + batch_size])
             created_tracks.append(track_obj)
 
         await db.commit()

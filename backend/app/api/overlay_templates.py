@@ -315,7 +315,10 @@ def _serve_font_file(font_path: Path):
     else:
         woff2_name = font_path.name + '.woff2'
 
-    woff2_path = woff2_dir / woff2_name
+    # 路径穿越防御：缓存文件名来自字体文件名，显式校验仍位于缓存目录内
+    woff2_path = (woff2_dir / Path(woff2_name).name).resolve()
+    if not woff2_path.is_relative_to(woff2_dir.resolve()):
+        raise HTTPException(400, "字体缓存路径无效")
 
     if woff2_path.exists():
         # Check if cache is newer than source
@@ -411,8 +414,7 @@ def _serve_font_file(font_path: Path):
                     # Save to cache for future use
                     try:
                         woff2_path.parent.mkdir(exist_ok=True)
-                        with open(woff2_path, 'wb') as f:
-                            f.write(content)
+                        woff2_path.write_bytes(content)
                         print(f"DEBUG: Cached WOFF2 to {woff2_path}")
                     except Exception as e:
                         print(f"DEBUG: Failed to cache WOFF2: {e}")
@@ -438,8 +440,7 @@ def _serve_font_file(font_path: Path):
                     # Save to cache for future use
                     try:
                         woff2_path.parent.mkdir(exist_ok=True)
-                        with open(woff2_path, 'wb') as f:
-                            f.write(content)
+                        woff2_path.write_bytes(content)
                         print(f"DEBUG: Cached WOFF2 to {woff2_path}")
                     except Exception as e:
                         print(f"DEBUG: Failed to cache WOFF2: {e}")

@@ -213,16 +213,19 @@ class AdminDivisionImportService:
         force: bool
     ):
         """导入单个层级的行政区划"""
-        table_map = {
-            "province": ("province", None),
-            "city": ("city", "provinceCode"),
-            "area": ("area", "cityCode"),
+        # 表名与查询文本严格白名单：SQL 全部为字面量，任何外部输入都进不了查询结构
+        level_sql = {
+            "province": "SELECT * FROM province",
+            "city": "SELECT * FROM city",
+            "area": "SELECT * FROM area",
         }
+        if level not in level_sql:
+            raise ValueError(f"未知的行政区划层级: {level}")
 
-        table_name, parent_col = table_map.get(level, (level, None))
+        parent_col = {"province": None, "city": "provinceCode", "area": "cityCode"}[level]
 
         # 查询所有记录
-        cursor.execute(f"SELECT * FROM {table_name}")
+        cursor.execute(level_sql[level])
         rows = cursor.fetchall()
 
         batch = []
