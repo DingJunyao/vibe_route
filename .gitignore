@@ -109,6 +109,9 @@ backend/data/area_data/
 
 .spec-workflow/
 .serena/
+# 智能体工具本地配置/运行时缓存
+.v2c/
+.mimosa/
 
 # Git worktrees
 .worktrees/
