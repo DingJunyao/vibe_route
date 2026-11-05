@@ -109,6 +109,20 @@
 - 文件名 `track_{id}_animation_{ts}_{taskId前8位}.mp4`
 - 其余视图状态（起点/相机/朝向/标记/图层/缩放中心/画幅 zoom 修正）沿用既有方案，见 changelog
 
+## 邮件通知（录屏任务）
+
+录屏任务（动画导出）完成或失败时向用户邮箱发送通知邮件。实现为 `app/services/email_service.py`（模块级单例）。
+
+- **三级开关，全部满足才发送**：
+  1. 管理员总开关：configs 表 `email_notification_enabled`（默认关），Admin「系统配置 → 邮件通知」
+  2. 用户级开关：`user_configs.notify_recording_completed` / `notify_recording_failed`（默认关），Settings 页「通知设置」tab，经 `GET/PUT /api/user/config` 读写
+  3. SMTP 配置：configs 表 `email_config`（`host/port/username/password/from_email/use_ssl/starttls`，host 空=未配置），Admin「系统配置 → 邮件通知」可改，**存数据库不入 .env**，改完即生效无需重启
+- **模板**：`email_templates` 表（`template_key/subject/body/is_html`），启动时由 `email_service.init_default_templates()` 种子化（已存在不覆盖）；`recording_completed` / `recording_failed` 两套，Admin「邮件模板」tab 编辑，`{{变量}}` 占位符（app_name/username/track_name/finished_at/error/download_url，未知变量保留原文）。测试发送 `POST /api/admin/email-templates/{key}/test`（发给当前管理员，不检查开关）
+- **发送**：aiosmtplib（`use_tls`=use_ssl，`start_tls`=starttls 且与 SSL 互斥），fire-and-forget——`_run_export` 的 completed 分支与 failed 分支、`recover_on_startup()` 重启中断恢复处调 `email_service.schedule_notify()`（asyncio.create_task + 异常仅记日志，绝不阻塞导出）；cancelled/expired 不发
+- **迁移**：`alembic/versions/019_add_email_templates_and_notify_prefs.py`，**同时是合并迁移**（down_revision 为 017+018 元组，收敛 017/018 双 head 分叉）；配套 `.sql.sqlite/.sql.mysql/.sql.postgresql` 手动脚本。注意：001-015 的老迁移假设先 `init_db()` create_all 出基线表，全新空库直接 `alembic upgrade head` 会挂在 001——沿用「create_all 打底 + stamp + upgrade」或手动 SQL 的既有部署方式
+- 用户名自助修改：`PUT /api/auth/profile`（仅 username，3-50 唯一校验，软删用户占名由 IntegrityError 兜底 409）；管理员编辑用户：`UserUpdate` 增加 username，Admin「用户管理」操作列新增「编辑」（用户名+邮箱）
+- Settings 页（`/settings`）样式已统一为全站惯例：el-container 头部（ArrowLeft/HomeFilled nav-btn + 用户下拉）、`el-tabs type="border-card"`、背景 `#f5f7fa`、断点 1366px（原为 768px）
+
 ## 合并轨迹
 
 ### 流程（两步式，独立页面 `/merge`）

@@ -104,6 +104,46 @@
                     </el-form-item>
                   </div>
 
+                  <!-- 邮件通知设置 -->
+                  <div class="form-section">
+                    <div class="section-title">邮件通知</div>
+                    <el-form-item label="邮件通知">
+                      <el-switch v-model="config.email_notification_enabled" />
+                      <span class="form-tip">录屏任务完成/失败时向用户邮箱发送通知的总开关；用户可在个人设置中自行开关</span>
+                    </el-form-item>
+                    <template v-if="config.email_notification_enabled">
+                      <el-form-item label="SMTP 服务器">
+                        <el-input v-model="config.email_config.host" placeholder="如 smtp.qq.com" clearable
+                          class="config-input" />
+                        <span class="form-tip">留空表示未配置，通知邮件将被跳过</span>
+                      </el-form-item>
+                      <el-form-item label="端口">
+                        <el-input-number v-model="config.email_config.port" :min="1" :max="65535" />
+                        <span class="form-tip">465 常配 SSL，587 常配 STARTTLS</span>
+                      </el-form-item>
+                      <el-form-item label="账号">
+                        <el-input v-model="config.email_config.username" placeholder="SMTP 登录账号" clearable
+                          class="config-input" />
+                      </el-form-item>
+                      <el-form-item label="密码/授权码">
+                        <el-input v-model="config.email_config.password" type="password" show-password clearable
+                          class="config-input" />
+                      </el-form-item>
+                      <el-form-item label="发件人地址">
+                        <el-input v-model="config.email_config.from_email" placeholder="留空时使用账号" clearable
+                          class="config-input" />
+                      </el-form-item>
+                      <el-form-item label="SSL">
+                        <el-switch v-model="config.email_config.use_ssl" />
+                        <span class="form-tip">SSL 直连（通常 465 端口使用）</span>
+                      </el-form-item>
+                      <el-form-item label="STARTTLS">
+                        <el-switch v-model="config.email_config.starttls" />
+                        <span class="form-tip">在普通连接上升级 STARTTLS（通常 587 端口使用）</span>
+                      </el-form-item>
+                    </template>
+                  </div>
+
                   <!-- 地图设置 -->
                   <div class="form-section">
                     <div class="section-title">地图设置</div>
@@ -583,8 +623,11 @@
                     {{ formatDateTime(row.created_at) }}
                   </template>
                 </el-table-column>
-                <el-table-column label="操作" width="280" fixed="right">
+                <el-table-column label="操作" width="330" fixed="right">
                   <template #default="{ row }">
+                    <el-button type="primary" size="small" text @click="showEditUserDialog(row)">
+                      编辑
+                    </el-button>
                     <el-button v-if="!row.is_admin && !isCurrentUser(row) && !isFirstUser(row)" type="primary"
                       size="small" text @click="toggleUserAdmin(row)">
                       设为管理员
@@ -647,6 +690,9 @@
                     </div>
                   </div>
                   <div class="mobile-card-actions">
+                    <el-button type="primary" size="small" @click="showEditUserDialog(user)">
+                      编辑
+                    </el-button>
                     <el-button v-if="!user.is_admin && !isCurrentUser(user) && !isFirstUser(user)" type="primary"
                       size="small" @click="toggleUserAdmin(user)">
                       设为管理员
@@ -1021,6 +1067,69 @@
             </div>
           </el-tab-pane>
 
+          <!-- 邮件模板 -->
+          <el-tab-pane label="邮件模板" name="email-templates">
+            <div v-if="loadingEmailTemplates" class="list-skeleton">
+              <el-skeleton :rows="5" animated />
+            </div>
+            <el-card v-else shadow="never">
+              <el-alert type="info" :closable="false" class="template-alert">
+                <p>模板支持 <code v-pre>{{ 变量 }}</code> 占位符，发送时自动替换为实际内容；保存后立即生效。需先在「系统配置 → 邮件通知」中开启并配置 SMTP。</p>
+              </el-alert>
+
+              <!-- 桌面端表格 -->
+              <el-table :data="emailTemplates" class="pc-table" style="width: 100%">
+                <el-table-column prop="name" label="模板" width="170" />
+                <el-table-column prop="subject" label="邮件主题" min-width="220" show-overflow-tooltip />
+                <el-table-column label="格式" width="90">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.is_html ? 'warning' : 'info'">
+                      {{ row.is_html ? 'HTML' : '纯文本' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="220" fixed="right">
+                  <template #default="{ row }">
+                    <el-button type="primary" size="small" text @click="showEditTemplateDialog(row)">
+                      编辑
+                    </el-button>
+                    <el-button type="info" size="small" text
+                      :loading="sendingTestKey === row.template_key" @click="sendTemplateTest(row)">
+                      发送测试邮件
+                    </el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+
+              <!-- 移动端卡片列表 -->
+              <div class="mobile-card-list">
+                <div v-for="template in emailTemplates" :key="template.template_key" class="mobile-user-card">
+                  <div class="mobile-card-header">
+                    <span class="mobile-card-title">{{ template.name }}</span>
+                    <el-tag size="small" :type="template.is_html ? 'warning' : 'info'">
+                      {{ template.is_html ? 'HTML' : '纯文本' }}
+                    </el-tag>
+                  </div>
+                  <div class="mobile-card-body">
+                    <div class="mobile-card-row">
+                      <span class="mobile-card-label">邮件主题</span>
+                      <span class="mobile-card-value">{{ template.subject }}</span>
+                    </div>
+                  </div>
+                  <div class="mobile-card-actions">
+                    <el-button type="primary" size="small" @click="showEditTemplateDialog(template)">
+                      编辑
+                    </el-button>
+                    <el-button type="info" size="small" :loading="sendingTestKey === template.template_key"
+                      @click="sendTemplateTest(template)">
+                      发送测试邮件
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </el-card>
+          </el-tab-pane>
+
           <!-- 边界数据管理（已弃用，保留代码但不显示） -->
           <!-- @deprecated 此功能已被 DataV GeoJSON 在线导入取代，保留代码以备不时之需 -->
           <el-tab-pane v-if="false" label="边界数据" name="bounds-data">
@@ -1178,6 +1287,58 @@
       </template>
     </el-dialog>
 
+    <!-- 编辑用户对话框 -->
+    <el-dialog v-model="editUserDialogVisible" title="编辑用户" :width="isMobile ? '95%' : '500px'"
+      class="responsive-dialog" :close-on-click-modal="false">
+      <el-form :model="editUserForm" label-width="100px" class="dialog-form">
+        <el-form-item label="用户名">
+          <el-input v-model="editUserForm.username" maxlength="50" show-word-limit placeholder="3-50 个字符" clearable />
+        </el-form-item>
+        <el-form-item label="邮箱">
+          <el-input v-model="editUserForm.email" type="email" placeholder="用于接收通知邮件" clearable />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editUserDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingUser" @click="confirmEditUser">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑邮件模板对话框 -->
+    <el-dialog v-model="editTemplateDialogVisible" :title="`编辑邮件模板：${editTemplateForm.name}`"
+      :width="isMobile ? '95%' : '680px'" class="responsive-dialog" :close-on-click-modal="false">
+      <el-form :model="editTemplateForm" label-width="90px" class="dialog-form">
+        <el-form-item label="邮件主题">
+          <el-input v-model="editTemplateForm.subject" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="正文格式">
+          <el-radio-group v-model="editTemplateForm.is_html">
+            <el-radio :value="false">纯文本</el-radio>
+            <el-radio :value="true">HTML</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="正文">
+          <el-input v-model="editTemplateForm.body" type="textarea" :rows="12" />
+        </el-form-item>
+        <el-form-item label="可用变量">
+          <div class="template-variables">
+            <el-tag v-for="variable in editTemplateForm.variables" :key="variable" size="small"
+              class="template-variable-tag">
+              {{ variableTagText(variable) }}
+            </el-tag>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editTemplateDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingTemplate" @click="saveTemplate">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+
     <!-- 未保存更改确认对话框 -->
     <el-dialog v-model="unsavedChangesDialogVisible" title="提示" :width="isMobile ? '90%' : '420px'"
       class="unsaved-changes-dialog">
@@ -1247,7 +1408,7 @@ import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled, Refresh } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
-import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask, type AdminDivisionStatusResponse, type ImportTaskProgress } from '@/api/admin'
+import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask, type AdminDivisionStatusResponse, type ImportTaskProgress, type EmailTemplate, type EmailTemplateMeta } from '@/api/admin'
 import { animationTaskApi, type AnimationExportTask, type AnimationTaskStatus } from '@/api/animationTask'
 import { roadSignApi } from '@/api/roadSign'
 import { useAuthStore } from '@/stores/auth'
@@ -1362,6 +1523,31 @@ const resetPasswordForm = reactive({
   confirm_password: '',
 })
 
+// 编辑用户（用户名/邮箱）
+const editUserDialogVisible = ref(false)
+const savingUser = ref(false)
+const editUserForm = reactive({
+  user_id: 0,
+  username: '',
+  email: '',
+})
+
+// 邮件模板
+const emailTemplates = ref<EmailTemplate[]>([])
+const emailTemplateMeta = ref<EmailTemplateMeta[]>([])
+const loadingEmailTemplates = ref(false)
+const editTemplateDialogVisible = ref(false)
+const savingTemplate = ref(false)
+const sendingTestKey = ref('')
+const editTemplateForm = reactive({
+  template_key: '',
+  name: '',
+  subject: '',
+  body: '',
+  is_html: false,
+  variables: [] as string[],
+})
+
 // 未保存更改对话框
 const unsavedChangesDialogVisible = ref(false)
 let unsavedChangesResolve: ((action: 'save' | 'leave' | 'cancel') => void) | null = null
@@ -1403,6 +1589,8 @@ const config = reactive<SystemConfig>({
   animation_export_max_concurrency: 1,
   animation_export_retention_days: 30,
   animation_export_max_queued_per_user: 3,
+  email_notification_enabled: false,  // 邮件通知总开关
+  email_config: { host: '', port: 465, username: '', password: '', from_email: '', use_ssl: true, starttls: false },
 })
 
 // 所有地图层列表（按固定顺序）
@@ -2293,6 +2481,123 @@ async function confirmResetPassword() {
   }
 }
 
+// 显示编辑用户对话框
+function showEditUserDialog(user: User) {
+  editUserForm.user_id = user.id
+  editUserForm.username = user.username
+  editUserForm.email = user.email || ''
+  editUserDialogVisible.value = true
+}
+
+// 确认编辑用户
+async function confirmEditUser() {
+  const username = editUserForm.username.trim()
+  if (username.length < 3 || username.length > 50) {
+    ElMessage.warning('用户名长度需在 3-50 个字符之间')
+    return
+  }
+  if (!editUserForm.email.trim()) {
+    ElMessage.warning('请输入邮箱')
+    return
+  }
+
+  savingUser.value = true
+  try {
+    await adminApi.updateUser(editUserForm.user_id, {
+      username,
+      email: editUserForm.email.trim(),
+    })
+    ElMessage.success('用户信息已更新')
+    editUserDialogVisible.value = false
+    await loadUsers()
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    savingUser.value = false
+  }
+}
+
+// 加载邮件模板列表
+function variableTagText(variable: string) {
+  // 模板里不能直接写字面 {{}}（会被解析为插值定界符），由 script 侧拼接
+  return '{{' + variable + '}}'
+}
+
+async function loadEmailTemplates() {
+  loadingEmailTemplates.value = true
+  try {
+    const [templates, meta] = await Promise.all([
+      adminApi.getEmailTemplates(),
+      adminApi.getEmailTemplateMeta(),
+    ])
+    if (!isMounted.value) return
+    emailTemplateMeta.value = meta
+    emailTemplates.value = templates.map(t => ({
+      ...t,
+      name: meta.find(m => m.template_key === t.template_key)?.name || t.template_key,
+    }))
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    if (isMounted.value) {
+      loadingEmailTemplates.value = false
+    }
+  }
+}
+
+// 显示编辑邮件模板对话框
+function showEditTemplateDialog(template: EmailTemplate) {
+  editTemplateForm.template_key = template.template_key
+  editTemplateForm.name = template.name
+  editTemplateForm.subject = template.subject
+  editTemplateForm.body = template.body
+  editTemplateForm.is_html = template.is_html
+  editTemplateForm.variables =
+    emailTemplateMeta.value.find(m => m.template_key === template.template_key)?.variables || []
+  editTemplateDialogVisible.value = true
+}
+
+// 保存邮件模板
+async function saveTemplate() {
+  if (!editTemplateForm.subject.trim()) {
+    ElMessage.warning('请输入邮件主题')
+    return
+  }
+  if (!editTemplateForm.body.trim()) {
+    ElMessage.warning('请输入邮件正文')
+    return
+  }
+
+  savingTemplate.value = true
+  try {
+    await adminApi.updateEmailTemplate(editTemplateForm.template_key, {
+      subject: editTemplateForm.subject,
+      body: editTemplateForm.body,
+      is_html: editTemplateForm.is_html,
+    })
+    ElMessage.success('模板已保存')
+    editTemplateDialogVisible.value = false
+    await loadEmailTemplates()
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    savingTemplate.value = false
+  }
+}
+
+// 发送测试邮件
+async function sendTemplateTest(template: EmailTemplate) {
+  sendingTestKey.value = template.template_key
+  try {
+    const response = await adminApi.sendTestEmail(template.template_key)
+    ElMessage.success(response.message || '测试邮件已发送')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    sendingTestKey.value = ''
+  }
+}
+
 // 加载邀请码列表
 async function loadInviteCodes() {
   loadingInviteCodes.value = true
@@ -2652,6 +2957,11 @@ watch(activeTab, async (newTab, oldTab) => {
     loadRecordingTasks()
   } else if (oldTab === 'recordings') {
     stopRecPolling()
+  }
+
+  // 切换到邮件模板 tab 时加载
+  if (newTab === 'email-templates' && emailTemplates.value.length === 0) {
+    loadEmailTemplates()
   }
 
   if (oldTab === 'config' && hasUnsavedConfigChanges()) {
@@ -4055,6 +4365,27 @@ onUnmounted(() => {
   margin: 0;
   font-size: 14px;
   color: #606266;
+}
+
+/* 邮件模板样式 */
+.template-alert {
+  margin-bottom: 16px;
+}
+
+.template-alert p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.template-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.template-variable-tag {
+  font-family: monospace;
 }
 
 /* 可滚动内容（桌面端） */

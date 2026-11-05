@@ -47,6 +47,8 @@ class UserConfigService:
         user_id: int,
         map_provider: Optional[str] = None,
         map_layers: Optional[dict] = None,
+        notify_recording_completed: Optional[bool] = None,
+        notify_recording_failed: Optional[bool] = None,
         updated_by: Optional[int] = None,
     ) -> Optional[UserConfig]:
         """更新用户配置"""
@@ -56,6 +58,10 @@ class UserConfigService:
             config.map_provider = map_provider
         if map_layers is not None:
             config.map_layers = map_layers
+        if notify_recording_completed is not None:
+            config.notify_recording_completed = notify_recording_completed
+        if notify_recording_failed is not None:
+            config.notify_recording_failed = notify_recording_failed
 
         config.updated_by = updated_by
         config.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)

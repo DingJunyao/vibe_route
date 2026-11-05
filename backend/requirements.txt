@@ -31,6 +31,7 @@ passlib[bcrypt]
 pydantic
 pydantic-settings  # env_file 功能所需；其传递依赖已含 python-dotenv，无需单列
 email-validator
+aiosmtplib
 
 # HTTP 客户端
 httpx

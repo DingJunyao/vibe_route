@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { authApi } from '@/api/auth'
-import type { User, LoginRequest, RegisterRequest, ChangePasswordRequest } from '@/api/auth'
+import type { User, LoginRequest, RegisterRequest, ChangePasswordRequest, ProfileUpdateRequest } from '@/api/auth'
 import { hashPassword } from '@/utils/crypto'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -57,6 +57,13 @@ export const useAuthStore = defineStore('auth', () => {
     return authApi.changePassword(data)
   }
 
+  // 更新个人资料（当前仅用户名），成功后同步本地用户信息
+  async function updateProfile(data: ProfileUpdateRequest) {
+    const updated = await authApi.updateProfile(data)
+    user.value = updated
+    return updated
+  }
+
   function logout() {
     token.value = null
     user.value = null
@@ -76,6 +83,7 @@ export const useAuthStore = defineStore('auth', () => {
     login,
     register,
     changePassword,
+    updateProfile,
     fetchCurrentUser,
     logout,
   }

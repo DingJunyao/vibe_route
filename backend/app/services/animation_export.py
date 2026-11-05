@@ -215,6 +215,10 @@ class AnimationExportService:
                     task.download_url = download_url
                     task.finished_at = get_utc_now()
                     await db.commit()
+                    # 录屏完成邮件通知（fire-and-forget，受总开关与用户级开关约束）
+                    if task.user_id:
+                        from .email_service import email_service
+                        email_service.schedule_notify(task.user_id, task_id, success=True)
 
         except asyncio.CancelledError:
             # 用户取消路径：DELETE 已先把状态置为 cancelled，这里无需改写；
@@ -242,6 +246,13 @@ class AnimationExportService:
                         task.error = "导出失败"
                         task.finished_at = get_utc_now()
                         await db.commit()
+                        # 录屏失败邮件通知（fire-and-forget，受总开关与用户级开关约束）
+                        if task.user_id:
+                            from .email_service import email_service
+                            email_service.schedule_notify(
+                                task.user_id, task_id, success=False,
+                                error=(str(e) or "导出失败")[:200],
+                            )
             except Exception:
                 pass
 
@@ -298,7 +309,15 @@ class AnimationExportService:
         from ..core.database import async_session_maker
 
         async with async_session_maker() as db:
-            result = await db.execute(
+            # 先取出将被标记中断的任务，用于发送失败通知
+            interrupted_result = await db.execute(
+                select(AnimationExportTask).where(AnimationExportTask.status == 'processing')
+            )
+            interrupted_info = [
+                (t.id, t.user_id) for t in interrupted_result.scalars().all()
+            ]
+
+            await db.execute(
                 update(AnimationExportTask)
                 .where(AnimationExportTask.status == 'processing')
                 .values(
@@ -309,8 +328,15 @@ class AnimationExportService:
                 )
             )
             await db.commit()
-            if result.rowcount:
-                logger.info(f"Marked {result.rowcount} interrupted animation export tasks as failed")
+            if interrupted_info:
+                logger.info(f"Marked {len(interrupted_info)} interrupted animation export tasks as failed")
+                # 重启导致的中断同样发送失败通知（受总开关与用户级开关约束）
+                from .email_service import email_service
+                for tid, uid in interrupted_info:
+                    if uid:
+                        email_service.schedule_notify(
+                            uid, tid, success=False, error='服务重启，任务中断'
+                        )
 
         await self.dispatch()
 

@@ -65,6 +65,17 @@ class IndonesiaRoadSignConfig(BaseModel):
     font_lower: Optional[str] = Field(None, description="白色区大字字体文件名（data/fonts/ 下）")
 
 
+class EmailConfig(BaseModel):
+    """SMTP 发件配置 schema（存 configs 表，host 为空 = 未配置）"""
+    host: str = Field(default="", description="SMTP 服务器地址，留空 = 未配置")
+    port: int = Field(default=465, ge=1, le=65535, description="SMTP 端口（465 常配 SSL，587 常配 STARTTLS）")
+    username: str = Field(default="", description="SMTP 登录账号")
+    password: str = Field(default="", description="SMTP 登录密码/授权码")
+    from_email: str = Field(default="", description="发件人地址，留空时使用 username")
+    use_ssl: bool = Field(default=True, description="使用 SSL 直连（SMTPS）")
+    starttls: bool = Field(default=False, description="在普通连接上升级 STARTTLS")
+
+
 class FontInfo(BaseModel):
     """字体文件信息 schema"""
     filename: str = Field(..., description="文件名")
@@ -88,6 +99,8 @@ class ConfigResponse(BaseModel):
     animation_export_retention_days: int = Field(default=30, description="录屏文件保存天数（0 = 永久）")
     animation_export_max_queued_per_user: int = Field(default=3, description="单用户最大排队任务数（0 = 不限制）")
     indonesia_road_sign: IndonesiaRoadSignConfig = Field(default_factory=IndonesiaRoadSignConfig)
+    email_notification_enabled: bool = Field(default=False, description="邮件通知总开关（录屏任务完成/失败）")
+    email_config: EmailConfig = Field(default_factory=EmailConfig)
 
     class Config:
         from_attributes = True
@@ -109,6 +122,8 @@ class ConfigUpdate(BaseModel):
     animation_export_retention_days: Optional[int] = Field(default=None, ge=0)
     animation_export_max_queued_per_user: Optional[int] = Field(default=None, ge=0)
     indonesia_road_sign: Optional[IndonesiaRoadSignConfig] = None
+    email_notification_enabled: Optional[bool] = None
+    email_config: Optional[EmailConfig] = None
 
 
 class PublicConfigResponse(BaseModel):

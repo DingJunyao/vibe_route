@@ -1,0 +1,21 @@
+-- 019: 邮件通知系统（email_templates 表 + user_configs 通知开关列；同时收敛 017/018 分叉）
+-- MySQL 手动执行脚本（与 alembic upgrade 二选一）
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id INT NOT NULL AUTO_INCREMENT,
+    template_key VARCHAR(50) NOT NULL,
+    subject VARCHAR(200) NOT NULL,
+    body TEXT NOT NULL,
+    is_html TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    created_by INT NULL,
+    updated_by INT NULL,
+    is_valid TINYINT(1) NOT NULL DEFAULT 1,
+    PRIMARY KEY (id),
+    UNIQUE INDEX ix_email_templates_template_key (template_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+ALTER TABLE user_configs
+    ADD COLUMN notify_recording_completed TINYINT(1) NOT NULL DEFAULT 0,
+    ADD COLUMN notify_recording_failed TINYINT(1) NOT NULL DEFAULT 0;

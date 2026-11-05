@@ -15,6 +15,7 @@ from app.models.user_config import UserConfig
 from app.models.interpolation import TrackInterpolation
 from app.models.overlay_template import OverlayTemplate, Font
 from app.models.animation_task import AnimationExportTask
+from app.models.email_template import EmailTemplate
 
 __all__ = [
     "Base",
@@ -34,4 +35,5 @@ __all__ = [
     "OverlayTemplate",
     "Font",
     "AnimationExportTask",
+    "EmailTemplate",
 ]

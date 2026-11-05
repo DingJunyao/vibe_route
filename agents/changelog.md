@@ -4,6 +4,12 @@
 
 ## 2026-11
 
+- 设置页统一 + 用户名修改 + 邮件通知系统（2026-11-05，worktree 分支 `feat/settings-email-notify`）：
+  - **背景**：/settings 样式与全站不符（无导航/用户下拉、断点误用 768px、tabs 非 border-card）；用户无法改名；email 字段从未使用
+  - **后端**：新表 `email_templates`（模板 `{{变量}}` 占位）+ `user_configs` 增 `notify_recording_completed/failed` 列（迁移 `019`，**同时为合并迁移收敛 017/018 双 head**，配套 SQLite/MySQL/PostgreSQL 手动 SQL）；`email_service.py`（aiosmtplib，SMTP 配置存 configs 表 `email_config`，总开关 `email_notification_enabled`，全部配置后台界面可改无需重启）；录屏任务 `_run_export` completed/failed 分支与 `recover_on_startup()` 挂 `schedule_notify()`（fire-and-forget，cancelled/expired 不发）；新路由 `PUT /auth/profile`（自助改名）、`/admin/email-templates`（列表/编辑/测试发送）、`UserUpdate`+username（管理员编辑用户名/邮箱）
+  - **前端**：Settings.vue 按 TrackList 惯例重写头部（nav-btn+用户下拉）、border-card tabs、断点 1366px，新增「通知设置」tab（完成/失败两个开关即时保存）与改名对话框；Admin.vue 新增「邮件模板」tab（表格+编辑对话框+测试发送，变量标签经 `variableTagText()` 由 script 拼串——模板文本里写不了字面 `{{}}`，会被 Vue 插值定界符截断）、系统配置「邮件通知」section（总开关+SMTP 表单）、用户管理「编辑」对话框（用户名+邮箱）
+  - **依赖**：requirements.txt ↔ pyproject.toml 同步加 aiosmtplib
+  - **验证**：全新 create_all 基线库 `upgrade head` 全链通过（含合并迁移）+ 137MB 副本库从 eac60779d33a 升级成功 + downgrade 到 017 回滚干净；pytest 107 过（6 failed+14 error 为印尼路牌域既有环境问题，stash 基线对照相同）；vite build 过；headless Playwright E2E 18 项断言全过（样式结构/改名对话框/通知开关持久化/SMTP 表单回显/模板编辑/编辑用户）；本地 SMTP sink 实收 3 封邮件（完成/失败/测试发送，占位符渲染正确），总开关关闭与用户级开关未开时日志确认跳过
 - 路牌模板随应用打包（2026-11-04 第二笔）：
   - **问题**：路牌 SVG 模板（id_sheild、expwy_1/2/4(+_name)、way_num 共 8 个）放在 `backend/data/templates/`，而 `.dockerignore` 排除 `backend/data`，且 Docker 里 `data/` 会被挂载卷覆盖 → 镜像内根本没有模板，全新部署时 CN 路牌静默降级、印尼盾牌直接 `FileNotFoundError`
   - **修复**：`git mv` 到 `backend/app/assets/road_sign_templates/` 随 `COPY backend/app ./app` 进镜像；`app/core/config.py` 新增 `BUNDLED_ROAD_SIGN_TEMPLATES_DIR` + `resolve_road_sign_template()`（`data/templates/` 优先，兼容旧部署手工定制；缺省用打包资源；两者都缺失时仍返回 data 路径保持原报错行为）；`road_sign_service.py` 印尼模板解析与 `svg_gen.py` 两处模板路径改走 resolver（原 `TEMPLATE_DIR` 常量移除）；`config_service.py` 默认值注释与 schema description 同步

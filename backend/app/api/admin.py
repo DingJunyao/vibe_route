@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, case
 from loguru import logger
@@ -24,6 +25,7 @@ from app.schemas.config import (
     FontConfig,
     FontInfo,
     IndonesiaRoadSignConfig,
+    EmailConfig,
 )
 from app.services.user_service import user_service
 from app.services.config_service import config_service
@@ -144,6 +146,22 @@ async def update_user(
     # 构建更新数据
     update_data = user_update.model_dump(exclude_unset=True)
 
+    # 唯一性校验（用户名/邮箱，改回自己当前值时放行）
+    if "username" in update_data and update_data["username"] != user.username:
+        existing = await user_service.get_by_username(db, update_data["username"])
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="用户名已被使用",
+            )
+    if "email" in update_data and update_data["email"] != user.email:
+        existing = await user_service.get_by_email(db, update_data["email"])
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="邮箱已被使用",
+            )
+
     # 不允许修改自己的管理员状态和启用状态
     if user_id == current_admin.id:
         if "is_admin" in update_data:
@@ -191,7 +209,15 @@ async def update_user(
                 detail="系统至少需要保留一位管理员",
             )
 
-    updated_user = await user_service.update(db, user, current_admin.id, **update_data)
+    try:
+        updated_user = await user_service.update(db, user, current_admin.id, **update_data)
+    except IntegrityError:
+        # 软删除用户仍占用 username/email 唯一索引兜底
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="用户名或邮箱已被使用",
+        )
     return UserResponse.model_validate(updated_user)
 
 
@@ -324,6 +350,8 @@ async def get_config(
         animation_export_retention_days=configs.get("animation_export_retention_days", 30),
         animation_export_max_queued_per_user=configs.get("animation_export_max_queued_per_user", 3),
         indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
+        email_notification_enabled=configs.get("email_notification_enabled", False),
+        email_config=EmailConfig(**(configs.get("email_config") or {})),
     )
 
 
@@ -372,6 +400,8 @@ async def update_config(
         animation_export_retention_days=configs.get("animation_export_retention_days", 30),
         animation_export_max_queued_per_user=configs.get("animation_export_max_queued_per_user", 3),
         indonesia_road_sign=IndonesiaRoadSignConfig(**configs.get("indonesia_road_sign") or {}),
+        email_notification_enabled=configs.get("email_notification_enabled", False),
+        email_config=EmailConfig(**(configs.get("email_config") or {})),
     )
 
 

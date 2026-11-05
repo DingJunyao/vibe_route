@@ -26,9 +26,15 @@ class UserLogin(BaseModel):
 
 class UserUpdate(BaseModel):
     """用户更新 schema（管理员用）"""
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = None
     is_admin: Optional[bool] = None
+
+
+class ProfileUpdate(BaseModel):
+    """个人资料更新 schema（用户自助）"""
+    username: str = Field(..., min_length=3, max_length=50)
 
 
 class ResetPassword(BaseModel):

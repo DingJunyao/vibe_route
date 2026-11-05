@@ -28,6 +28,10 @@ export interface ChangePasswordRequest {
   new_password: string
 }
 
+export interface ProfileUpdateRequest {
+  username: string
+}
+
 export interface AuthResponse {
   access_token: string
   token_type: string
@@ -66,6 +70,11 @@ export const authApi = {
   // 修改当前用户密码
   changePassword(data: ChangePasswordRequest): Promise<{ message: string }> {
     return http.post('/auth/change-password', data)
+  },
+
+  // 更新个人资料（当前仅用户名）
+  updateProfile(data: ProfileUpdateRequest): Promise<User> {
+    return http.put('/auth/profile', data)
   },
 
   // 登出

@@ -32,6 +32,17 @@ class ConfigService:
         "animation_export_max_concurrency": 1,     # 同时录制的任务数上限
         "animation_export_retention_days": 30,     # 录屏文件保存天数（按任务结束时间起算，0 = 永久）
         "animation_export_max_queued_per_user": 3,  # 单用户最大排队任务数（0 = 不限制）
+        # 邮件通知（录屏任务完成/失败）
+        "email_notification_enabled": False,  # 管理员总开关，关闭时所有用户都不发送
+        "email_config": {
+            "host": "",          # SMTP 服务器地址，留空 = 未配置
+            "port": 465,         # 465 常配 SSL，587 常配 STARTTLS
+            "username": "",      # SMTP 登录账号
+            "password": "",      # SMTP 登录密码/授权码
+            "from_email": "",    # 发件人地址，留空时使用 username
+            "use_ssl": True,     # 使用 SSL 直连（SMTPS）
+            "starttls": False,   # 在普通连接上升级 STARTTLS
+        },
         "indonesia_road_sign": {
             "template": "id_sheild.svg",      # 随应用打包于 app/assets/road_sign_templates/，可放 data/templates/ 覆盖
             "tol_keywords": ["收费", "Tol"],   # TOL 判定：ASCII 词边界 + 中文子串（见 indonesia.py）
@@ -283,6 +294,12 @@ class ConfigService:
                     elif config.key == 'indonesia_road_sign' and isinstance(parsed_value, dict):
                         # 与默认配置深度合并，新增默认键不因 DB 旧值丢失
                         for key, value in self.DEFAULT_CONFIGS['indonesia_road_sign'].items():
+                            if key not in parsed_value:
+                                parsed_value[key] = value
+                        configs[config.key] = parsed_value
+                    elif config.key == 'email_config' and isinstance(parsed_value, dict):
+                        # 与默认配置深度合并，新增默认键不因 DB 旧值丢失
+                        for key, value in self.DEFAULT_CONFIGS['email_config'].items():
                             if key not in parsed_value:
                                 parsed_value[key] = value
                         configs[config.key] = parsed_value

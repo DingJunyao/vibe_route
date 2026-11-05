@@ -6,6 +6,9 @@ export interface UserConfig {
   user_id: number
   map_provider: string | null
   map_layers: Record<string, any> | null
+  // 录屏任务邮件通知开关（还需管理员开启总开关才生效）
+  notify_recording_completed: boolean
+  notify_recording_failed: boolean
   created_at: string
   updated_at: string
 }
@@ -13,6 +16,8 @@ export interface UserConfig {
 export interface UserConfigUpdate {
   map_provider?: string | null
   map_layers?: Record<string, any> | null
+  notify_recording_completed?: boolean
+  notify_recording_failed?: boolean
 }
 
 // 用户配置 API

@@ -1,17 +1,61 @@
 <template>
-  <div class="settings-page">
-    <el-header class="page-header">
-      <h1>设置</h1>
+  <el-container class="settings-container">
+    <el-header>
+      <div class="header-left">
+        <el-button @click="$router.push('/')" :icon="ArrowLeft" class="nav-btn" />
+        <el-button @click="$router.push('/home')" :icon="HomeFilled" class="nav-btn home-nav-btn" />
+        <h1>设置</h1>
+      </div>
+      <div class="header-right">
+        <el-dropdown @command="handleCommand">
+          <span class="user-info">
+            <el-icon><User /></el-icon>
+            <span class="username">{{ authStore.user?.username }}</span>
+            <el-icon class="el-icon--right"><arrow-down /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="recordings">
+                <el-icon><Film /></el-icon>
+                录屏任务
+              </el-dropdown-item>
+              <el-dropdown-item command="admin" v-if="authStore.user?.is_admin">
+                <el-icon><Setting /></el-icon>
+                后台管理
+              </el-dropdown-item>
+              <el-dropdown-item class="dropdown-divider" :disabled="true" />
+              <el-dropdown-item command="logout">
+                <el-icon><SwitchButton /></el-icon>
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
     </el-header>
 
-    <el-main class="page-main">
-      <el-tabs v-model="activeTab" class="settings-tabs">
+    <el-main class="main">
+      <el-tabs v-model="activeTab" type="border-card" class="settings-tabs">
         <!-- 用户信息选项卡 -->
         <el-tab-pane label="用户信息" name="profile">
-          <el-card class="profile-card">
+          <el-card class="profile-card" shadow="never">
+            <template #header>
+              <span>账户信息</span>
+            </template>
             <el-descriptions :column="1" border>
               <el-descriptions-item label="用户名">
-                {{ authStore.user?.username }}
+                <div class="profile-value">
+                  <span>{{ authStore.user?.username }}</span>
+                  <el-button
+                    type="primary"
+                    size="small"
+                    text
+                    :icon="Edit"
+                    @click="openEditUsernameDialog"
+                  >
+                    修改用户名
+                  </el-button>
+                </div>
               </el-descriptions-item>
               <el-descriptions-item label="邮箱">
                 {{ authStore.user?.email }}
@@ -25,22 +69,23 @@
               </el-descriptions-item>
             </el-descriptions>
           </el-card>
-          <el-card class='password-card'>
+
+          <el-card class="password-card" shadow="never">
             <template #header>
               <span>修改密码</span>
             </template>
-            <el-form label-width='90px' class='password-form' @submit.prevent>
-              <el-form-item label='当前密码'>
-                <el-input v-model='oldPassword' type='password' show-password autocomplete='current-password' />
+            <el-form label-width="90px" class="password-form" @submit.prevent>
+              <el-form-item label="当前密码">
+                <el-input v-model="oldPassword" type="password" show-password autocomplete="current-password" />
               </el-form-item>
-              <el-form-item label='新密码'>
-                <el-input v-model='newPassword' type='password' show-password autocomplete='new-password' />
+              <el-form-item label="新密码">
+                <el-input v-model="newPassword" type="password" show-password autocomplete="new-password" />
               </el-form-item>
-              <el-form-item label='确认密码'>
-                <el-input v-model='confirmPassword' type='password' show-password autocomplete='new-password' />
+              <el-form-item label="确认密码">
+                <el-input v-model="confirmPassword" type="password" show-password autocomplete="new-password" />
               </el-form-item>
               <el-form-item>
-                <el-button type='primary' :loading='changingPassword' @click='submitPasswordChange'>
+                <el-button type="primary" :loading="changingPassword" @click="submitPasswordChange">
                   修改密码
                 </el-button>
               </el-form-item>
@@ -48,9 +93,47 @@
           </el-card>
         </el-tab-pane>
 
+        <!-- 通知设置选项卡 -->
+        <el-tab-pane label="通知设置" name="notify">
+          <el-card class="notify-card" shadow="never">
+            <template #header>
+              <span>录屏任务邮件通知</span>
+            </template>
+            <p class="settings-hint">
+              录屏任务完成或失败时，向您的账户邮箱（{{ authStore.user?.email || '未设置' }}）发送通知邮件。
+              需管理员开启邮件通知后方可送达。
+            </p>
+            <el-skeleton :rows="2" animated v-if="notifyLoading" />
+            <template v-else>
+              <div class="notify-row">
+                <div class="notify-info">
+                  <div class="notify-label">录制完成通知</div>
+                  <div class="notify-desc">录屏任务完成后发送邮件</div>
+                </div>
+                <el-switch
+                  v-model="notifyCompleted"
+                  :loading="notifySaving"
+                  @change="saveNotifySettings"
+                />
+              </div>
+              <div class="notify-row">
+                <div class="notify-info">
+                  <div class="notify-label">录制失败通知</div>
+                  <div class="notify-desc">录屏任务失败或中断时发送邮件</div>
+                </div>
+                <el-switch
+                  v-model="notifyFailed"
+                  :loading="notifySaving"
+                  @change="saveNotifySettings"
+                />
+              </div>
+            </template>
+          </el-card>
+        </el-tab-pane>
+
         <!-- 地图设置选项卡 -->
         <el-tab-pane label="地图设置" name="map">
-          <el-card class="map-settings-card">
+          <el-card class="map-settings-card" shadow="never">
             <template #header>
               <div class="card-header">
                 <span>地图配置</span>
@@ -200,19 +283,58 @@
         </el-tab-pane>
       </el-tabs>
     </el-main>
-  </div>
+
+    <!-- 修改用户名对话框 -->
+    <el-dialog
+      v-model="editUsernameDialogVisible"
+      title="修改用户名"
+      :width="isMobile ? '95%' : '420px'"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="80px" @submit.prevent>
+        <el-form-item label="用户名">
+          <el-input
+            v-model="editUsername"
+            maxlength="50"
+            show-word-limit
+            placeholder="3-50 个字符"
+            @keyup.enter="submitUsernameChange"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editUsernameDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingUsername" @click="submitUsernameChange">
+          保存
+        </el-button>
+      </template>
+    </el-dialog>
+  </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, isRef } from 'vue'
+import { ref, computed, onMounted, onUnmounted, isRef } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, Rank } from '@element-plus/icons-vue'
+import {
+  ArrowUp,
+  ArrowLeft,
+  ArrowDown,
+  HomeFilled,
+  User,
+  Setting,
+  SwitchButton,
+  Film,
+  Edit,
+  Rank,
+} from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useUserConfigStore } from '@/stores/userConfig'
 import { useConfigStore } from '@/stores/config'
 import type { MapLayerConfig } from '@/api/admin'
 import type { UserConfigUpdate } from '@/api/userConfig'
 
+const router = useRouter()
 const authStore = useAuthStore()
 const userConfigStore = useUserConfigStore()
 const configStore = useConfigStore()
@@ -220,10 +342,29 @@ const configStore = useConfigStore()
 // 当前选项卡
 const activeTab = ref('profile')
 
+// 移动端判定（项目断点：1366px）
+const screenWidth = ref(window.innerWidth)
+const isMobile = computed(() => screenWidth.value <= 1366)
+function handleResize() {
+  screenWidth.value = window.innerWidth
+}
+
+// 修改用户名
+const editUsernameDialogVisible = ref(false)
+const editUsername = ref('')
+const savingUsername = ref(false)
+
+// 修改密码
 const oldPassword = ref('')
 const newPassword = ref('')
 const confirmPassword = ref('')
 const changingPassword = ref(false)
+
+// 邮件通知开关
+const notifyCompleted = ref(false)
+const notifyFailed = ref(false)
+const notifyLoading = ref(false)
+const notifySaving = ref(false)
 
 // 用户配置
 const userConfig = ref<{
@@ -342,6 +483,10 @@ async function resetConfig() {
 async function loadUserConfig() {
   await userConfigStore.fetchConfig()
 
+  // 同步邮件通知开关
+  notifyCompleted.value = userConfigStore.config?.notify_recording_completed ?? false
+  notifyFailed.value = userConfigStore.config?.notify_recording_failed ?? false
+
   // 合并系统配置和用户配置
   const systemLayers = configStore.mapLayers || {}
   const userLayers = userConfigStore.config?.map_layers || {}
@@ -371,7 +516,51 @@ async function loadUserConfig() {
   configChanged = false
 }
 
-// 格式化日期
+// 保存邮件通知开关
+async function saveNotifySettings() {
+  notifySaving.value = true
+  try {
+    await userConfigStore.updateConfig({
+      notify_recording_completed: notifyCompleted.value,
+      notify_recording_failed: notifyFailed.value,
+    })
+    ElMessage.success('通知设置已保存')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    notifySaving.value = false
+  }
+}
+
+// 修改用户名
+function openEditUsernameDialog() {
+  editUsername.value = authStore.user?.username || ''
+  editUsernameDialogVisible.value = true
+}
+
+async function submitUsernameChange() {
+  const username = editUsername.value.trim()
+  if (username.length < 3 || username.length > 50) {
+    ElMessage.warning('用户名长度需在 3-50 个字符之间')
+    return
+  }
+  if (username === authStore.user?.username) {
+    editUsernameDialogVisible.value = false
+    return
+  }
+
+  savingUsername.value = true
+  try {
+    await authStore.updateProfile({ username })
+    editUsernameDialogVisible.value = false
+    ElMessage.success('用户名修改成功')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    savingUsername.value = false
+  }
+}
+
 async function submitPasswordChange() {
   if (!oldPassword.value || !newPassword.value || !confirmPassword.value) {
     ElMessage.warning('请填写完整的密码信息')
@@ -405,12 +594,42 @@ function formatDate(dateStr: string | undefined): string {
   return new Date(dateStr).toLocaleString('zh-CN')
 }
 
+// 头部下拉菜单
+function handleCommand(command: string) {
+  if (command === 'logout') {
+    ElMessageBox.confirm('确定要退出登录吗？', '提示', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    }).then(() => {
+      authStore.logout()
+      ElMessage.success('已退出登录')
+      router.push('/login')
+    })
+  } else if (command === 'admin') {
+    router.push('/admin')
+  } else if (command === 'recordings') {
+    router.push('/recordings')
+  }
+}
+
 // 组件挂载时加载数据
 onMounted(async () => {
+  window.addEventListener('resize', handleResize)
+
   // 先确保系统配置已加载
   await configStore.fetchConfig()
   // 然后加载用户配置
-  await loadUserConfig()
+  notifyLoading.value = true
+  try {
+    await loadUserConfig()
+  } finally {
+    notifyLoading.value = false
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
 })
 
 // 路由离开前检查未保存的更改
@@ -420,33 +639,94 @@ defineExpose({
 </script>
 
 <style scoped>
-.settings-page {
-  height: 100%;
+.settings-container {
+  height: 100vh;
+  background: #f5f7fa;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
-.page-header {
-  background-color: var(--el-bg-color);
-  border-bottom: 1px solid var(--el-border-color);
-  padding: 0 20px;
+.settings-container > .el-header {
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.header-left {
   display: flex;
   align-items: center;
-}
-
-.page-header h1 {
-  font-size: 20px;
-  font-weight: 500;
-}
-
-.page-main {
+  gap: 8px;
   flex: 1;
-  overflow-y: auto;
-  padding: 20px;
+  min-width: 0;
+}
+
+.nav-btn {
+  padding: 8px;
+}
+
+.home-nav-btn {
+  margin-left: 0;
+  margin-right: 12px;
+}
+
+.header-left h1 {
+  font-size: 20px;
+  margin: 0;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* 下拉菜单分割线 */
+.dropdown-divider {
+  margin: 4px 0;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  line-height: 0;
+  background-color: var(--el-border-color-lighter);
+}
+
+.user-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--el-text-color-primary);
+  outline: none;
+}
+
+.user-info .username {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.main {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
 }
 
 .settings-tabs {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
 }
 
 .settings-tabs :deep(.el-tabs__content) {
@@ -454,18 +734,57 @@ defineExpose({
   overflow-y: auto;
 }
 
+.settings-tabs :deep(.el-tab-pane) {
+  padding: 16px;
+}
+
 /* 用户信息卡片 */
 .profile-card {
   max-width: 600px;
+  margin-bottom: 16px;
 }
 
 .password-card {
   max-width: 600px;
-  margin-top: 16px;
 }
 
 .password-form {
   max-width: 420px;
+}
+
+.profile-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 通知设置卡片 */
+.notify-card {
+  max-width: 600px;
+}
+
+.notify-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+}
+
+.notify-row + .notify-row {
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.notify-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--el-text-color-primary);
+}
+
+.notify-desc {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  margin-top: 2px;
 }
 
 /* 地图设置卡片 */
@@ -498,6 +817,7 @@ defineExpose({
   border-radius: 4px;
   color: var(--el-text-color-primary);
   font-size: 14px;
+  margin: 0 0 16px 0;
 }
 
 .map-layers-section {
@@ -595,14 +915,22 @@ defineExpose({
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
-/* 移动端优化 */
-@media (max-width: 768px) {
-  .mobile-only {
-    display: inline;
+.mobile-only {
+  display: none;
+}
+
+/* 移动端优化（项目断点：1366px） */
+@media (max-width: 1366px) {
+  .header-left h1 {
+    font-size: 16px;
   }
 
   .desktop-only {
-    display: none;
+    display: none !important;
+  }
+
+  .mobile-only {
+    display: inline !important;
   }
 
   .map-layer-main {
@@ -641,21 +969,6 @@ defineExpose({
   .mobile-sort-buttons {
     display: flex;
     gap: 4px;
-  }
-}
-
-@media (min-width: 769px) {
-  .mobile-only {
-    display: none;
-  }
-
-  .desktop-only {
-    display: inline;
-  }
-
-  /* 移动端排序按钮隐藏 */
-  .mobile-sort-buttons {
-    display: none;
   }
 }
 </style>

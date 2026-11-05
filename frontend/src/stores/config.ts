@@ -130,6 +130,8 @@ export const useConfigStore = defineStore('config', () => {
     show_road_sign_in_region_tree?: boolean
     spatial_backend?: string
     allow_server_poster?: boolean
+    email_notification_enabled?: boolean
+    email_config?: Record<string, unknown>
   }): Promise<SystemConfig> {
     const result = await adminApi.updateConfig(data)
     adminConfig.value = result

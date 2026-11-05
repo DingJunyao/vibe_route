@@ -1,0 +1,19 @@
+-- 019: 邮件通知系统（email_templates 表 + user_configs 通知开关列；同时收敛 017/018 分叉）
+-- SQLite 手动执行脚本（与 alembic upgrade 二选一）
+
+CREATE TABLE IF NOT EXISTS email_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_key VARCHAR(50) NOT NULL,
+    subject VARCHAR(200) NOT NULL,
+    body TEXT NOT NULL,
+    is_html BOOLEAN NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    created_by INTEGER NULL,
+    updated_by INTEGER NULL,
+    is_valid BOOLEAN NOT NULL DEFAULT 1
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ix_email_templates_template_key ON email_templates (template_key);
+
+ALTER TABLE user_configs ADD COLUMN notify_recording_completed BOOLEAN NOT NULL DEFAULT 0;
+ALTER TABLE user_configs ADD COLUMN notify_recording_failed BOOLEAN NOT NULL DEFAULT 0;

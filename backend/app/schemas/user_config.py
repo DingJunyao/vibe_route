@@ -14,6 +14,8 @@ class UserConfigResponse(BaseModel):
     user_id: int
     map_provider: Optional[str] = None
     map_layers: Optional[Dict[str, MapLayerConfig]] = None
+    notify_recording_completed: bool = False
+    notify_recording_failed: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -30,3 +32,5 @@ class UserConfigUpdate(BaseModel):
     """用户配置更新 schema"""
     map_provider: Optional[str] = None
     map_layers: Optional[Dict[str, Dict]] = None
+    notify_recording_completed: Optional[bool] = None
+    notify_recording_failed: Optional[bool] = None

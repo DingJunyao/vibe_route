@@ -58,6 +58,36 @@ export interface SystemConfig {
   animation_export_max_concurrency: number  // 录屏任务同时录制数上限
   animation_export_retention_days: number   // 录屏文件保存天数（0 = 永久）
   animation_export_max_queued_per_user: number  // 单用户最大排队任务数（0 = 不限制）
+  // 邮件通知（录屏任务完成/失败）
+  email_notification_enabled: boolean  // 管理员总开关
+  email_config: EmailConfig            // SMTP 发件配置（host 为空 = 未配置）
+}
+
+// SMTP 发件配置
+export interface EmailConfig {
+  host: string
+  port: number
+  username: string
+  password: string
+  from_email: string
+  use_ssl: boolean
+  starttls: boolean
+}
+
+// 邮件模板
+export interface EmailTemplate {
+  template_key: string
+  name: string
+  subject: string
+  body: string
+  is_html: boolean
+}
+
+// 邮件模板 meta（展示名与可用变量）
+export interface EmailTemplateMeta {
+  template_key: string
+  name: string
+  variables: string[]
 }
 
 // 字体配置
@@ -117,6 +147,8 @@ export interface ConfigUpdateData {
   animation_export_max_concurrency?: number
   animation_export_retention_days?: number
   animation_export_max_queued_per_user?: number
+  email_notification_enabled?: boolean
+  email_config?: EmailConfig
 }
 
 // 分页响应
@@ -180,8 +212,30 @@ export const adminApi = {
   },
 
   // 更新用户
-  updateUser(userId: number, data: { is_admin?: boolean; is_active?: boolean }): Promise<User> {
+  updateUser(userId: number, data: { username?: string; email?: string; is_admin?: boolean; is_active?: boolean }): Promise<User> {
     return http.put(`/admin/users/${userId}`, data)
+  },
+
+  // ========== 邮件模板 ==========
+
+  // 获取邮件模板列表
+  getEmailTemplates(): Promise<EmailTemplate[]> {
+    return http.get('/admin/email-templates')
+  },
+
+  // 获取邮件模板 meta（展示名与可用变量）
+  getEmailTemplateMeta(): Promise<EmailTemplateMeta[]> {
+    return http.get('/admin/email-templates/meta')
+  },
+
+  // 更新邮件模板
+  updateEmailTemplate(templateKey: string, data: { subject: string; body: string; is_html?: boolean }): Promise<EmailTemplate> {
+    return http.put(`/admin/email-templates/${templateKey}`, data)
+  },
+
+  // 发送测试邮件（发给当前管理员）
+  sendTestEmail(templateKey: string): Promise<{ message: string }> {
+    return http.post(`/admin/email-templates/${templateKey}/test`)
   },
 
   // 删除用户

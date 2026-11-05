@@ -27,7 +27,7 @@ if sys.platform == 'win32':
 from app.core.config import settings
 from app.core.database import init_db
 from app.core.rate_limit import limiter
-from app.api import auth, account, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates, animation
+from app.api import auth, account, admin, tracks, tasks, road_signs, logs, live_recordings, websocket, geo_editor, poster, user_config, shared, interpolation, overlay_templates, animation, email_template
 
 # 配置 loguru 日志
 from loguru import logger as loguru_logger
@@ -252,6 +252,10 @@ async def lifespan(app: FastAPI):
     async with async_session_maker() as db:
         await config_service.init_default_configs(db)
 
+        # 初始化默认邮件模板（已存在的 key 不覆盖）
+        from app.services.email_service import email_service
+        await email_service.init_default_templates(db)
+
         # 初始化空间服务
         configs = await config_service.get_all_configs(db, use_cache=False)
         spatial_backend_config = configs.get("spatial_backend", "auto")
@@ -409,6 +413,7 @@ app.include_router(shared.router, prefix=settings.API_V1_PREFIX)  # 公开分享
 app.include_router(interpolation.router, prefix=settings.API_V1_PREFIX)
 app.include_router(overlay_templates.router, prefix=settings.API_V1_PREFIX)  # 覆盖层模板
 app.include_router(animation.router, prefix=settings.API_V1_PREFIX)  # 动画导出
+app.include_router(email_template.router, prefix=settings.API_V1_PREFIX)  # 邮件模板管理
 
 # 全局异常处理器 - 捕获所有未处理的异常并打印详细错误信息
 @app.exception_handler(Exception)

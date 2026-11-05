@@ -31,6 +31,8 @@ async def get_user_config(
             user_id=current_user.id,
             map_provider=None,
             map_layers=None,
+            notify_recording_completed=False,
+            notify_recording_failed=False,
             created_at=current_user.created_at,
             updated_at=current_user.updated_at,
         )
@@ -54,6 +56,8 @@ async def update_user_config(
         user_id=current_user.id,
         map_provider=data.map_provider,
         map_layers=data.map_layers,
+        notify_recording_completed=data.notify_recording_completed,
+        notify_recording_failed=data.notify_recording_failed,
         updated_by=current_user.id,
     )
     if not config:
