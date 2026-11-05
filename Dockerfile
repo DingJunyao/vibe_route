@@ -13,13 +13,18 @@
 # ===========================================================================
 # Stage 1: 前端构建（产出 dist）
 # ===========================================================================
-FROM node:20-alpine AS frontend-builder
+# 固定在 BUILDPLATFORM（runner 原生架构）上构建：vite 产物是纯 JS/CSS/静态资源，
+# 与目标架构无关，但 multi-arch 构建时 QEMU 模拟 arm64 跑 npm ci 极慢
+# （实测 amd64 85s / arm64 858s），且会和 all-in-one 里的 arm64 backend 层抢 CPU。
+# 加 --platform 后 npm ci + vite build 都跑原生 amd64，arm64 只做最后的 COPY。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
 WORKDIR /build
 
 # 先拷依赖描述、锁版本安装（利用 docker 层缓存）
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# --no-audit/--no-fund：跳过 CI 里无意义的 audit 网络请求，缩短安装时间
+RUN npm ci --no-audit --no-fund
 
 # 拷源码并构建（.dockerignore 已排除 node_modules，不会覆盖上面装的）
 COPY frontend/ ./
