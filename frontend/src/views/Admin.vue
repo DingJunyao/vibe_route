@@ -26,9 +26,15 @@
                   </el-icon>
                   轨迹列表
                 </el-dropdown-item>
+                <el-dropdown-item command="settings">
+                  <el-icon>
+                    <Setting />
+                  </el-icon>
+                  设置
+                </el-dropdown-item>
                 <el-dropdown-item command="recordings">
                   <el-icon>
-                    <List />
+                    <Film />
                   </el-icon>
                   录屏任务
                 </el-dropdown-item>
@@ -1406,7 +1412,7 @@
 import { ref, reactive, onMounted, computed, onUnmounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled, Refresh } from '@element-plus/icons-vue'
+import { ArrowLeft, HomeFilled, User as UserIcon, ArrowDown, SwitchButton, List, Plus, Rank, ArrowUp, Search, InfoFilled, UploadFilled, Refresh, Film, Setting } from '@element-plus/icons-vue'
 import draggable from 'vuedraggable'
 import { adminApi, type SystemConfig, type User, type InviteCode, type MapLayerConfig, type CRSType, type FontInfo, type FontConfig, type DatabaseInfo, type AdminDivisionStats, type SpecialPlaceMappingResponse, type BoundsStatsResponse, type BoundsImportTask, type AdminDivisionStatusResponse, type ImportTaskProgress, type EmailTemplate, type EmailTemplateMeta } from '@/api/admin'
 import { animationTaskApi, type AnimationExportTask, type AnimationTaskStatus } from '@/api/animationTask'
@@ -2687,6 +2693,8 @@ function handleCommand(command: string) {
     })
   } else if (command === 'tracks') {
     router.push('/tracks')
+  } else if (command === 'settings') {
+    router.push('/settings')
   } else if (command === 'recordings') {
     router.push('/recordings')
   }

@@ -44,6 +44,7 @@ export const useConfigStore = defineStore('config', () => {
             show_road_sign_in_region_tree: data.show_road_sign_in_region_tree,
             spatial_backend: data.spatial_backend,
             allow_server_poster: data.allow_server_poster,
+            email_notification_enabled: data.email_notification_enabled,
           }
           return data
         })
@@ -144,6 +145,7 @@ export const useConfigStore = defineStore('config', () => {
       show_road_sign_in_region_tree: result.show_road_sign_in_region_tree,
       spatial_backend: result.spatial_backend,
       allow_server_poster: result.allow_server_poster,
+      email_notification_enabled: result.email_notification_enabled,
     }
     return result
   }

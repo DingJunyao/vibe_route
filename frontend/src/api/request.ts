@@ -79,9 +79,15 @@ request.interceptors.response.use(
         case 404:
           ElMessage.error('请求的资源不存在')
           break
-        case 409:
-          // 409 Conflict - 传递给调用者处理，不显示全局消息
+        case 409: {
+          // 409 Conflict - 展示后端返回的冲突原因（如“用户名已被使用”）
+          const conflictMessage =
+            (typeof data?.detail === 'string' && data.detail) ||
+            (typeof data?.message === 'string' && data.message) ||
+            '操作冲突，请检查后重试'
+          ElMessage.error(conflictMessage)
           break
+        }
         case 500:
           ElMessage.error('服务器错误，请稍后重试')
           break

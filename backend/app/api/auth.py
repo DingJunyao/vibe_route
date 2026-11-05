@@ -182,4 +182,5 @@ async def get_public_config(
         font_config=FontConfig(**font_config) if font_config else FontConfig(),
         show_road_sign_in_region_tree=configs.get("show_road_sign_in_region_tree", True),
         allow_server_poster=configs.get("allow_server_poster", True),
+        email_notification_enabled=configs.get("email_notification_enabled", False),
     )

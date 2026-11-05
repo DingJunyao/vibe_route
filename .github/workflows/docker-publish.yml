@@ -67,6 +67,11 @@ jobs:
   build:
     needs: resolve
     runs-on: ubuntu-latest
+    # 单个变体曾在 step「构建并推送镜像」里一直不结束（run 41997521478 的 build (aio)
+    # 在 RUN npm ci 上挂了 50+ min 才被手动取消；live_calc 历史上更惨，v0.3.2/v0.3.3 的
+    # build (local) 都顶到 6 小时上限被杀）。正常一次构建 12~20 min，45 min 足够；
+    # 真悬挂时快速失败重试，别白占 runner。
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -91,6 +96,37 @@ jobs:
           esac
           echo "target=${target}" >> "$GITHUB_OUTPUT"
           echo "short=${short}" >> "$GITHUB_OUTPUT"
+
+          # ── buildx GHA 缓存 scope ──
+          # 三个变体都要构同一个 frontend-builder stage（含 RUN npm ci）；aio 与 backend
+          # 又都要构同一个 backend stage（含 pip + ffmpeg + chromium，arm64 上约 11 min）。
+          # 以前每个变体各写各的 scope，谁也不命中谁的缓存 → 冷缓存的 release 一次等于
+          # npm ci / pip+chromium 各跑 2~3 遍，既慢又更容易撞上 ECONNRESET。
+          # （同源教训见 live_calc 的 agent_doc/FEATURE_容器化部署.md「单 job 悬挂」一节。）
+          # 现在：所有变体都读共享 scope frontend-builder / backend / 自己的 scope；
+          # 完整包含某 stage 的变体负责写对应共享 scope（layer 内容相同，并发写互不破坏）。
+          # 共享 scope 刻意不叫 "backend"："backend" 变体的 per-variant scope 就是 backend，
+          # 两者同名会让 buildx 报 duplicate cache exports [gha] 直接失败（2026-11-05 实测）。
+          {
+            echo "cache_from<<EOF"
+            echo "type=gha,scope=shared-frontend-builder"
+            echo "type=gha,scope=shared-backend"
+            echo "type=gha,scope=${short}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "cache_to<<EOF"
+            echo "type=gha,mode=max,scope=${short}"
+            case "${{ matrix.variant }}" in
+              aio)
+                echo "type=gha,mode=max,scope=shared-frontend-builder"
+                echo "type=gha,mode=max,scope=shared-backend"
+                ;;
+              frontend) echo "type=gha,mode=max,scope=shared-frontend-builder" ;;
+              backend)  echo "type=gha,mode=max,scope=shared-backend" ;;
+            esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
           # ── GHCR 镜像名（必须小写；所有 variant 共用同一镜像，靠标签区分） ──
           ghcr_image="ghcr.io/${GITHUB_REPOSITORY}"
@@ -182,5 +218,5 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.title=vibe-route-${{ steps.config.outputs.short }}
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          cache-from: ${{ steps.config.outputs.cache_from }}
+          cache-to: ${{ steps.config.outputs.cache_to }}

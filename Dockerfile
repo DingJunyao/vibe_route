@@ -13,13 +13,24 @@
 # ===========================================================================
 # Stage 1: 前端构建（产出 dist）
 # ===========================================================================
-FROM node:20-alpine AS frontend-builder
+# 固定在 BUILDPLATFORM（runner 原生架构）上构建：vite 产物是纯 JS/CSS/静态资源，
+# 与目标架构无关，但 multi-arch 构建时 QEMU 模拟 arm64 跑 npm ci 极慢
+# （实测 amd64 85s / arm64 858s），且会和 all-in-one 里的 arm64 backend 层抢 CPU。
+# 加 --platform 后 npm ci + vite build 都跑原生 amd64，arm64 只做最后的 COPY。
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
 WORKDIR /build
 
 # 先拷依赖描述、锁版本安装（利用 docker 层缓存）
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+# --no-audit/--no-fund：跳过 CI 里无意义的 audit 网络请求，缩短安装时间
+# 加大抓包重试与超时：CI 上偶发 ECONNRESET（errno -104）会让 npm ci 直接失败，
+# 而不是慢（live_calc 的 v0.5.1 三个变体就是在这里一起 exit 152 挂掉的，教训照抄）。
+RUN npm ci --no-audit --no-fund \
+    --fetch-retries=5 \
+    --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000 \
+    --fetch-timeout=600000
 
 # 拷源码并构建（.dockerignore 已排除 node_modules，不会覆盖上面装的）
 COPY frontend/ ./
@@ -49,7 +60,8 @@ WORKDIR /app
 #   必须在 PATH 上（playwright 自带的 ffmpeg 不在 PATH）；bookworm 的 ffmpeg 自带 libx264。
 #   chromium 运行库与中文字体（fonts-wqy-zenhei 等）由 playwright --with-deps 自行安装
 COPY backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+# --retries/--timeout：同 npm 的理由，PyPI 侧也会偶发连接被重置
+RUN pip install --no-cache-dir --retries 5 --timeout 60 -r requirements.txt \
     && apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && python -m playwright install --with-deps chromium \

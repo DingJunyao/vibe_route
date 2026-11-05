@@ -48,6 +48,7 @@ export interface PublicConfig {
   show_road_sign_in_region_tree?: boolean
   spatial_backend?: string  // 空间计算后端: auto | python | postgis
   allow_server_poster?: boolean  // 是否允许服务器生成海报
+  email_notification_enabled?: boolean  // 邮件通知总开关（关闭时个人设置隐藏通知设置）
 }
 
 // API 方法

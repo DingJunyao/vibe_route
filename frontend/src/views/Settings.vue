@@ -93,15 +93,14 @@
           </el-card>
         </el-tab-pane>
 
-        <!-- 通知设置选项卡 -->
-        <el-tab-pane label="通知设置" name="notify">
+        <!-- 通知设置选项卡（后台管理开启邮件通知时才显示） -->
+        <el-tab-pane v-if="emailNotifyEnabled" label="通知设置" name="notify">
           <el-card class="notify-card" shadow="never">
             <template #header>
               <span>录屏任务邮件通知</span>
             </template>
             <p class="settings-hint">
               录屏任务完成或失败时，向您的账户邮箱（{{ authStore.user?.email || '未设置' }}）发送通知邮件。
-              需管理员开启邮件通知后方可送达。
             </p>
             <el-skeleton :rows="2" animated v-if="notifyLoading" />
             <template v-else>
@@ -313,7 +312,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, isRef } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, isRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -341,6 +340,16 @@ const configStore = useConfigStore()
 
 // 当前选项卡
 const activeTab = ref('profile')
+
+// 邮件通知总开关（后台管理关闭时隐藏「通知设置」选项卡）
+const emailNotifyEnabled = computed(() => configStore.publicConfig?.email_notification_enabled ?? false)
+
+// 总开关关闭时若停留在通知选项卡，回退到用户信息
+watch(emailNotifyEnabled, (enabled) => {
+  if (!enabled && activeTab.value === 'notify') {
+    activeTab.value = 'profile'
+  }
+})
 
 // 移动端判定（项目断点：1366px）
 const screenWidth = ref(window.innerWidth)
@@ -710,18 +719,20 @@ defineExpose({
 }
 
 .user-info .username {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: inline;
 }
 
 .main {
   flex: 1;
   overflow: hidden;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  padding: 0;
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .settings-tabs {
@@ -735,17 +746,12 @@ defineExpose({
 }
 
 .settings-tabs :deep(.el-tab-pane) {
-  padding: 16px;
+  padding: 0;
 }
 
 /* 用户信息卡片 */
 .profile-card {
-  max-width: 600px;
   margin-bottom: 16px;
-}
-
-.password-card {
-  max-width: 600px;
 }
 
 .password-form {
@@ -759,10 +765,6 @@ defineExpose({
 }
 
 /* 通知设置卡片 */
-.notify-card {
-  max-width: 600px;
-}
-
 .notify-row {
   display: flex;
   align-items: center;
@@ -788,10 +790,6 @@ defineExpose({
 }
 
 /* 地图设置卡片 */
-.map-settings-card {
-  max-width: 800px;
-}
-
 .card-header {
   display: flex;
   flex-direction: column;
@@ -921,6 +919,10 @@ defineExpose({
 
 /* 移动端优化（项目断点：1366px） */
 @media (max-width: 1366px) {
+  .main {
+    padding: 10px;
+  }
+
   .header-left h1 {
     font-size: 16px;
   }
