@@ -52,11 +52,15 @@ async def update_profile(
             )
 
     try:
+        # 目标用户名若被软删除用户的墓碑占用，先改写墓碑名释放该名称
+        await user_service.release_deleted_username(
+            db, new_username, operator_id=current_user.id
+        )
         updated = await user_service.update(
             db, current_user, current_user.id, username=new_username
         )
     except IntegrityError:
-        # 软删除用户仍占用唯一索引兜底
+        # 兜底：唯一索引冲突仍按"用户名已被使用"处理
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

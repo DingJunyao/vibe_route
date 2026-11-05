@@ -211,9 +211,18 @@ async def update_user(
             )
 
     try:
+        # 目标用户名/邮箱若被软删除用户的墓碑占用，先改写墓碑值释放占用
+        if "username" in update_data:
+            await user_service.release_deleted_username(
+                db, update_data["username"], operator_id=current_admin.id
+            )
+        if "email" in update_data:
+            await user_service.release_deleted_email(
+                db, update_data["email"], operator_id=current_admin.id
+            )
         updated_user = await user_service.update(db, user, current_admin.id, **update_data)
     except IntegrityError:
-        # 软删除用户仍占用 username/email 唯一索引兜底
+        # 兜底：唯一索引冲突仍按"用户名或邮箱已被使用"处理
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -541,13 +550,18 @@ async def create_invite_code(
     """
     创建邀请码（管理员）
     """
-    invite_code = await config_service.create_invite_code(
-        db,
-        code=invite_code_data.code,
-        max_uses=invite_code_data.max_uses,
-        created_by=current_admin.id,
-        expires_in_days=invite_code_data.expires_in_days,
-    )
+    try:
+        invite_code = await config_service.create_invite_code(
+            db,
+            code=invite_code_data.code,
+            max_uses=invite_code_data.max_uses,
+            created_by=current_admin.id,
+            expires_in_days=invite_code_data.expires_in_days,
+        )
+    except ValueError as e:
+        # 与有效邀请码重名
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     return InviteCodeResponse(
         id=invite_code.id,
         code=invite_code.code,

@@ -93,6 +93,46 @@ class UserService:
             await db.flush()
         return user
 
+    async def release_deleted_username(
+        self, db: AsyncSession, username: str, operator_id: int = None
+    ) -> None:
+        """软删除用户的墓碑占用用户名唯一索引时，改写墓碑用户名以释放该名称"""
+        result = await db.execute(
+            select(User).where(and_(User.username == username, User.is_valid == False))
+        )
+        deleted = result.scalar_one_or_none()
+        if not deleted:
+            return
+        suffix = f"_deleted_{deleted.id}"
+        if len(suffix) < 50:
+            deleted.username = username[: 50 - len(suffix)] + suffix
+        else:
+            deleted.username = f"deleted_{deleted.id}"
+        if operator_id is not None:
+            deleted.updated_by = operator_id
+        deleted.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.flush()
+
+    async def release_deleted_email(
+        self, db: AsyncSession, email: str, operator_id: int = None
+    ) -> None:
+        """软删除用户的墓碑占用邮箱唯一索引时，改写墓碑邮箱以释放该地址"""
+        result = await db.execute(
+            select(User).where(and_(User.email == email, User.is_valid == False))
+        )
+        deleted = result.scalar_one_or_none()
+        if not deleted:
+            return
+        suffix = f"_deleted_{deleted.id}"
+        if len(suffix) < 100:
+            deleted.email = email[: 100 - len(suffix)] + suffix
+        else:
+            deleted.email = f"deleted_{deleted.id}"
+        if operator_id is not None:
+            deleted.updated_by = operator_id
+        deleted.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.flush()
+
     async def authenticate(
         self,
         db: AsyncSession,
