@@ -92,9 +92,9 @@ export const liveRecordingApi = {
     return http.patch(`/live-recordings/${recordingId}/fill-geocoding`, { fill_geocoding: fillGeocoding })
   },
 
-  // 获取记录状态
+  // 获取记录状态（实时记录定时轮询，跳过顶部进度条）
   getStatus(recordingId: number): Promise<RecordingStatus> {
-    return http.get(`/live-recordings/${recordingId}/status`)
+    return http.get(`/live-recordings/${recordingId}/status`, { skipProgress: true })
   },
 
   // 获取记录详情（返回轨迹详情格式，用于轨迹详情页）

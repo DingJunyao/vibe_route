@@ -372,9 +372,9 @@ export const adminApi = {
     })
   },
 
-  // 获取导入任务进度
+  // 获取导入任务进度（导入期间定时轮询，跳过顶部进度条）
   getImportProgress(taskId: number): Promise<ImportTaskProgress> {
-    return http.get(`/admin/admin-divisions/import/progress/${taskId}`)
+    return http.get(`/admin/admin-divisions/import/progress/${taskId}`, { skipProgress: true })
   },
 
   // 获取省份列表
@@ -394,9 +394,9 @@ export const adminApi = {
     return http.post('/admin/admin-divisions/sync-postgis')
   },
 
-  // 获取任务状态（通用）
+  // 获取任务状态（通用；PostGIS 同步等定时轮询使用，跳过顶部进度条）
   getTask(taskId: number): Promise<TaskProgress> {
-    return http.get(`/admin/tasks/${taskId}`)
+    return http.get(`/admin/tasks/${taskId}`, { skipProgress: true })
   },
 }
 

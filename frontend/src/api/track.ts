@@ -353,9 +353,9 @@ export const trackApi = {
     return http.post(`/tracks/${trackId}/fill-geocoding`, null, { params: { incremental } })
   },
 
-  // 获取填充进度
+  // 获取填充进度（轮询使用，跳过顶部进度条）
   getFillProgress(trackId: number): Promise<FillProgressResponse> {
-    return http.get(`/tracks/${trackId}/fill-progress`)
+    return http.get(`/tracks/${trackId}/fill-progress`, { skipProgress: true })
   },
 
   // 停止填充地理信息
@@ -363,9 +363,9 @@ export const trackApi = {
     return http.post(`/tracks/${trackId}/fill-stop`)
   },
 
-  // 获取所有轨迹的填充进度
+  // 获取所有轨迹的填充进度（轨迹列表页定时轮询，跳过顶部进度条）
   getAllFillProgress(): Promise<AllFillProgressResponse> {
-    return http.get('/tracks/fill-progress/all')
+    return http.get('/tracks/fill-progress/all', { skipProgress: true })
   },
 
   // 获取区域树

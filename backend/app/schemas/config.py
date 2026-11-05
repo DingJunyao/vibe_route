@@ -135,6 +135,7 @@ class PublicConfigResponse(BaseModel):
     font_config: FontConfig = Field(default_factory=FontConfig)
     show_road_sign_in_region_tree: bool = True
     allow_server_poster: bool = True  # 是否允许服务器生成海报
+    email_notification_enabled: bool = Field(default=False, description="邮件通知总开关（个人设置页据此显示/隐藏通知设置）")
 
 
 class InviteCodeCreate(BaseModel):

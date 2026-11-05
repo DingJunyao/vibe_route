@@ -33,9 +33,9 @@ export const taskApi = {
     return http.post('/tasks/generate-overlay', data)
   },
 
-  // 获取任务状态
+  // 获取任务状态（覆盖层生成期间定时轮询，跳过顶部进度条）
   getTask(taskId: number): Promise<Task> {
-    return http.get(`/tasks/${taskId}`)
+    return http.get(`/tasks/${taskId}`, { skipProgress: true })
   },
 
   // 获取任务列表

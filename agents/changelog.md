@@ -4,6 +4,14 @@
 
 ## 2026-11
 
+- 顶部进度条空闲页周期性闪现修复（2026-11-05 第五笔）：
+  - **问题**：页面静置时顶部加载进度条仍每隔约 2 秒出现一次——`request.ts` 请求拦截器对所有请求默认触发 `nProgressStore.start()`（仅 `skipProgress: true` 跳过），而轨迹列表页 `TrackList.vue` onMounted 无条件启动 2 秒轮询 `trackApi.getAllFillProgress()`；另有多个定时轮询 API 未带该标记（`track.getFillProgress`、`liveRecording.getStatus`、`admin.getTask`、`admin.getImportProgress`、`task.getTask`）
+  - **修复**：六个轮询用途 API 统一补 `{ skipProgress: true }`（`api/track.ts` getFillProgress/getAllFillProgress、`api/liveRecording.ts` getStatus、`api/admin.ts` getImportProgress/getTask、`api/task.ts` getTask）；新增 `src/types/axios.d.ts` 模块扩展补声明 `skipProgress`/`skipAuth`（此前无类型声明，`animationTask.ts` 等既有调用靠 esbuild 不做类型检查才未暴露）
+  - **验证**：vite build 通过；逐点核认 `adminApi.getTask`/`getImportProgress`/`taskApi.getTask` 调用点均为纯轮询、无用户主动加载路径回归
+- 设置页通知开关可见性 / 边距统一 / 409 提示修复（2026-11-05 第四笔）：
+  - **问题**：后台关闭邮件通知总开关后，普通用户个人设置仍显示「通知设置」tab——总开关 `email_notification_enabled` 只在 /admin/config 返回，/auth/config 不含该字段，前端无从感知；Settings.vue 页边距与 Admin.vue 不一致（.main 无 padding/max-width，tab-pane 自带 16px）；用户名重复时 PUT /auth/profile 返回 409（detail='用户名已被使用'）但 request.ts 拦截器 case 409 静默 break，前端无任何提示
+  - **修复**：`PublicConfigResponse` 增 `email_notification_enabled`（默认 False）并在 `get_public_config` 透传；前端 `PublicConfig` 类型与 config store 两处映射（fetchConfig 管理员分支 + updateConfig）同步透传；Settings.vue 通知 tab 加 `v-if="emailNotifyEnabled"` + watch（开关关闭时从 notify 回退 profile），hint 删「需管理员开启」句；.main 改 `padding:20px; max-width:1400px; margin:0 auto`（移动端 10px）、tab-pane padding 0、移除 profile/password/notify/map-settings 卡片 600/800px max-width 使其撑满 tab-pane（Admin 卡片本就全宽；密码表单保留 420px 输入宽度）；头部用户名去掉 120px max-width + 省略号（原被截断），与 Admin.vue 一致完整显示；Admin.vue 用户下拉补齐「设置」项（command=settings → /settings）并修正「录屏任务」图标 List→Film（轨迹列表保持 List、退出登录 SwitchButton），与 Home/TrackList 下拉惯例一致；request.ts case 409 改为展示后端 `detail`/`message`（后端其余 409：admin 用户名/邮箱冲突、tracks FILLING_IN_PROGRESS 均无前端处理代码，全局提示无回归）
+  - **验证**：vite build 通过；py_compile 过；运行中后端热重载后 /api/auth/config 实测返回 `email_notification_enabled:false`；vue-tsc（build:check）在自举即崩 `Search string not found: "/supportedTSExtensions = .*(?=;)/"`——vue-tsc@1.8.25 与仓库 TS 版本的既有不兼容，与本次改动无关；页面视觉验证未做（桌面桥不可用），HMR 已生效待开发者自查
 - 设置页统一 + 用户名修改 + 邮件通知系统（2026-11-05 第三笔，分支 `feat/settings-email-notify`）：
   - **背景**：/settings 样式与全站不符（无导航/用户下拉、断点误用 768px、tabs 非 border-card）；用户无法改名；email 字段从未使用
   - **后端**：新表 `email_templates`（模板 `{{变量}}` 占位）+ `user_configs` 增 `notify_recording_completed/failed` 列（迁移 `019`，**同时为合并迁移收敛 017/018 双 head**，配套 SQLite/MySQL/PostgreSQL 手动 SQL）；`email_service.py`（aiosmtplib，SMTP 配置存 configs 表 `email_config`，总开关 `email_notification_enabled`，全部配置后台界面可改无需重启）；录屏任务 `_run_export` completed/failed 分支与 `recover_on_startup()` 挂 `schedule_notify()`（fire-and-forget，cancelled/expired 不发）；新路由 `PUT /auth/profile`（自助改名）、`/admin/email-templates`（列表/编辑/测试发送）、`UserUpdate`+username（管理员编辑用户名/邮箱）
