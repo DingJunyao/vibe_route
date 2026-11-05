@@ -50,8 +50,8 @@ class TestGenerateRoadSignDispatch:
             'expwy', '8', name='雅加达高速', region='id',
             indonesia_config=ID_CONFIG, name_id='Jalan Tol Jagorawi')
         assert tol != base
-        from defusedxml.ElementTree import fromstring
-        head = [e for e in fromstring(tol).iter()
+        import defusedxml.ElementTree as ET
+        head = [e for e in ET.fromstring(tol).iter()
                 if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
         # 色带红 = spec §5「实现时对齐 gpxutil」的 #B5273C（非国标红 #ED1724）
         assert head and head[0].attrib['fill'].upper() == '#B5273C'
@@ -62,8 +62,8 @@ class TestGenerateRoadSignDispatch:
         forced = generate_road_sign(
             'way', '8', region='id', indonesia_config=ID_CONFIG, force_tol=True)
         assert forced != base
-        from defusedxml.ElementTree import fromstring
-        head = [e for e in fromstring(forced).iter()
+        import defusedxml.ElementTree as ET
+        head = [e for e in ET.fromstring(forced).iter()
                 if e.tag.split('}')[-1] == 'polygon' and e.attrib.get('id') == 'head']
         assert head and head[0].attrib['fill'].upper() == '#B5273C'
 

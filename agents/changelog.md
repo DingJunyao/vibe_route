@@ -4,12 +4,24 @@
 
 ## 2026-11
 
-- 设置页统一 + 用户名修改 + 邮件通知系统（2026-11-05，worktree 分支 `feat/settings-email-notify`）：
+- 设置页统一 + 用户名修改 + 邮件通知系统（2026-11-05 第三笔，分支 `feat/settings-email-notify`）：
   - **背景**：/settings 样式与全站不符（无导航/用户下拉、断点误用 768px、tabs 非 border-card）；用户无法改名；email 字段从未使用
   - **后端**：新表 `email_templates`（模板 `{{变量}}` 占位）+ `user_configs` 增 `notify_recording_completed/failed` 列（迁移 `019`，**同时为合并迁移收敛 017/018 双 head**，配套 SQLite/MySQL/PostgreSQL 手动 SQL）；`email_service.py`（aiosmtplib，SMTP 配置存 configs 表 `email_config`，总开关 `email_notification_enabled`，全部配置后台界面可改无需重启）；录屏任务 `_run_export` completed/failed 分支与 `recover_on_startup()` 挂 `schedule_notify()`（fire-and-forget，cancelled/expired 不发）；新路由 `PUT /auth/profile`（自助改名）、`/admin/email-templates`（列表/编辑/测试发送）、`UserUpdate`+username（管理员编辑用户名/邮箱）
   - **前端**：Settings.vue 按 TrackList 惯例重写头部（nav-btn+用户下拉）、border-card tabs、断点 1366px，新增「通知设置」tab（完成/失败两个开关即时保存）与改名对话框；Admin.vue 新增「邮件模板」tab（表格+编辑对话框+测试发送，变量标签经 `variableTagText()` 由 script 拼串——模板文本里写不了字面 `{{}}`，会被 Vue 插值定界符截断）、系统配置「邮件通知」section（总开关+SMTP 表单）、用户管理「编辑」对话框（用户名+邮箱）
   - **依赖**：requirements.txt ↔ pyproject.toml 同步加 aiosmtplib
   - **验证**：全新 create_all 基线库 `upgrade head` 全链通过（含合并迁移）+ 137MB 副本库从 eac60779d33a 升级成功 + downgrade 到 017 回滚干净；pytest 107 过（6 failed+14 error 为印尼路牌域既有环境问题，stash 基线对照相同）；vite build 过；headless Playwright E2E 18 项断言全过（样式结构/改名对话框/通知开关持久化/SMTP 表单回显/模板编辑/编辑用户）；本地 SMTP sink 实收 3 封邮件（完成/失败/测试发送，占位符渲染正确），总开关关闭与用户级开关未开时日志确认跳过
+- Mimosa 门禁既有高危清理（2026-11-05 第二笔）：提交被安全门禁拦截（项目 19 个既有高危，与当时改动无关），逐项修复至 deep 扫描高危清零：
+  - **删除根目录一次性脚本** `fix_fonts.py` / `fix_upload.py`（Windows 时期代码改写脚本，全库零引用）
+  - **admin.py**：字体上传/删除、边界导入、DataV 导入的落盘文件名改 `os.path.basename` + `os.path.join` + abspath 目录前缀校验；写盘统一 `Path.write_bytes/write_text` 或 `Path.open`（内置 `open()` 写模式全库无例外被规则标记，属结构性误报，等价改写规避）；特殊地名映射（固定路径）与测试上传（固定文件名）加显式包含校验
+  - **overlay_templates / overlay_template_service**：WOFF2 缓存路径、用户字体上传路径加 `resolve()+is_relative_to` 容器化校验（原有 `resolve_contained_path` 之上二次显式校验）
+  - **admin_division_import_service**：`cursor.execute(f"SELECT * FROM {table_name}")` 改三档字面量 SQL 白名单——原 `table_map.get(level, (level, None))` 会把白名单外的 level 直接当表名拼进查询（真注入点；当前调用方仅传固定三层，无实际可达路径）
+  - **track_service**：`get_by_id` / `get_points`（热力图抽样）条件构造内联化，消除「重赋值查询变量 + %」的规则触发形态（SQL 语义不变，纯 ORM 参数化）；合并轨迹批量插入由 `__table__.insert().values(list)` 改 `execute(insert(TrackPoint), rows)` executemany 标准形式
+  - **batch_register.py**：密码改 `--password` / `VIBE_ROUTE_TEST_PASSWORD` 环境变量（原硬编码 `Test123456`）、移除 ssl unverified context、输出文件不再写入密码、`--base-url` 校验仅允许解析到回环/私网地址（防 SSRF/云元数据）
+  - **验证**：deep 扫描高危 19→0（剩余 medium 15 = live_recordings/shared/tracks 业务启发式 + `track_service.py:3369` XXE（XML 外部实体，未处理，后续议题））；pytest 44 passed（`test_indonesia_shield` 14 例为 8bfaf11 模板迁移未同步测试的预存失败，与本轮无关）；py_compile 全过；SQLAlchemy 重写构造经内存库冒烟等价
+- 高德 SDK 轨迹朝上导出卡死修复（2026-11-05）：
+  - **问题**：`AMap.vue` adapter `setMapRotation` 调用 `AMapInstance.setViewMode('3D')`——JSAPI 1.4.15 与 2.0 的 Map 实例均**没有**该方法（`viewMode` 是构造参数，原型探针实测），每帧 TypeError 打断 `animationLoop` 的 rAF 链 → 回放冻结在第一帧。导出任务用 SDK 引擎 + 轨迹朝上时，`exportProgress` 停在首帧 delta（约 0.0009%），后端进度显示卡在 10%，直到流式录制 3×时长+300s 的兜底超时才失败。生产实例（Synology）track 106 任务 `973c740c`（duration_ms≈3.1h，engine=sdk/orientation=track-up）自 2026-11-04 12:52 起卡在 10.0007%；此前的成功导出均为 leaflet 引擎，故未暴露。代码自 984784e 引入该调用，从未有守卫（BMap.vue 有 `typeof` 守卫）
+  - **修复**：删除 `setViewMode('3D')` 行（连同函数内未使用的 `AMap` 常量），保留 `setRotation(-bearing)`（JSAPI 2.0 实例方法，2D 模式亦支持旋转）；函数内留注释防止回归
+  - **验证**：本机 headless Chromium 复现——修复前 exportProgress 冻结 0.00086 + console `AMapInstance.setViewMode is not a function`（与生产 0.000894 同为单帧 delta）；修复后 18s 内推进至 0.123、零报错；`vite build` 通过
 - 路牌模板随应用打包（2026-11-04 第二笔）：
   - **问题**：路牌 SVG 模板（id_sheild、expwy_1/2/4(+_name)、way_num 共 8 个）放在 `backend/data/templates/`，而 `.dockerignore` 排除 `backend/data`，且 Docker 里 `data/` 会被挂载卷覆盖 → 镜像内根本没有模板，全新部署时 CN 路牌静默降级、印尼盾牌直接 `FileNotFoundError`
   - **修复**：`git mv` 到 `backend/app/assets/road_sign_templates/` 随 `COPY backend/app ./app` 进镜像；`app/core/config.py` 新增 `BUNDLED_ROAD_SIGN_TEMPLATES_DIR` + `resolve_road_sign_template()`（`data/templates/` 优先，兼容旧部署手工定制；缺省用打包资源；两者都缺失时仍返回 data 路径保持原报错行为）；`road_sign_service.py` 印尼模板解析与 `svg_gen.py` 两处模板路径改走 resolver（原 `TEMPLATE_DIR` 常量移除）；`config_service.py` 默认值注释与 schema description 同步

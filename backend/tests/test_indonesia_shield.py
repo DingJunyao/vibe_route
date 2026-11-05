@@ -2,7 +2,7 @@
 """印尼六边形盾牌 SVG 生成单元测试（spec §8 用例 3）"""
 import os
 import tempfile
-from defusedxml import ElementTree as ET
+import defusedxml.ElementTree as ET
 from pathlib import Path
 
 import pytest

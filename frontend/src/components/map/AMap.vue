@@ -538,11 +538,9 @@ const animationAdapter: AnimationMapAdapter = {
   setMapRotation(bearing: number) {
     if (!AMapInstance) return
 
-    const AMap = (window as any).AMap
-
-    // 设置为 3D 模式
-    AMapInstance.setViewMode('3D')
-
+    // 注意：此处不可调用 AMapInstance.setViewMode('3D')——JSAPI 1.4/2.0 的 Map
+    // 实例均无该方法（viewMode 是构造参数），调用必抛 TypeError 并打断
+    // animationLoop 的 rAF 链，回放冻结在第一帧、导出任务卡死（见 changelog 2026-11）
     // 高德 setRotation 为地图内容顺时针旋转的角度；
     // 轨迹朝上（方位角 bearing 指向画面正上方）需内容逆时针旋转，故取负
     currentMapRotation = bearing
