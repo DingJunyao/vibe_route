@@ -105,10 +105,12 @@ jobs:
           # （同源教训见 live_calc 的 agent_doc/FEATURE_容器化部署.md「单 job 悬挂」一节。）
           # 现在：所有变体都读共享 scope frontend-builder / backend / 自己的 scope；
           # 完整包含某 stage 的变体负责写对应共享 scope（layer 内容相同，并发写互不破坏）。
+          # 共享 scope 刻意不叫 "backend"："backend" 变体的 per-variant scope 就是 backend，
+          # 两者同名会让 buildx 报 duplicate cache exports [gha] 直接失败（2026-11-05 实测）。
           {
             echo "cache_from<<EOF"
-            echo "type=gha,scope=frontend-builder"
-            echo "type=gha,scope=backend"
+            echo "type=gha,scope=shared-frontend-builder"
+            echo "type=gha,scope=shared-backend"
             echo "type=gha,scope=${short}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -117,11 +119,11 @@ jobs:
             echo "type=gha,mode=max,scope=${short}"
             case "${{ matrix.variant }}" in
               aio)
-                echo "type=gha,mode=max,scope=frontend-builder"
-                echo "type=gha,mode=max,scope=backend"
+                echo "type=gha,mode=max,scope=shared-frontend-builder"
+                echo "type=gha,mode=max,scope=shared-backend"
                 ;;
-              frontend) echo "type=gha,mode=max,scope=frontend-builder" ;;
-              backend)  echo "type=gha,mode=max,scope=backend" ;;
+              frontend) echo "type=gha,mode=max,scope=shared-frontend-builder" ;;
+              backend)  echo "type=gha,mode=max,scope=shared-backend" ;;
             esac
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
