@@ -72,6 +72,7 @@ import {
   type MarkerPosition,
 } from '@/utils/animationUtils'
 import { smoothedCameraAt, cameraHeadingAt, type AnimationCRS } from '@/utils/animation/cameraSmoothing'
+import { isChinaRegionPoints } from '@/utils/coordTransform'
 import { startExportTask, buildExportConfig } from '@/utils/animation/videoExport'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
 
@@ -118,11 +119,17 @@ const absoluteCurrentTime = computed(() => {
 
 // 获取当前地图提供商的坐标类型
 const isGCJ02Provider = computed(() => {
-  // AMap 引擎、Tencent 引擎、高德 Leaflet、腾讯 Leaflet 使用 GCJ02 坐标
-  return props.mapProvider === 'amap' || props.mapProvider === 'tencent'
+  // 高德/腾讯 SDK、二者 Leaflet 均为 GCJ02。
+  // Google 路网底图（roadmap）的中国数据同样是 GCJ02 偏移的（实测：卫星图是 WGS84
+  // 真值、路网图是 GCJ02，两者不一致；本项目只配 roadmap 图层），故一并按 GCJ02。
+  // 境外 gcj02 == wgs84（转换守卫），无需分支
+  return props.mapProvider === 'amap' || props.mapProvider === 'tencent' ||
+    props.mapProvider === 'google'
 })
 const isBD09Provider = computed(() => {
-  return props.mapProvider === 'baidu'
+  // 百度口径仅境内轨迹适用：百度海外底图按 WGS84 对齐，
+  // 轨迹的 BD09 字段对境外点是套用中国偏移算法的结果（偏差约 1km）
+  return props.mapProvider === 'baidu' && isChinaRegionPoints(points.value)
 })
 
 // 相机平滑使用的坐标系（与 interpolatePosition 的坐标字段选择一致）

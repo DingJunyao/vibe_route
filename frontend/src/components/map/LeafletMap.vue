@@ -59,7 +59,7 @@ import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } fr
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import type { MarkerPosition } from '@/types/animation'
-import { wgs84ToGcj02, wgs84ToBd09 } from '@/utils/coordTransform'
+import { wgs84ToGcj02, wgs84ToBd09, isInChina } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 
 // 类型定义
@@ -2031,10 +2031,22 @@ function getCoordsByCRS(point: Point, crs: CRSType, mapId?: string): [number, nu
     lat = point.latitude_wgs84 ?? point.latitude
     lng = point.longitude_wgs84 ?? point.longitude
   } else if (crs === 'bd09') {
-    lat = point.latitude_bd09 ?? undefined
-    lng = point.longitude_bd09 ?? undefined
-    // 如果 BD09 为空，回退到 WGS84
-    if (lat === undefined || lng === undefined) {
+    // 百度口径仅境内适用：境外百度底图按 WGS84 对齐，BD09 字段对境外点偏差约 1km
+    const bdUsable = point.latitude_bd09 !== undefined && point.longitude_bd09 !== undefined &&
+      !isNaN(point.latitude_bd09) && !isNaN(point.longitude_bd09) &&
+      isInChina(point.longitude_bd09, point.latitude_bd09)
+    const wgsUsable = point.latitude_wgs84 !== undefined && point.longitude_wgs84 !== undefined &&
+      !isNaN(point.latitude_wgs84) && !isNaN(point.longitude_wgs84)
+    if (wgsUsable && !isInChina(point.longitude_wgs84, point.latitude_wgs84)) {
+      // 境外：直接用 WGS84
+      lat = point.latitude_wgs84
+      lng = point.longitude_wgs84
+    } else if (bdUsable) {
+      // 境内：使用 BD09
+      lat = point.latitude_bd09
+      lng = point.longitude_bd09
+    } else {
+      // 回退到 WGS84
       lat = point.latitude_wgs84 ?? point.latitude
       lng = point.longitude_wgs84 ?? point.longitude
     }

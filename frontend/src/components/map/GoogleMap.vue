@@ -179,6 +179,7 @@ import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } fr
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
 import { waitForRenderIdle } from '@/utils/animation/renderIdle'
+import { wgs84ToGcj02, gcj02ToWgs84 } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 import { renderHeatCanvas } from '@/utils/heatmapCanvas'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
@@ -360,10 +361,10 @@ const animationAdapter: AnimationMapAdapter = {
     if (!googleMapInstance || !props.tracks[0]?.points) return
 
     const points = props.tracks[0].points
-    const toLatLng = (p: any) => ({
-      lat: p.latitude_wgs84 ?? p.latitude,
-      lng: p.longitude_wgs84 ?? p.longitude,
-    })
+    const toLatLng = (p: any) => {
+      const c = getMapCoords(p)
+      return { lat: c?.lat ?? p.latitude, lng: c?.lng ?? p.longitude }
+    }
 
     // 移除旧的轨迹
     if (animationPassedPolyline) {
@@ -459,10 +460,10 @@ const animationAdapter: AnimationMapAdapter = {
 
     const points = props.tracks[0].points
     const google = (window as any).google
-    const toLatLng = (p: any) => ({
-      lat: p.latitude_wgs84 ?? p.latitude,
-      lng: p.longitude_wgs84 ?? p.longitude,
-    })
+    const toLatLng = (p: any) => {
+      const c = getMapCoords(p)
+      return { lat: c?.lat ?? p.latitude, lng: c?.lng ?? p.longitude }
+    }
 
     if (playing) {
       // 播放开始：清除双色轨迹，绘制完整灰色轨迹
@@ -1288,9 +1289,11 @@ function handleMapClick(e: Event) {
   if (!latLng) return
   const { lat, lng } = latLng
 
-  // 绘制路径/点击交互模式：直接发射点击事件（Google 地图使用 WGS84，无需转换）
+  // 绘制路径/点击交互模式：直接发射点击事件。
+  // 地图空间是 GCJ-02（见 getMapCoords），对外统一 WGS84（境外守卫原样返回）
   if (props.disablePointHover || props.emitMapClick) {
-    emit('map-click', lng, lat)
+    const [wgsLng, wgsLat] = gcj02ToWgs84(lng, lat)
+    emit('map-click', wgsLng, wgsLat)
     return
   }
 
@@ -1396,11 +1399,21 @@ function handleMapClick(e: Event) {
   }
 }
 
-// 根据坐标系获取经纬度（Google 地图使用 WGS84）
-function getWGS84Coords(point: Point): { lat: number; lng: number } | null {
-  const lat = point.latitude_wgs84 ?? point.latitude
-  const lng = point.longitude_wgs84 ?? point.longitude
-  if (lat !== undefined && lng !== undefined && !isNaN(lat) && !isNaN(lng)) {
+// 地图空间坐标（Google 路网底图的中国数据按 GCJ-02 对齐——实测 roadmap 上图元是
+// GCJ-02 偏移的，而卫星图是 WGS84 真值，两者不一致；本项目使用 roadmap 图层，
+// 统一按 GCJ-02 取点。境外 gcj02 == wgs84（转换守卫），无需分支。
+// 注意：若将来启用 google_satellite（WGS84 卫星底图），该图层需要 WGS84 口径，
+// 不能复用本函数）
+function getMapCoords(point: Point): { lat: number; lng: number } | null {
+  const gcjLat = point.latitude_gcj02
+  const gcjLng = point.longitude_gcj02
+  if (gcjLat != null && gcjLng != null && !isNaN(gcjLat) && !isNaN(gcjLng)) {
+    return { lat: gcjLat, lng: gcjLng }
+  }
+  const wgsLat = point.latitude_wgs84 ?? point.latitude
+  const wgsLng = point.longitude_wgs84 ?? point.longitude
+  if (wgsLat !== undefined && wgsLng !== undefined && !isNaN(wgsLat) && !isNaN(wgsLng)) {
+    const [lng, lat] = wgs84ToGcj02(wgsLng, wgsLat)
     return { lat, lng }
   }
   return null
@@ -1466,7 +1479,7 @@ function drawTracks() {
     const trackPointsData: Point[] = []
 
     for (const point of track.points) {
-      const coords = getWGS84Coords(point)
+      const coords = getMapCoords(point)
       if (!coords) continue
 
       const { lat, lng } = coords
@@ -1673,7 +1686,9 @@ function drawHeatmap() {
 
       const rendered: Array<{ x: number; y: number; weight: number }> = []
       for (const [lng, lat] of points) {
-        const px = projection.fromLatLngToContainerPixel(new google.maps.LatLng(lat, lng))
+        // heatmapPoints 是 WGS84；地图空间是 GCJ-02（境外守卫原样返回）
+        const [gLng, gLat] = wgs84ToGcj02(lng, lat)
+        const px = projection.fromLatLngToContainerPixel(new google.maps.LatLng(gLat, gLng))
         if (!px) continue
         // 视口外一定范围的点不参与绘制（画布外不可见）
         if (px.x < -60 || px.x > w + 60 || px.y < -60 || px.y > h + 60) continue
@@ -1725,9 +1740,10 @@ function drawCustomOverlays() {
 
   for (const overlay of props.customOverlays) {
     if (overlay.type === 'marker') {
-      // 使用 position 字段（WGS84）
+      // 使用 position 字段（WGS84），转地图空间 GCJ-02（境外守卫原样返回）
       if (!overlay.position || !overlay.icon) continue
-      const [lat, lng] = overlay.position
+      const [inLat, inLng] = overlay.position
+      const [lng, lat] = wgs84ToGcj02(inLng, inLat)
 
       const radius = overlay.icon.radius || 6
       const fillColor = overlay.icon.fillColor || '#f56c6c'
@@ -1776,7 +1792,7 @@ function drawCustomOverlays() {
         map: googleMapInstance,
       }))
     } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
-      // 使用 positions 字段（WGS84）
+      // positions 是 WGS84；转地图空间 GCJ-02（境外守卫原样返回）
       const positions = overlay.positions
       const color = overlay.color || '#409eff'
       const weight = overlay.weight || 3
@@ -1785,7 +1801,10 @@ function drawCustomOverlays() {
 
       // Google Polyline 不支持 strokeDasharray，虚线用 Symbol repeat 方案实现
       const layer = new google.maps.Polyline({
-        path: positions.map(([lat, lng]) => ({ lat, lng })),
+        path: positions.map(([lat, lng]) => {
+          const [gLng, gLat] = wgs84ToGcj02(lng, lat)
+          return { lat: gLat, lng: gLng }
+        }),
         strokeColor: color,
         strokeOpacity: dashArray ? 0 : opacity,
         strokeWeight: weight,
@@ -1947,7 +1966,7 @@ function fitBounds(paddingPercent: number = 5) {
   for (const track of props.tracks) {
     if (!track.points || track.points.length === 0) continue
     for (const point of track.points) {
-      const coords = getWGS84Coords(point)
+      const coords = getMapCoords(point)
       if (!coords) continue
       const { lat, lng } = coords
       if (!isNaN(lat) && !isNaN(lng)) {
@@ -2091,7 +2110,7 @@ watch(() => props.highlightPointIndex, (newIndex) => {
   }
 
   // 计算位置（WGS84）
-  const position = getWGS84Coords(point)
+  const position = getMapCoords(point)
   if (!position) {
     hideMarker()
     return

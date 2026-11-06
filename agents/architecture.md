@@ -33,6 +33,22 @@
 
 地图组件根据选择的底图自动使用对应坐标。
 
+### 境外点坐标口径（2026-11-06 起，勿回退）
+
+**GCJ02/BD09 偏移加密只在中国境内有效；百度海外底图按 WGS84 对齐。** 后端入库时对所有点无条件执行 wgs84→gcj02→bd09 转换，境外点的 gcj02 字段恰好等于 wgs84（`wgs84_to_gcj02` 自带 outOfChina 守卫），但 bd09 字段是套用中国偏移算法的产物（偏差 ~1km，属无效数据、不迁移）。因此**所有百度口径的取点必须先境内判定**：
+
+- `utils/coordTransform.ts`：`gcj02ToBd09`/`bd09ToGcj02` 带 outOfChina 守卫（境外原样返回）；导出 `isInChina(lng, lat)` 粗判矩形与 `isChinaRegionPoints(points, sample=20)` 采样多数判定（按轨迹整体选口径，避免跨界轨迹逐点跳变）
+- `BMap.vue`：`pickBaiduLngLat()` 统一取点（境内 bd09 / 境外 wgs84），`getBD09Coords`、动画适配器、customOverlay、热力图全走此口径或 `wgs84ToBd09` 守卫
+- `TrackAnimationPlayer.vue`：`isBD09Provider` = `mapProvider === 'baidu' && isChinaRegionPoints(points)`；`LeafletMap.vue` `getCoordsByCRS` bd09 分支同口径
+
+### Google 底图坐标口径（2026-11-06 实测，勿回退）
+
+**Google 的中国数据两张底图口径不一致**（Google 自身的历史问题）：路网（roadmap，`lyrs=m`）的图元按 **GCJ-02** 偏移，卫星图（`lyrs=s`）是 **WGS84** 真值。实测方法：同一段境内轨迹分别用 WGS84 与 GCJ-02 口径叠加——路网图上 GCJ-02 压路、WGS84 偏 500m；卫星图上恰好相反。**本项目只配置路网图层（`google`），全链路统一按 GCJ-02**（境外 gcj02 == wgs84，转换守卫兜底）：
+
+- `GoogleMap.vue`（SDK）：`getMapCoords()` 统一取点（优先 gcj02 字段、缺失时 wgs84→gcj02 转换），轨迹/动画双色线/标记/bounds/highlight/最新点全走它；热力图（WGS84 输入）投影前 `wgs84ToGcj02`；customOverlay（绘制路径模式）同转换；**`map-click` 对外发射前 `gcj02ToWgs84`**（地图空间是 GCJ-02，外部约定 WGS84）
+- `TrackAnimationPlayer.vue`：`isGCJ02Provider` 含 `google`（相机/标记/插值全用 gcj02，与 Leaflet 按图层 `crs: gcj02` 画的轨迹一致——修前播放器用 WGS84 而 Leaflet 轨迹用 GCJ，标记与轨迹错开 500m）
+- **未配置 `google_satellite`**：若将来启用，该图层是 WGS84 卫星底图（配 crs: wgs84），不能复用上述 GCJ-02 口径；SDK 播放器按 `mapProvider`（只有 'google'）无法区分变体，届时需要把图层 CRS 透传到播放器
+
 ## 数据库驱动与平台兼容性
 
 项目支持三种数据库：SQLite、MySQL、PostgreSQL。不同平台下驱动选择：

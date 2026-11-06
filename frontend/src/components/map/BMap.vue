@@ -10,7 +10,7 @@ import { escapeHtml } from '@/utils/format'
 import { useConfigStore } from '@/stores/config'
 import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
-import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84 } from '@/utils/coordTransform'
+import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84, isInChina } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
@@ -262,6 +262,35 @@ const tracksData = new Map<number, { points: Point[]; path: { lng: number; lat: 
 
 let currentTooltipPoint: Point | null = null  // 当前 tooltip 显示的点（用于异步更新）
 
+/**
+ * 百度底图取点口径：境内用 BD09（偏移加密有效），境外直接用 WGS84。
+ * 百度海外底图按 WGS84 对齐，而后端存储/换算的 BD09 值对境外点是套用中国
+ * 偏移算法的结果（实测偏差约 1km），境外必须绕开 BD09 字段
+ */
+function pickBaiduLngLat(p: {
+  latitude_bd09?: number | null
+  longitude_bd09?: number | null
+  latitude_wgs84?: number | null
+  longitude_wgs84?: number | null
+  latitude?: number
+  longitude?: number
+}): { lng: number; lat: number } {
+  const bdLng = p.longitude_bd09
+  const bdLat = p.latitude_bd09
+  if (
+    bdLng != null && bdLat != null && !isNaN(bdLng) && !isNaN(bdLat) &&
+    isInChina(bdLng, bdLat)
+  ) {
+    return { lng: bdLng, lat: bdLat }
+  }
+  const wgsLng = p.longitude_wgs84
+  const wgsLat = p.latitude_wgs84
+  if (wgsLng != null && wgsLat != null && !isNaN(wgsLng) && !isNaN(wgsLat)) {
+    return { lng: wgsLng, lat: wgsLat }
+  }
+  return { lng: p.longitude ?? 0, lat: p.latitude ?? 0 }
+}
+
 // 动画地图适配器实现
 const animationAdapter: AnimationMapAdapter = {
   setPassedSegment(start: number, end: number) {
@@ -272,10 +301,10 @@ const animationAdapter: AnimationMapAdapter = {
     const remainingPoints = points.slice(end)
 
     const BMapClass = (window as any).BMap || (window as any).BMapGL
-    const toPoint = (p: any) => new BMapClass.Point(
-      p.longitude_bd09 ?? p.longitude_wgs84 ?? p.longitude,
-      p.latitude_bd09 ?? p.latitude_wgs84 ?? p.latitude
-    )
+    const toPoint = (p: any) => {
+      const c = pickBaiduLngLat(p)
+      return new BMapClass.Point(c.lng, c.lat)
+    }
 
     // 移除旧的轨迹
     if (animationPassedPolyline) {
@@ -428,10 +457,10 @@ const animationAdapter: AnimationMapAdapter = {
 
     const points = props.tracks[0].points
     const BMapClass = (window as any).BMap || (window as any).BMapGL
-    const toPoint = (p: any) => new BMapClass.Point(
-      p.longitude_bd09 ?? p.longitude_wgs84 ?? p.longitude,
-      p.latitude_bd09 ?? p.latitude_wgs84 ?? p.latitude
-    )
+    const toPoint = (p: any) => {
+      const c = pickBaiduLngLat(p)
+      return new BMapClass.Point(c.lng, c.lat)
+    }
 
     if (playing) {
       // 播放开始：清除双色轨迹，绘制完整灰色轨迹
@@ -1669,12 +1698,13 @@ async function initMap() {
           for (const overlay of props.customOverlays) {
             if (overlay.type === 'marker') {
               let lat: number | undefined, lng: number | undefined
-              // 优先使用 BD09 坐标
-              if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+              // 优先使用 BD09 坐标（仅境内；境外百度底图按 WGS84 对齐）
+              if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null &&
+                  isInChina(overlay.longitude_bd09, overlay.latitude_bd09)) {
                 lat = overlay.latitude_bd09
                 lng = overlay.longitude_bd09
               } else if (overlay.position) {
-                // WGS84 坐标，需要转换
+                // WGS84 坐标，转换到百度口径（境外 wgs84ToBd09 原样返回）
                 const [bdLng, bdLat] = wgs84ToBd09(overlay.position[1], overlay.position[0])
                 lat = bdLat
                 lng = bdLng
@@ -1733,7 +1763,15 @@ async function initMap() {
 
 // 根据坐标系获取经纬度（BD09）
 function getBD09Coords(point: Point): { lng: number; lat: number } | null {
-  // 如果已有 BD09 坐标，直接使用
+  // 境外：百度海外底图按 WGS84 对齐，直接用 WGS84（BD09 偏移加密只在境内有效，
+  // 存储的 BD09 字段对境外点偏差约 1km）
+  if (point.longitude_wgs84 !== undefined && point.latitude_wgs84 !== undefined &&
+      !isNaN(point.longitude_wgs84) && !isNaN(point.latitude_wgs84) &&
+      !isInChina(point.longitude_wgs84, point.latitude_wgs84)) {
+    return { lng: point.longitude_wgs84, lat: point.latitude_wgs84 }
+  }
+
+  // 境内：已有 BD09 坐标则直接使用
   if (point.latitude_bd09 !== undefined && point.longitude_bd09 !== undefined &&
       !isNaN(point.latitude_bd09) && !isNaN(point.longitude_bd09)) {
     return { lng: point.longitude_bd09, lat: point.latitude_bd09 }
@@ -2177,15 +2215,18 @@ function drawCustomOverlays() {
 
   for (const overlay of props.customOverlays) {
     if (overlay.type === 'marker') {
-      // 优先使用 BD09 坐标（百度地图坐标系），否则使用 position 字段（WGS84）
+      // 优先使用 BD09 坐标（仅境内；境外百度底图按 WGS84 对齐），否则使用 position 字段（WGS84）
       let lat: number, lng: number
-      if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+      if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null &&
+          isInChina(overlay.longitude_bd09, overlay.latitude_bd09)) {
         lat = overlay.latitude_bd09
         lng = overlay.longitude_bd09
         console.log('[BMap] 使用 BD09 坐标:', { label: overlay.label, lat, lng })
       } else if (overlay.position) {
         [lat, lng] = overlay.position
-        console.log('[BMap] 使用 position (WGS84):', { label: overlay.label, lat, lng })
+        // WGS84 → 百度口径（境内转 BD09；境外 wgs84ToBd09 原样返回）
+        ;[lng, lat] = wgs84ToBd09(lng, lat)
+        console.log('[BMap] 使用 position (WGS84→百度口径):', { label: overlay.label, lat, lng })
       } else {
         console.log('[BMap] 跳过标记: 无有效坐标', overlay)
         continue
@@ -2233,8 +2274,11 @@ function drawCustomOverlays() {
       customOverlayMarkers.push(marker)
       console.log('[BMap] 标记覆盖物已添加, 当前数量:', customOverlayMarkers.length)
     } else if (overlay.type === 'polyline' && overlay.positions && overlay.positions.length > 1) {
-      // 优先使用 BD09 坐标，回退到 WGS84
-      const positions = overlay.positions_bd09 || overlay.positions
+      // 百度口径：境内用 BD09，境外直接用 WGS84（positions，海外底图按 WGS84 对齐）
+      const firstBd = overlay.positions_bd09?.[0]
+      const positions = (overlay.positions_bd09 && firstBd && isInChina(firstBd[1], firstBd[0]))
+        ? overlay.positions_bd09
+        : overlay.positions
       const points = positions.map(([lat, lng]) => new BMap.Point(lng, lat))
       const color = overlay.color || '#409eff'
       const weight = overlay.weight || 3
@@ -2318,12 +2362,13 @@ watchEffect(() => {
       for (const overlay of props.customOverlays) {
         if (overlay.type === 'marker') {
           let lat: number | undefined, lng: number | undefined
-          // 优先使用 BD09 坐标
-          if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null) {
+          // 优先使用 BD09 坐标（仅境内；境外百度底图按 WGS84 对齐）
+          if (overlay.latitude_bd09 != null && overlay.longitude_bd09 != null &&
+              isInChina(overlay.longitude_bd09, overlay.latitude_bd09)) {
             lat = overlay.latitude_bd09
             lng = overlay.longitude_bd09
           } else if (overlay.position) {
-            // WGS84 坐标，需要转换
+            // WGS84 坐标，转换到百度口径（境外 wgs84ToBd09 原样返回）
             const [bdLng, bdLat] = wgs84ToBd09(overlay.position[1], overlay.position[0])
             lat = bdLat
             lng = bdLng

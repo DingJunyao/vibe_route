@@ -4,6 +4,21 @@
 
 ## 2026-11
 
+- Google 境内轨迹偏移修复（2026-11-06 第四笔）：
+  - **问题**：境内轨迹在 Google SDK 与 Google Leaflet 上均偏移约 500m。根因：**Google 中国数据两张底图口径不一致**——路网（roadmap，`lyrs=m`）按 GCJ-02 偏移、卫星图（`lyrs=s`）是 WGS84 真值（Google 自身的历史问题）
+  - **实证**：同一段境内轨迹（track 20 中段）分别用 WGS84（绿）与 GCJ-02（红）口径叠加到运行中的 Google SDK 实例——路网图上红（GCJ-02）精确压 G30 高速、绿偏到无路区；切到卫星图正好相反（绿压路、红飘到农田）。另用天安门周边 Google vs OSM 瓦片对照 + POI 打点交叉验证
+  - **代码现状与缺陷**：Google SDK（`GoogleMap.vue`）全链路按 WGS84 画（在 GCJ-02 路网上整体偏 500m）；Google Leaflet 按图层 `crs: gcj02` 画轨迹（压路正确），但 `TrackAnimationPlayer` 的 `isGCJ02Provider` 只包含 amap/tencent → 播放器相机/标记用 WGS84，与轨迹错开 500m（导出截图中轨迹被裁到视口外只剩一小段）
+  - **修复**：`GoogleMap.vue` 新增 `getMapCoords()` 统一取点（优先 gcj02 字段、缺失时 wgs84→gcj02），轨迹/动画双色线/标记/bounds/highlight/最新点全走它；热力图投影前 `wgs84ToGcj02`；customOverlay 标记与折线同转换；`map-click` 发射前 `gcj02ToWgs84`（地图空间是 GCJ，对外约定 WGS84）；`TrackAnimationPlayer.vue` `isGCJ02Provider` 增加 google（境外 gcj02==wgs84，转换守卫兜底）
+  - **未配置 google_satellite**（本地库只有 7 个基础图层）：卫星底图是 WGS84，将来启用需按 wgs84 口径并让播放器感知图层 CRS（已记入 `agents/architecture.md`）
+  - **验证**：vite build 过；headless 截图——境内 track 20 Google SDK/Leaflet 轨迹均精确压服务区道路与高速（与高德 SDK、OSM 对照一致）、普通浏览态正常；境外 track 90 Google SDK/Leaflet 仍压 Bypass 高速（gcj02==wgs84 不受影响）
+- 百度 SDK/Leaflet 百度层境外轨迹偏移修复（2026-11-06 第三笔）：
+  - **问题**：境外轨迹（如巴厘岛）在百度 SDK 与 Leaflet 百度层显示时整体偏移约 1km，轨迹画到旁边街区。根因：**百度海外底图按 WGS84 对齐**（百度境内底图才有 BD09 偏移加密），而后端入库时对所有轨迹无条件执行 wgs84→bd09 转换（境外点的 `latitude_bd09/longitude_bd09` 是套用中国偏移算法的结果，实测巴厘岛偏差 ~1000m、东京 ~916m），前端 BMap/Leaflet 又无条件优先读 bd09 字段。gcj02 转换算法自带 outOfChina 守卫（境外原样返回），故高德/腾讯境外无此问题——只有百度中招
+  - **实证方法**：应用导出页的 BMapGL 实例上叠加同段轨迹两条线 A/B 对照——WGS84 口径笔直压在 Bypass 高速上，BD09 口径飘到 ~700m 外街区；量化 `wgs84_to_gcj02`（境外偏移=0）vs `wgs84_to_bd09`（境外偏移 ~1km）
+  - **修复**（前端三层，存量数据无需迁移——境外点绕开 bd09 字段即可，后端存储不动）：
+    1. `utils/coordTransform.ts`：`gcj02ToBd09`/`bd09ToGcj02` 补 `outOfChina` 守卫（境外原样返回，与 `wgs84ToGcj02` 对齐）；导出 `isInChina(lng, lat)`（粗判矩形）与 `isChinaRegionPoints(points, sample=20)`（采样多数判定，按轨迹整体选口径，避免跨界轨迹逐点偏移量级跳变）
+    2. `BMap.vue`：新增 `pickBaiduLngLat()` 统一取点口径（境内用 bd09、境外用 wgs84），动画适配器 `setPassedSegment`/`setAnimationPlaying` 的 toPoint、`getBD09Coords`（主渲染/fitBounds/tooltip 共用）均改走该口径；三处 customOverlay 的 bd09 字段优先读取加 `isInChina` 条件，polyline 的 `positions_bd09` 按首点境内判定；click 回转 WGS84（`bd09ToWgs84`）经守卫后境外原样返回恰好正确（境外底图坐标本就是 WGS84）；热力图 `wgs84ToBd09` 经守卫境外原样返回
+    3. `TrackAnimationPlayer.vue`：`isBD09Provider` 加 `isChinaRegionPoints(points)` 条件（境外百度轨迹的插值/相机/标记坐标全部回退 WGS84 口径）；`LeafletMap.vue` `getCoordsByCRS` bd09 分支同口径（境外直接用 wgs84）
+  - **验证**：vite build 过；headless 截图——境外（track 90 巴厘岛）百度 SDK 轨迹修复后笔直压 Bypass 高速、与 Leaflet OSM 真值一致；境内回归（track 20 京昆高速洋县服务区）轨迹精确压路含匝道，BD09 口径不受影响
 - 回放 HUD 移除正北/轨迹朝向独立按钮（2026-11-06 第二笔）：
   - **原因**：相机模式按钮的三态循环（全轨迹 → 固定中心-正北朝上 → 固定中心-轨迹朝上）已完整覆盖朝向切换，独立按钮冗余
   - **改动**：`AnimationHUD.vue` 删按钮与 `toggle-orientation-mode` emit 及 tooltip computed、清理 Compass/Position 图标导入；`TrackAnimationPlayer.vue` 与 `TrackDetail.vue`（移动端共用 HUD）删对应事件接线；`stores/animation.ts` 删死函数 `toggleOrientationMode`（`setOrientationMode` 保留，导出流程设置朝向仍用）

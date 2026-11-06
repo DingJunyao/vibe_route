@@ -18,6 +18,38 @@ function outOfChina(lng: number, lat: number): boolean {
 }
 
 /**
+ * 坐标是否在中国境内（BD09/GCJ02 偏移加密的有效范围，粗判矩形）。
+ * 百度海外底图按 WGS84 对齐，境外点显示时应直接使用 WGS84
+ */
+export function isInChina(lng: number, lat: number): boolean {
+  return !outOfChina(lng, lat)
+}
+
+/**
+ * 判断一组点是否属于中国境内（采样多数判定）。
+ * 用于选择百度底图坐标口径：逐点判断会让跨界轨迹在边界处出现偏移量级的跳变，
+ * 按轨迹整体口径处理（轨迹几乎总是整体位于一侧）
+ */
+export function isChinaRegionPoints(
+  points: Array<{ latitude_wgs84?: number | null; longitude_wgs84?: number | null; latitude?: number; longitude?: number }>,
+  sample = 20
+): boolean {
+  let checked = 0
+  let inChina = 0
+  const step = Math.max(1, Math.floor(points.length / sample))
+  for (let i = 0; i < points.length; i += step) {
+    const p = points[i]
+    const lng = p.longitude_wgs84 ?? p.longitude
+    const lat = p.latitude_wgs84 ?? p.latitude
+    if (typeof lng === 'number' && typeof lat === 'number' && !isNaN(lng) && !isNaN(lat)) {
+      checked++
+      if (isInChina(lng, lat)) inChina++
+    }
+  }
+  return checked > 0 && inChina * 2 >= checked
+}
+
+/**
  * 纬度转换
  */
 function transformLat(lng: number, lat: number): number {
@@ -91,8 +123,11 @@ export function gcj02ToWgs84(lng: number, lat: number): [number, number] {
 
 /**
  * GCJ02 转 BD09 (百度坐标系)
+ * 境外原样返回：BD09 偏移加密只在中国境内有意义，百度海外底图按 WGS84 对齐，
+ * 对境外点套用偏移会带来约 1km 的显示偏移
  */
 export function gcj02ToBd09(lng: number, lat: number): [number, number] {
+  if (outOfChina(lng, lat)) return [lng, lat]
   const z = Math.sqrt(lng * lng + lat * lat) + 0.00002 * Math.sin(lat * pi * 3000.0 / 180.0)
   const theta = Math.atan2(lat, lng) + 0.000003 * Math.cos(lng * pi * 3000.0 / 180.0)
   const bdLng = z * Math.cos(theta) + 0.0065
@@ -102,8 +137,10 @@ export function gcj02ToBd09(lng: number, lat: number): [number, number] {
 
 /**
  * BD09 转 GCJ02
+ * 境外原样返回（与 gcj02ToBd09 的守卫对称：境外不存在真正的 BD09 坐标）
  */
 export function bd09ToGcj02(lng: number, lat: number): [number, number] {
+  if (outOfChina(lng, lat)) return [lng, lat]
   const x = lng - 0.0065
   const y = lat - 0.006
   const z = Math.sqrt(x * x + y * y) - 0.00002 * Math.sin(y * pi * 3000.0 / 180.0)
