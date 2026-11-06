@@ -256,13 +256,18 @@ class EmailService:
     async def init_default_templates(self, db: AsyncSession, user_id: int = 1) -> None:
         """初始化默认邮件模板（已存在的 key 不覆盖，管理员编辑内容得以保留）"""
         for template_key, defaults in DEFAULT_TEMPLATES.items():
+            # 存在性检查包含软删除墓碑（template_key 唯一索引仍被墓碑占用）
             result = await db.execute(
                 select(EmailTemplate).where(
                     EmailTemplate.template_key == template_key,
-                    EmailTemplate.is_valid == True,  # noqa: E712
                 )
             )
-            if result.scalar_one_or_none() is not None:
+            template = result.scalar_one_or_none()
+            if template is not None:
+                # 有效模板不覆盖，保留管理员编辑；墓碑复活以恢复模板可用
+                if not template.is_valid:
+                    template.is_valid = True
+                    template.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 continue
 
             now = datetime.now(timezone.utc).replace(tzinfo=None)

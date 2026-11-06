@@ -29,6 +29,20 @@ class UserConfigService:
         if config:
             return config
 
+        # 复用软删除墓碑（user_id 唯一索引仍被墓碑占用，直接插入会撞唯一约束）
+        result = await db.execute(
+            select(UserConfig).where(
+                and_(UserConfig.user_id == user_id, UserConfig.is_valid == False)
+            )
+        )
+        deleted_config = result.scalar_one_or_none()
+        if deleted_config:
+            deleted_config.is_valid = True
+            deleted_config.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+            await db.refresh(deleted_config)
+            return deleted_config
+
         # 创建新配置
         config = UserConfig(
             user_id=user_id,

@@ -36,6 +36,11 @@
   - **运维注意**：导出任务运行期间改前端代码会经 HMR 打挂运行中的录制页（本次冒烟首跑即因此失败，与「导出运行中勿改后端代码」同类坑）
   - **厂商风控复现**：实验脚本短时高频拉高德 z17 瓦片后，webrd0x 对本机会话返回 179 字节素色占位 PNG（Leaflet/SDK 同受影响，数十分钟后自愈）——与用户报告的「SDK 长录制退化」同机理的微型复现
 
+- 软删除记录占用唯一索引导致重复误判修复（2026-11-05 第六笔）：
+  - **问题**：用户改名/管理员改用户名或邮箱到「已删除用户」占用值时报 409——users.username/email 唯一索引覆盖含软删除墓碑在内的全部行，改名预检只过滤有效用户（is_valid=1）通过后 UPDATE 撞唯一索引，落 IntegrityError 兜底 409「用户名已被使用」
+  - **同类排查**（unique + 软删组合全库审查）：①PUT /auth/profile、②PUT /admin/users/{id} 同模式；③user_configs.user_id unique——reset_config 软删后 get_or_create_config 直接 INSERT 新行必撞唯一索引；④InviteCode.code unique——POST /admin/invite-codes 无重复检查，自定义码撞有效码或已删码均 IntegrityError 500；⑤email_service.init_default_templates 存在性检查只看 is_valid=1，墓碑 key 触发 seed INSERT 撞 template_key 唯一索引（当前无删除模板端点，防御性修复）；track.share_token、live_recording.token 为随机值碰撞可忽略；config.key、admin_divisions.code 无软删路径（导入按全量行查找、复用既有行），均不改
+  - **修复**：user_service.py 新增 release_deleted_username / release_deleted_email（同名墓碑改写为 `原名_deleted_{id}` 释放占用，flush 不 commit，随更新同事务提交）；account.py / admin.py 更新前先释放墓碑（IntegrityError 兜底保留）；user_config_service.get_or_create_config 复用同 user_id 墓碑（置回 is_valid=True）；config_service.create_invite_code 撞有效码 raise ValueError → 端点转 409「邀请码已存在」、撞墓碑复活复用（重置 max_uses/used_count/有效期/created_by）；email_service.init_default_templates 存在性检查含墓碑，墓碑复活保留已编辑内容；注册路径不改——user_service.create 复活同用户名/邮箱墓碑本就是设计意图，注册不会被已删用户名拒绝
+  - **验证**：py_compile 全过（C:/Python314/python.exe，conda/py3.11 不可用为既有环境问题）；dev 前后端当前未运行，热重载实测留待启动后自查
 - 顶部进度条空闲页周期性闪现修复（2026-11-05 第五笔）：
   - **问题**：页面静置时顶部加载进度条仍每隔约 2 秒出现一次——`request.ts` 请求拦截器对所有请求默认触发 `nProgressStore.start()`（仅 `skipProgress: true` 跳过），而轨迹列表页 `TrackList.vue` onMounted 无条件启动 2 秒轮询 `trackApi.getAllFillProgress()`；另有多个定时轮询 API 未带该标记（`track.getFillProgress`、`liveRecording.getStatus`、`admin.getTask`、`admin.getImportProgress`、`task.getTask`）
   - **修复**：六个轮询用途 API 统一补 `{ skipProgress: true }`（`api/track.ts` getFillProgress/getAllFillProgress、`api/liveRecording.ts` getStatus、`api/admin.ts` getImportProgress/getTask、`api/task.ts` getTask）；新增 `src/types/axios.d.ts` 模块扩展补声明 `skipProgress`/`skipAuth`（此前无类型声明，`animationTask.ts` 等既有调用靠 esbuild 不做类型检查才未暴露）

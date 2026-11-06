@@ -380,6 +380,27 @@ class ConfigService:
         if expires_in_days:
             expires_at = (datetime.now(timezone.utc) + timedelta(days=expires_in_days)).replace(tzinfo=None)
 
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        # code 唯一索引包含软删除记录：与有效邀请码重名时报错，墓碑则复活复用
+        result = await db.execute(
+            select(InviteCode).where(InviteCode.code == code)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            if existing.is_valid:
+                raise ValueError(f"邀请码已存在：{code}")
+            existing.is_valid = True
+            existing.max_uses = max_uses
+            existing.used_count = 0
+            existing.created_by = created_by
+            existing.expires_at = expires_at
+            existing.updated_by = created_by
+            existing.updated_at = now
+            await db.commit()
+            await db.refresh(existing)
+            return existing
+
         invite_code = InviteCode(
             code=code,
             max_uses=max_uses,
@@ -387,6 +408,7 @@ class ConfigService:
             expires_at=expires_at,
             is_valid=True,
             updated_by=created_by,
+            updated_at=now,
         )
         db.add(invite_code)
         await db.commit()
