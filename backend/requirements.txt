@@ -54,6 +54,7 @@ pyyaml
 pypinyin
 loguru
 openpyxl
+defusedxml  # XML 安全解析（KML 导入防 XXE）
 
 # 解压
 rarfile

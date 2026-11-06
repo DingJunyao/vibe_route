@@ -4,6 +4,10 @@
 
 ## 2026-11
 
+- KML 解析 XXE 处理（2026-11-06 第五笔）：
+  - **背景**：commit 时 Mimosa 门禁仍报 `track_service.py:3363` XXE（medium）——`9fa3ef4`（2026-11-05）已给 lxml parser 加 `resolve_entities=False/load_dtd=False/no_network=True/huge_tree=False`，但扫描规则不认参数组合，按 lxml 用法本身报（已验证为通用告警而非真实可达漏洞）
+  - **修复**：`create_from_kml` 弃用 lxml 改 **`defusedxml.ElementTree`**（禁实体展开/外部实体/DTD/实体爆炸，天然免疫 XXE；返回 stdlib Element），5 处 xpath 平移为 `findall` + Clark 写法（`{ns}Tag`，按 URI 匹配、与前缀无关）；解析前保留显式 DTD/ENTITY 拒绝（`re.search(r'<!\s*(DOCTYPE|ENTITY)', kml_content[:8192])` → ValueError，XML 规范 DOCTYPE 必在根元素前，KML 正常内容永不含）。**依赖**：defusedxml 从 dev 组升为运行时依赖（pyproject dependencies + requirements.txt，requirements-dev.txt 移除）；lxml 保留（gpxpy 内部使用，项目代码已无直接引用）
+  - **验证**：py_compile 过；功能测试——含外部实体+内部实体的恶意 KML 在防线处拒绝、正常 KML 经 defusedxml 完整解析到建轨迹阶段；**Mimosa deep 复扫 XXE 发现消失**（14 项 findings 全为「敏感操作未观察到权限检查」类既有业务启发式 inconclusive 候选，封印 `sha256:589adebf...`）；svg_gen.py 的 `ET.parse` 解析打包内置路牌模板（非用户输入，stdlib ElementTree 本就禁止 DTD），不改
 - Google 境内轨迹偏移修复（2026-11-06 第四笔）：
   - **问题**：境内轨迹在 Google SDK 与 Google Leaflet 上均偏移约 500m。根因：**Google 中国数据两张底图口径不一致**——路网（roadmap，`lyrs=m`）按 GCJ-02 偏移、卫星图（`lyrs=s`）是 WGS84 真值（Google 自身的历史问题）
   - **实证**：同一段境内轨迹（track 20 中段）分别用 WGS84（绿）与 GCJ-02（红）口径叠加到运行中的 Google SDK 实例——路网图上红（GCJ-02）精确压 G30 高速、绿偏到无路区；切到卫星图正好相反（绿压路、红飘到农田）。另用天安门周边 Google vs OSM 瓦片对照 + POI 打点交叉验证

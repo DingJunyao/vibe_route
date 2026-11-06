@@ -3,6 +3,7 @@
 """
 import gpxpy
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import select, func, delete, insert, and_, or_, update
@@ -3356,37 +3357,34 @@ class TrackService:
         Returns:
             创建的轨迹对象
         """
-        from lxml import etree
+        import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as SafeET
 
-        # 解析 KML（禁用实体/DTD/网络访问，防 XXE）
+        # 防 XXE 双层防线：
+        # 1) 显式拒绝 DTD/实体定义——XML 规范要求 DOCTYPE 位于根元素前，
+        #    KML 正常内容永不含 DTD/ENTITY；参数化实体、外部 DTD 等所有实体形态
+        #    在此被整体拦下（DOCTYPE 必须在前 8KB 内，扫头即可）
+        if re.search(r'<!\s*(DOCTYPE|ENTITY)', kml_content[:8192], re.IGNORECASE):
+            raise ValueError("KML 文件包含非法的 DTD/实体定义")
+        # 2) defusedxml 解析：禁实体展开、禁外部实体/DTD、防实体爆炸，天然免疫 XXE
         try:
-            root = etree.fromstring(
-                kml_content.encode('utf-8'),
-                parser=etree.XMLParser(
-                    resolve_entities=False,
-                    load_dtd=False,
-                    no_network=True,
-                    huge_tree=False,
-                ),
-            )
-        except etree.ParseError as e:
+            root = SafeET.fromstring(kml_content.encode('utf-8'))
+        except ET.ParseError as e:
             raise ValueError(f"无法解析 KML 文件: {e}")
 
-        # 定义命名空间
-        ns = {
-            'kml': 'http://www.opengis.net/kml/2.2',
-            'gx': 'http://www.google.com/kml/ext/2.2'
-        }
+        # 定义命名空间（ElementTree 用 Clark 写法，不支持前缀映射）
+        kml_ns = 'http://www.opengis.net/kml/2.2'
+        gx_ns = 'http://www.google.com/kml/ext/2.2'
 
         # 查找 gx:Track 元素（两步路"轨迹"格式，带时间）
-        tracks = root.xpath('.//gx:Track', namespaces=ns)
+        tracks = root.findall(f'.//{{{gx_ns}}}Track')
         if tracks:
             # 使用第一个轨迹
             track_element = tracks[0]
 
             # 提取坐标和时间
-            coord_elements = track_element.xpath('gx:coord', namespaces=ns)
-            when_elements = track_element.xpath('kml:when', namespaces=ns)
+            coord_elements = track_element.findall(f'{{{gx_ns}}}coord')
+            when_elements = track_element.findall(f'{{{kml_ns}}}when')
 
             if not coord_elements:
                 raise ValueError("KML 文件中没有坐标数据")
@@ -3396,7 +3394,7 @@ class TrackService:
             count = min(len(coord_elements), len(when_elements))
         else:
             # 检查是否是两步路"路径"格式（LineString，无时间）
-            linestrings = root.xpath('.//kml:LineString', namespaces=ns)
+            linestrings = root.findall(f'.//{{{kml_ns}}}LineString')
             if linestrings:
                 raise ValueError(
                     "检测到这是两步路的“路径”格式（无时间信息）。"
@@ -3405,7 +3403,7 @@ class TrackService:
                 )
 
             # 检查是否有标准 KML LineString（非两步路）
-            linestrings = root.xpath('.//LineString')
+            linestrings = root.findall('.//LineString')
             if linestrings:
                 raise ValueError(
                     "KML 文件使用 LineString 格式，该格式不包含时间信息。"

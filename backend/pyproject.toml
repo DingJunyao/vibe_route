@@ -48,6 +48,8 @@ dependencies = [
     "pypinyin",
     "loguru",
     "openpyxl",
+    # XML 安全解析（KML 导入防 XXE）
+    "defusedxml",
     # 解压
     "rarfile",
     "playwright==1.58.0",
@@ -58,7 +60,6 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-asyncio",
-    "defusedxml",
 ]
 
 [tool.uv]
