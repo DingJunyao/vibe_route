@@ -4,6 +4,12 @@
 
 ## 2026-11
 
+- SDK 录制 POI 退化根因修复：SDK 引擎一律逐帧导出（2026-11-06 第六笔）：
+  - **问题**：用户以高德 SDK 导出崤函大道轨迹，成片中后段 POI 全部消失（只剩路网与建筑方块）——即长期未解的「SDK 长录制退化」问题，所有 SDK 地图类似
+  - **根因**：导出管线此前按输出时长分路（≤30s 逐帧 / >30s CDP screencast 流式），崤函大道这类长输出全走**流式**——页面实时连续播放、地图永不停止。SDK 矢量渲染的 POI 标注管线只在相机停稳（moveend/idle）时重排，连续运动下 POI 持续退化不再恢复。**amap_remotion 之所以解决了：它根本没有流式模式，两版合成（栅格 1x、矢量 16x）全部逐帧渲染，每帧等 moveend→双 rAF→画布收敛后再截图，帧间地图空闲、标注恢复**。此前补的 waitForIdle/亚像素跳帧都在逐帧路径上，而长输出从未走那条路
+  - **修复**（`playwright_export.py`）：`use_frame_mode = request.engine != 'leaflet' or frame_count <= FRAME_MODE_MAX_FRAMES`——**SDK 引擎一律逐帧**；`_capture_frame_mode` 重写为 JPEG 直通 ffmpeg stdin（`-f image2pipe -framerate 30 -c:v mjpeg -i pipe:0`，CFR 输出、x264 veryfast/crf16），**不落盘中间帧**（长输出数万帧不再堆 GB 级临时帧目录，`_compose_frames_with_ffmpeg` 与 frames_dir 机制随之删除；veryfast 降低弱机上编码与渲染的 CPU 争抢）；写帧 `await drain()` 背压防内存堆积；收尾 `wait_for(proc.wait(), 1800)` 异步不冻结事件循环；异常/取消 kill ffmpeg + 删残缺输出；逐帧卡死哨兵预算 5s→**8s/帧**（管道模式下 ffmpeg 与浏览器并发抢 CPU，本机 SwiftShader 单帧实测 ~5s）。Leaflet 长输出保留流式（栅格瓦片无标注管线问题，瓦片门控+预热页兜底）；SDK 逐帧不预热（amap_remotion 同款按需加载，避免双倍厂商负载）
+  - **代价与使用建议**：逐帧耗时 ≈ 输出帧数 × 单帧时间（真机 GPU 约 0.1-0.5s/帧，amap_remotion 实测矢量 ~9fps），长轨迹建议用高倍速压缩输出时长（耗时只取决于输出时长，与轨迹实际时长无关）；1x 数小时导出会非常久，任务页可随时取消
+  - **验证**：py_compile 过；本机端到端冒烟（track 90 百度 GL、speed=32、109 帧、fixed-center+track-up）经管道逐帧产出 3.7s mp4（时长与帧数精确吻合）、全程无 frames 落盘目录、抽帧确认 POI/路网/轨迹/标记/HUD 完整。**POI 不退化的最终确认依赖用户真机 GPU 环境复测**（本机 headless 降级 DomRender 栅格，POI 烘焙在瓦片里无法复现退化）
 - KML 解析 XXE 处理（2026-11-06 第五笔）：
   - **背景**：commit 时 Mimosa 门禁仍报 `track_service.py:3363` XXE（medium）——`9fa3ef4`（2026-11-05）已给 lxml parser 加 `resolve_entities=False/load_dtd=False/no_network=True/huge_tree=False`，但扫描规则不认参数组合，按 lxml 用法本身报（已验证为通用告警而非真实可达漏洞）
   - **修复**：`create_from_kml` 弃用 lxml 改 **`defusedxml.ElementTree`**（禁实体展开/外部实体/DTD/实体爆炸，天然免疫 XXE；返回 stdlib Element），5 处 xpath 平移为 `findall` + Clark 写法（`{ns}Tag`，按 URI 匹配、与前缀无关）；解析前保留显式 DTD/ENTITY 拒绝（`re.search(r'<!\s*(DOCTYPE|ENTITY)', kml_content[:8192])` → ValueError，XML 规范 DOCTYPE 必在根元素前，KML 正常内容永不含）。**依赖**：defusedxml 从 dev 组升为运行时依赖（pyproject dependencies + requirements.txt，requirements-dev.txt 移除）；lxml 保留（gpxpy 内部使用，项目代码已无直接引用）

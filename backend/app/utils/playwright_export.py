@@ -4,7 +4,6 @@ import asyncio
 import base64
 import json
 import math
-import shutil
 import subprocess
 import sys
 import time
@@ -29,7 +28,7 @@ RESOLUTION_DIMENSIONS = {
 EXPORT_FPS = 30                 # 逐帧模式的输出帧率
 FRAME_JPEG_QUALITY = 92         # 逐帧截图 JPEG 质量
 SCREENCAST_JPEG_QUALITY = 90    # 流式录制 CDP screencast JPEG 质量
-FRAME_MODE_MAX_FRAMES = 900     # 逐帧模式帧数上限（约 30s @30fps），更长输出走流式录制
+FRAME_MODE_MAX_FRAMES = 900     # Leaflet 引擎逐帧模式帧数上限（约 30s @30fps），更长输出走流式录制（SDK 引擎不受此限，一律逐帧防 POI 退化）
 FFMPEG_CRF = '16'               # H.264 恒定质量（越小越清晰）
 WARM_LEAD_OUTPUT_S = 45.0       # 预热页领先主录制页的输出时间（秒）
 WARM_FOLLOW_INTERVAL_S = 2.0    # 预热页跟随定位间隔（秒）
@@ -131,12 +130,17 @@ async def capture_animation_video(
     """
     使用 Playwright 录制动画视频，合成为 H.264 MP4
 
-    打开前端轨迹详情页的导出模式，按输出时长自动选择两种采集方式：
-    - 短输出（≤ FRAME_MODE_MAX_FRAMES/EXPORT_FPS 秒）：逐帧截图——对每帧调用页面
-      `__seekExportFrame(t)`（定位动画 → 等待瓦片加载与渲染完成）后截图，
-      质量最优、瓦片必然加载完成；
-    - 长输出（数小时）：CDP screencast 流式录制——页面实时播放，JPEG 帧经
-      ffmpeg stdin（挂钟时间戳）流式编码，耗时 ≈ 输出时长，不落盘中间帧。
+    打开前端轨迹详情页的导出模式，按引擎选择采集方式：
+    - SDK 引擎（amap/baidu/tencent/google，engine 为空时页面默认也是 SDK）：
+      一律逐帧截图——对每帧调用页面 `__seekExportFrame(t)`（定位动画 → 等待
+      moveend 与画布收敛，让 SDK 矢量标注管线恢复）后截图。SDK 矢量渲染的
+      POI 标注只在相机停稳时重排，连续播放会使 POI 在录制中后段持续退化消失
+      （路网/建筑仍在；amap_remotion 项目以逐帧方案验证为唯一不退化的录制方式）。
+      JPEG 帧直通 ffmpeg stdin（CFR），不落盘中间帧；
+    - Leaflet 引擎：短输出（≤ FRAME_MODE_MAX_FRAMES/EXPORT_FPS 秒）逐帧截图；
+      长输出（数小时）CDP screencast 流式录制——页面实时播放，JPEG 帧经
+      ffmpeg stdin（挂钟时间戳）流式编码，耗时 ≈ 输出时长。栅格瓦片没有
+      标注管线问题，瓦片门控与预热页兜底加载质量。
 
     Args:
         track_id: 轨迹 ID
@@ -144,7 +148,7 @@ async def capture_animation_video(
         token: 用户 token（注入页面 localStorage 以复用登录会话）
         request: 导出请求（含分辨率、倍速与视图状态）
         progress_callback: 进度回调（0-100）
-        task_id: 任务 ID（用于文件命名与逐帧目录隔离）
+        task_id: 任务 ID（用于文件命名）
         cancel_check: 取消检查（返回 True 时尽快抛出中止录制），线程路径必须提供
 
     Returns:
@@ -254,16 +258,24 @@ async def _wait_export_ready(page, track_id: int) -> None:
 
 
 async def _capture_frame_mode(
-    context,
     page,
     track_id: int,
     duration_ms: float,
     request: AnimationExportRequest,
-    frames_dir: Path,
+    final_path: Path,
     progress_callback: Callable[[float], None],
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> None:
-    """逐帧截图：每帧 seek → 等待瓦片/渲染就绪 → 截图"""
+    """
+    逐帧截图：每帧 seek → waitForIdle（moveend → 双 rAF → 画布收敛）→ 截图，
+    JPEG 直通 ffmpeg stdin（-framerate CFR，不落盘中间帧）。
+
+    为什么 SDK 引擎必须逐帧（amap_remotion 项目验证的唯一不退化方案）：
+    SDK 矢量渲染的 POI 标注管线只在相机停稳（moveend/idle）时重排；流式模式的
+    页面实时连续播放使地图永不停止，POI 在录制中后段持续退化消失（路网/建筑
+    方块仍在）。逐帧模式每帧之间地图是空闲的，标注得以恢复后再截图。
+    Leaflet 栅格瓦片没有标注管线问题，长输出保留流式模式（瓦片门控+预热页兜底）。
+    """
     speed = max(request.speed, 0.25)
     start_ms = max(0.0, request.start_time)
     frame_count = int(math.ceil((duration_ms - start_ms) / 1000.0 / speed * EXPORT_FPS))
@@ -271,54 +283,68 @@ async def _capture_frame_mode(
     if not await page.evaluate("typeof window.__seekExportFrame === 'function'"):
         raise RuntimeError("导出页面未暴露 __seekExportFrame（回放播放器未挂载）")
 
-    # 每帧预算 5s：SDK 引擎 waitForIdle 的画布收敛轮询上限 2.5s（超时兜底），加上
-    # seek/双色线更新/截图开销；软件渲染（SwiftShader）下单帧可达 3-4s，真机 GPU
-    # 通常 <1s。预算只兜卡死，不限制快帧
-    frame_deadline = time.time() + frame_count * 5.0 + 120
-    for i in range(frame_count):
-        if cancel_check is not None and cancel_check():
-            raise RuntimeError("任务已取消")
-        if time.time() > frame_deadline:
-            raise RuntimeError(f"逐帧导出超时（{frame_count} 帧未在限时内完成）")
-        t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
-        await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
-        frame_path = frames_dir / f"{i:06d}.jpg"
-        await page.screenshot(path=str(frame_path), type='jpeg', quality=FRAME_JPEG_QUALITY)
-        if progress_callback:
-            await progress_callback(10.0 + 80.0 * (i + 1) / frame_count)
-
-    if progress_callback:
-        await progress_callback(92.0)
-
-
-async def _compose_frames_with_ffmpeg(frames_dir: Path, final_path: Path) -> None:
-    """逐帧目录合成 MP4（异步子进程：阻塞式调用会冻结整个事件循环，
-    并发录制时其他任务与 API 请求都会被卡住）"""
     proc = await asyncio.create_subprocess_exec(
         'ffmpeg', '-y',
-        '-framerate', str(EXPORT_FPS),
-        '-i', str(frames_dir / '%06d.jpg'),
-        '-c:v', 'libx264',
-        '-crf', FFMPEG_CRF,
-        '-preset', 'medium',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
+        '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
+        # 逐帧 JPEG 管道输入，输出强制 CFR = EXPORT_FPS（与帧序号一一对应）
+        '-f', 'image2pipe', '-framerate', str(EXPORT_FPS), '-c:v', 'mjpeg',
+        '-i', 'pipe:0',
+        '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
         str(final_path),
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
+
     try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=1800)
-    except asyncio.TimeoutError:
-        proc.kill()
+        # 每帧预算 8s：SDK 引擎 waitForIdle 的画布收敛轮询上限 2.5s + seek/双色线更新/
+        # 截图开销；预算只是卡死哨兵，尽量宽松（本机 SwiftShader + ffmpeg 并发编码时
+        # 单帧实测 ~5s，真机 GPU 通常 <1s、amap_remotion 实测矢量 ~9fps）
+        frame_deadline = time.time() + frame_count * 8.0 + 120
+        for i in range(frame_count):
+            if cancel_check is not None and cancel_check():
+                raise RuntimeError("任务已取消")
+            if time.time() > frame_deadline:
+                raise RuntimeError(f"逐帧导出超时（{frame_count} 帧未在限时内完成）")
+            t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
+            await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
+            jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY)
+            proc.stdin.write(jpeg)
+            # drain 提供背压：ffmpeg 编码慢时暂停截图，不会堆积内存
+            await proc.stdin.drain()
+            if progress_callback:
+                await progress_callback(10.0 + 80.0 * (i + 1) / frame_count)
+
+        if progress_callback:
+            await progress_callback(92.0)
+
+        # 收尾编码：帧写完后 ffmpeg 继续编码（x264 medium 长片需数分钟）。
+        # asyncio wait_for 不会冻结事件循环，并发录制时其他任务不受影响
+        proc.stdin.close()
         try:
-            await proc.wait()
+            ffmpeg_returncode = await asyncio.wait_for(proc.wait(), timeout=1800)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise RuntimeError("ffmpeg 逐帧合成超时")
+        if ffmpeg_returncode != 0 or not final_path.exists():
+            stderr_tail = await proc.stderr.read()
+            raise RuntimeError(f"ffmpeg 逐帧合成失败: {stderr_tail.decode(errors='ignore')[-400:]}")
+
+        if progress_callback:
+            await progress_callback(100.0)
+    except BaseException:
+        # 取消/异常/超时：终止 ffmpeg 并清理管道与残缺输出，防止残留进程
+        try:
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
         except Exception:
             pass
-        raise RuntimeError("ffmpeg 合成超时")
-    if proc.returncode != 0 or not final_path.exists():
-        stderr_tail = (stderr or b'').decode(errors='ignore')[-400:]
-        raise RuntimeError(f"ffmpeg 合成失败: {stderr_tail}")
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        raise
 
 
 async def _capture_screencast_mode(
@@ -504,7 +530,8 @@ async def _capture_impl(
 ) -> str:
     """
     导出实现（必须在支持子进程的事件循环中运行）：
-    按输出时长选择逐帧截图（短）或 CDP screencast 流式录制（长）
+    SDK 引擎一律逐帧截图（防 POI 退化，见 _capture_frame_mode docstring）；
+    Leaflet 按输出时长选择逐帧截图（短）或 CDP screencast 流式录制（长）
     """
     if progress_callback is None:
         progress_callback = lambda p: None  # noqa: E731
@@ -525,7 +552,6 @@ async def _capture_impl(
     # 文件名含 task_id 片段：同轨迹并发导出同秒启动时也不会互相覆盖
     filename = f'track_{track_id}_animation_{timestamp}_{task_id[:8]}.mp4'
     final_path = export_dir / filename
-    frames_dir = export_dir / 'frames' / f'{track_id}_{task_id[:8]}'
 
     async with async_playwright() as p:
         browser, context, page = await _open_export_page(
@@ -536,31 +562,25 @@ async def _capture_impl(
                 await progress_callback(5.0)
 
             try:
-                if frame_count <= FRAME_MODE_MAX_FRAMES:
-                    # 短输出：逐帧截图（质量最优、瓦片确定性加载）
-                    frames_dir.mkdir(parents=True, exist_ok=True)
+                # SDK 引擎（amap/baidu/tencent/google，engine 为空时页面默认也是 SDK）
+                # 一律逐帧：流式模式的连续播放会让 SDK 矢量标注管线持续退化（POI 消失），
+                # 逐帧每帧之间地图停稳、标注恢复后再截图。逐帧 JPEG 直通 ffmpeg，
+                # 不落盘中间帧，长输出（数万帧）也不会堆积临时文件
+                use_frame_mode = request.engine != 'leaflet' or frame_count <= FRAME_MODE_MAX_FRAMES
+                if use_frame_mode:
                     await _capture_frame_mode(
-                        context, page, track_id, duration_ms, request,
-                        frames_dir, progress_callback, cancel_check,
+                        page, track_id, duration_ms, request,
+                        final_path, progress_callback, cancel_check,
                     )
-                    await _compose_frames_with_ffmpeg(frames_dir, final_path)
-
-                    if progress_callback:
-                        await progress_callback(100.0)
-                    # 帧目录在合成成功后清理
-                    shutil.rmtree(frames_dir, ignore_errors=True)
                 else:
-                    # 长输出（数小时）：CDP screencast 流式录制，耗时 ≈ 输出时长
+                    # Leaflet 长输出（数小时）：CDP screencast 流式录制，耗时 ≈ 输出时长
                     await _capture_screencast_mode(
                         context, page, track_id, duration_ms, request,
                         final_path, width, height, progress_callback, cancel_check,
                     )
             except BaseException as e:
-                # 失败/取消不留下残缺的输出文件；取消时的逐帧目录是纯垃圾直接清掉，
-                # 其他失败保留以便排查（遗留目录由保留期清理任务兜底回收）
+                # 失败/取消不留下残缺的输出文件
                 final_path.unlink(missing_ok=True)
-                if isinstance(e, asyncio.CancelledError) or (cancel_check is not None and cancel_check()):
-                    shutil.rmtree(frames_dir, ignore_errors=True)
                 raise
         finally:
             # 关闭动作不能被打断（取消/关闭风暴下保证浏览器退出）

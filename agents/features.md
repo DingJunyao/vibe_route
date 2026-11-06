@@ -96,10 +96,10 @@
   - **管理员配置**（configs 表，读缺失时回退默认值，管理员首次保存才落库）：`animation_export_max_concurrency` 并发录制数（默认 1，1–8，保存后即时生效——调大立即补位、调小自然收缩）、`animation_export_retention_days` 文件保存天数（默认 30，0=永久）、`animation_export_max_queued_per_user` 单用户排队上限（默认 3，0=不限制，超出 POST 返回 429）。Admin.vue「系统配置」tab 录屏任务设置区 + 「录屏任务」tab（全部用户任务表/筛选/取消/删除 + 手动清理）
   - **保留期清理**：`services/recording_cleanup.py` lifespan 周期任务（6h + 启动时一次），completed 且 `coalesce(finished_at, created_at)` 超期 → 删文件、status=expired、download_url 置空；顺带回收失败任务遗留的逐帧目录。手动清理 `POST /api/animation/export/admin/cleanup`
   - **API**：`GET /animation/export/my`（我的分页列表）、`GET /animation/export/{id}`（详情含 queue_position/track_title）、`GET /animation/export/admin/tasks`（管理员，状态/用户名筛选）、`DELETE /animation/export/{id}`（pending/processing=取消并补位；终态=删除记录+文件，本人或管理员）。**路由顺序：`/my`、`/admin/*` 必须注册在 `/{task_id}` 之前**
-- **双模式采集，按输出时长自动选择**（后端 Playwright → H.264 MP4）：
-  - **逐帧截图**（输出 ≤30s / 900 帧）：每帧调用页面 `__seekExportFrame(t)`（seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，质量最优、瓦片确定性加载
-  - **CDP screencast 流式录制**（输出 >30s，支持数小时）：页面实时播放（`__startExportPlayback`），screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳，不落盘中间帧），**耗时 ≈ 输出时长**
-  - **录制前预热页**：同一浏览器上下文中开启另一份同轨迹页面（30 倍速循环回放，或跟随主录制页前方 45s），持续把前方瓦片刷进共享浏览器缓存。**禁止用快速飞掠式预热**（高倍速扫掠会被 Leaflet 大量中止在途请求，缓存填不上还抢占带宽）；跟随式预热页异常不阻断导出（门控兜底）
+- **双通道采集，按引擎选择**（后端 Playwright → H.264 MP4）：
+  - **SDK 引擎一律逐帧截图**（2026-11-06 起，此前仅 ≤30s 输出走逐帧——长输出曾走流式导致 POI 退化，是「SDK 录制 POI 消失」问题的根因）：每帧调用页面 `__seekExportFrame(t)`（seek → `updateAnimation(true)` 强制刷新 → `waitForIdle`：moveend → 双 rAF → 画布 64×64 缩略图连续采样不变 → 无加载中瓦片），JPEG q92 **直通 ffmpeg stdin**（`-f image2pipe -framerate 30 -c:v mjpeg -i pipe:0`，输出 CFR = 帧率，不落盘中间帧——长输出数万帧不堆临时文件）。**机理**：SDK 矢量渲染的 POI 标注管线只在相机停稳（moveend/idle）时重排，连续播放使 POI 在录制中后段持续退化消失（路网/建筑方块仍在）；逐帧模式每帧之间地图空闲、标注恢复后再截图——amap_remotion 项目（全部逐帧）为唯一经验证不退化的录制方式。代价：耗时 ≈ 帧数 × 单帧时间（真机 GPU 约 0.1-0.5s/帧，amap_remotion 实测矢量 ~9fps），**长轨迹建议用高倍速压缩输出时长**（逐帧耗时只取决于输出时长）
+  - **Leaflet 引擎**：短输出（≤900 帧 / 30s）同上逐帧；长输出（数小时）CDP screencast 流式录制——页面实时播放，screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳），**耗时 ≈ 输出时长**。栅格瓦片没有标注管线问题，瓦片门控与预热页兜底
+  - **录制前预热页**（仅 Leaflet 流式模式）：同一浏览器上下文中开启另一份同轨迹页面（跟随主录制页前方 45s），持续把前方瓦片刷进浏览器缓存。**禁止用快速飞掠式预热**（高倍速扫掠会被 Leaflet 大量中止在途请求，缓存填不上还抢占带宽）；跟随式预热页异常不阻断导出（门控兜底）。SDK 逐帧模式不预热（amap_remotion 同款，每帧自然触发按需加载）
 - 适配器可选 `waitForIdle()`（逐帧导出的渲染收敛等待，2026-11-06 起五引擎全覆盖）：
   - **Leaflet**：轮询无加载中瓦片 + 瓦片淡入走完（约 320ms）+ 双 rAF 渲染 flush（等待上限 8s）
   - **四家 SDK**（`utils/animation/renderIdle.ts` 的 `waitForRenderIdle`，移植自 amap_remotion 实测方案）：先 race 引擎事件（AMap/BMap `moveend`、Google `idle`，300ms 超时；腾讯无可靠 idle 事件直接进轮询）→ 双 rAF → 轮询主画布 64×64 缩略图 toDataURL **连续 2 次采样不变**（≥350ms 起判，2.5s 兜底强制放行）且**无加载中瓦片 img**（DomRender 栅格瓦片走 `<img>`，画布轮询看不到它们）。SDK 没有「渲染完成」事件（AMap 的 tilesloaded/tileloaded/renderComplete 探针全不触发），这是唯一通用收敛信号
