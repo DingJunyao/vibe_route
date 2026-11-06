@@ -465,3 +465,14 @@
 - **Schema**：`MapLayerConfig` 新增 `api_base_url` 字段；`GeocodingProvider` 新增 `GOOGLE`
 - **管理后台**：地图配置区 Google Key/地址输入框；地理编码提供商新增 Google 选项及配置表单
 - **数据库**：无需迁移（config 为 key-value JSON，默认配置自动合并补全）
+
+## 2026-11-06
+
+### 动画导出容器内 DNS 解析失败排查与报错优化
+- **现象**：统一部署（all-in-one）下动画导出任务失败，Playwright 打开 `FRONTEND_URL` 页面报 `net::ERR_NAME_NOT_RESOLVED`（viberoute.home.a4ding.com）
+- **根因**：导出 URL 由 `settings.FRONTEND_URL` 拼接（[`playwright_export.py`](../backend/app/utils/playwright_export.py) `_build_export_url`），导出浏览器运行在后端容器内，故障时刻容器 DNS 解析不到该域名；该域名实际有公网 A 记录（28.0.8.217，223.5.5.5 / 119.29.29.29 / 8.8.8.8 均可解析），宿主机解析正常，仅容器内失败
+- **改动**：
+  - `_open_export_page` 捕获 `ERR_NAME_NOT_RESOLVED` 转译为可操作提示（改用同容器回环地址，或为容器补 dns/extra_hosts），不再抛裸 Chromium 报错
+  - [`docker-compose.example.yml`](../docker-compose.example.yml)：FRONTEND_URL 默认值改为 `http://127.0.0.1`（同容器 nginx 回环，无 DNS/TLS 依赖，127.0.0.1 为浏览器安全上下文），注释保留对外域名替代方案（需容器 DNS 可解析，附 dns/extra_hosts 兜底）
+- **部署侧修复**（服务器 compose，改后 `docker compose up -d` 重建）：选定 `FRONTEND_URL: http://127.0.0.1`；若地图 key 按域名做白名单导致地图加载失败，回退对外域名方案（`dns: [223.5.5.5, 119.29.29.29]` 或 `extra_hosts` 固定当前 IP）
+- **切换影响面核实**：前端主 API 客户端为相对路径 `baseURL: '/api'`（`api/request.ts`，经同容器 nginx 反代，无 CORS）；`utils/origin.ts` 对 `127.0.0.1` 的本地特判（`ws://127.0.0.1:8000`）仅影响用户侧任务下载链接与实时 WS，不影响导出页就绪流程；127.0.0.1 为浏览器安全上下文，https-only API 不受影响

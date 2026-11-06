@@ -10,7 +10,7 @@ import time
 from typing import Callable, Optional
 from pathlib import Path
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 from playwright.async_api import async_playwright
 
@@ -233,7 +233,19 @@ async def _open_export_page(
 
     page = await context.new_page()
     # 页面存在持续轮询/WebSocket 连接，networkidle 永不满足，改用 domcontentloaded
-    await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+    try:
+        await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+    except Exception as e:
+        # FRONTEND_URL 域名在容器内解析失败时 Playwright 只抛裸的 net::ERR_NAME_NOT_RESOLVED，
+        # 难以定位；转译成可操作的提示（改用容器内可达地址，或为容器补 dns/extra_hosts）
+        if 'ERR_NAME_NOT_RESOLVED' in str(e):
+            host = urlparse(settings.FRONTEND_URL).hostname or settings.FRONTEND_URL
+            raise RuntimeError(
+                f"FRONTEND_URL 域名在容器内无法解析（{host}）。导出浏览器运行在后端容器内，"
+                "该地址必须容器内可达：统一部署建议改为 http://127.0.0.1（同容器 nginx）；"
+                "如需保留对外域名，请为容器配置 dns 或 extra_hosts 保证域名可解析。"
+            ) from e
+        raise
 
     await _wait_export_ready(page, track_id)
     return browser, context, page

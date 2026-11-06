@@ -10,8 +10,15 @@ services:
     ports:
       - "8423:80"
     environment:
-      # 动画导出等场景后端（playwright）打开前端页面的地址：同容器 nginx
-      FRONTEND_URL: https://viberoute.home.a4ding.com
+      # 动画导出等场景后端（playwright）打开前端页面的地址：同容器 nginx。
+      # 浏览器跑在容器里，该地址必须「容器内可访问」，http://127.0.0.1 最稳
+      # （同容器 nginx 回环，无 DNS/TLS 依赖；地图 key 未按域名做限制时可用）。
+      # 也可改回对外域名（key 按域名限制了白名单时），但容器 DNS 必须能解析它，
+      # 否则导出报 ERR_NAME_NOT_RESOLVED；可加 dns 或 extra_hosts 兜底：
+      #   FRONTEND_URL: https://viberoute.home.a4ding.com
+      #   dns: [223.5.5.5, 119.29.29.29]
+      #   # 或 extra_hosts: ["viberoute.home.a4ding.com:28.0.8.217"]（IP 变化需同步更新）
+      FRONTEND_URL: http://127.0.0.1
     env_file:
       - .env          # 不存在则 compose 报错：先 cp backend/.env.example backend/.env
     volumes:
