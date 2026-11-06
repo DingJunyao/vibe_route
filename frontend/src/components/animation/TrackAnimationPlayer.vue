@@ -18,7 +18,6 @@
         @seek="handleSeek"
         @set-speed="handleSetSpeed"
         @toggle-camera-mode="handleToggleCameraMode"
-        @toggle-orientation-mode="handleToggleOrientationMode"
         @toggle-info-panel="handleToggleInfoPanel"
         @cycle-marker-style="handleCycleMarkerStyle"
         @export="handleExport"
@@ -57,11 +56,13 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useAnimationStore } from '@/stores/animation'
-import { useAnimationMap } from '@/composables/animation/useAnimationMap'
+import { useAnimationMap, getGlobalViewState } from '@/composables/animation/useAnimationMap'
 import AnimationHUD from './AnimationHUD.vue'
 import AnimationExportDialog from './AnimationExportDialog.vue'
 import {
   calculateDuration,
+  calculateDistance,
+  calculateShortestRotation,
   findPointIndexByTime,
   interpolatePosition,
   formatAnimationTime,
@@ -70,6 +71,7 @@ import {
   type TrackPoint,
   type MarkerPosition,
 } from '@/utils/animationUtils'
+import { smoothedCameraAt, cameraHeadingAt, type AnimationCRS } from '@/utils/animation/cameraSmoothing'
 import { startExportTask, buildExportConfig } from '@/utils/animation/videoExport'
 import type { AnimationConfig, ExportOptions } from '@/types/animation'
 
@@ -121,6 +123,42 @@ const isGCJ02Provider = computed(() => {
 })
 const isBD09Provider = computed(() => {
   return props.mapProvider === 'baidu'
+})
+
+// 相机平滑使用的坐标系（与 interpolatePosition 的坐标字段选择一致）
+const camCRS = computed<AnimationCRS>(() =>
+  isGCJ02Provider.value ? 'gcj02' : isBD09Provider.value ? 'bd09' : 'wgs84'
+)
+
+// 最近一次解析出的平滑航向：静止段（前后 4 分钟无位移）保持该航向，避免镜头/标记甩头
+let lastCameraHeading: number | null = null
+// 最近一次应用的双色轨迹索引（-1 表示待应用；setPassedSegment 每次全量重建两条线，索引未变时跳过）
+let lastPassedIndex = -1
+// 上次逐帧 seek 的相机状态（亚像素跳帧用：SDK 对微小移动去重会导致 moveend 不触发）
+let lastSeekCamera: { lat: number; lng: number; bearing: number; zoom: number | null } | null = null
+
+/**
+ * 当前时刻的相机状态（平滑位置 + 平滑航向）。
+ * 仅相机与固定中心标记使用；轨迹无有效时间数据时返回 null（回退原始位置/方位角）。
+ */
+function cameraAtCurrentTime(): { lat: number; lng: number; heading: number | null } | null {
+  const pts = points.value
+  const cam = smoothedCameraAt(absoluteCurrentTime.value, pts, camCRS.value)
+  if (!cam) return null
+  const heading = cameraHeadingAt(absoluteCurrentTime.value, pts)
+  if (heading !== null) {
+    lastCameraHeading = heading
+    return { ...cam, heading }
+  }
+  // 前后 4 分钟均静止：保持上次航向（开局即静止时为 null，回退 pos.bearing）
+  return { ...cam, heading: lastCameraHeading }
+}
+
+// 轨迹数据变化（加载完成/切换轨迹）时重置相机平滑与跳帧状态
+watch(() => props.config.trackPoints, () => {
+  lastCameraHeading = null
+  lastSeekCamera = null
+  lastPassedIndex = -1
 })
 
 watch(() => props.mapProvider, () => {}, { immediate: true })
@@ -252,10 +290,6 @@ function handleToggleCameraMode() {
   animationStore.toggleCameraMode()
 }
 
-function handleToggleOrientationMode() {
-  animationStore.toggleOrientationMode()
-}
-
 function handleToggleInfoPanel() {
   animationStore.toggleInfoPanel()
 }
@@ -384,30 +418,46 @@ function updateAnimation(force = false) {
     return
   }
 
-  setMarkerPosition(pos, animationStore.markerStyle)
+  // 相机平滑（±1.5s 位置滑动平均 + 航向窗口测向圆周平滑，移植 amap_remotion）：
+  // 仅相机与固定中心标记使用平滑结果，抑制 GPS 抖动；full 模式标记仍压原始轨迹线
+  const cam = cameraAtCurrentTime()
+  const markerPos: MarkerPosition = cam && animationStore.cameraMode === 'fixed-center'
+    ? { ...pos, lat: cam.lat, lng: cam.lng }
+    : pos
+  if (cam?.heading != null) {
+    markerPos.bearing = cam.heading
+  }
+  setMarkerPosition(markerPos, animationStore.markerStyle)
 
-  // 更新双色轨迹
+  // 更新双色轨迹（索引未变时跳过：setPassedSegment 每次全量重建两条 Polyline，
+  // 逐帧导出/静止回放下是主要的每帧开销）
   const { index } = findPointIndexByTime(
     absoluteCurrentTime.value,
     points.value,
     props.config.startTime
   )
-  setPassedSegment(0, index)
+  if (index !== lastPassedIndex) {
+    setPassedSegment(0, index)
+    lastPassedIndex = index
+  }
 
   // 相机与朝向模式：
-  // - fixed-center：当前点居中，朝向按 orientationMode（track-up 时轨迹方向始终指向画面上方）；
-  //   缩放按速度自适应（60km/h 及以下约 30m/格，速度更高适当缩小）。
-  //   缩放仅在进入模式或速度档位变化时应用，避免逐帧覆盖用户手动缩放
+  // - fixed-center：平滑相机位置居中（标记与相机同点，恒居中），朝向按 orientationMode
+  //   （track-up 时轨迹方向始终指向画面上方）；缩放按速度自适应（60km/h 及以下约 30m/格，
+  //   速度更高适当缩小）。缩放仅在进入模式或速度档位变化时应用，避免逐帧覆盖用户手动缩放
   // - full：展示整个路径，固定正北朝上（视野在模式切换时调整，不逐帧 fit）
   if (animationStore.cameraMode === 'fixed-center') {
+    const center: MarkerPosition = cam ? { ...pos, lat: cam.lat, lng: cam.lng } : pos
     const targetZoom = getFixedCenterZoom(pos.speed, pos.lat)
     if (lastFixedCenterZoom === null || targetZoom !== lastFixedCenterZoom) {
-      setCameraToMarker(pos, targetZoom)
+      setCameraToMarker(center, targetZoom)
       lastFixedCenterZoom = targetZoom
     } else {
-      setCameraToMarker(pos)
+      setCameraToMarker(center)
     }
-    applyMapRotation(animationStore.orientationMode === 'track-up' ? pos.bearing : 0)
+    applyMapRotation(
+      animationStore.orientationMode === 'track-up' ? (cam?.heading ?? pos.bearing) : 0
+    )
   } else {
     applyMapRotation(0)
   }
@@ -427,9 +477,50 @@ onMounted(() => {
   // 后端对每帧调用 seek → 强制刷新 → 等待地图空闲（瓦片加载完成）→ 截图，
   // 输出视频不受实时录制下瓦片加载滞后与压缩质量问题影响
   if (props.exportMode) {
+    let exportInstanceReady = false
     ;(window as any).__seekExportFrame = async (t: number) => {
       animationStore.setPlaybackState('isPlaying', false)
       animationStore.setPlaybackState('currentTime', t)
+      // 首帧等待地图实例就绪：exportState=ready 可能早于 SDK 异步初始化完成
+      //（实测首次 seek 打在实例未建好时，waitForIdle 立即返回、适配层调用全部落空）。
+      // 连续 3 次读到非空视图状态才算稳：配置异步加载期间 UniversalMap 会先挂 Leaflet
+      // 兜底再切 SDK 引擎，实例会经历 null 窗口，单次非空可能来自即将被换掉的实例
+      if (!exportInstanceReady) {
+        exportInstanceReady = true
+        const readyStart = Date.now()
+        let stable = 0
+        while (stable < 3 && Date.now() - readyStart < 10000) {
+          stable = getGlobalViewState().center ? stable + 1 : 0
+          await new Promise((r) => setTimeout(r, 150))
+        }
+      }
+      // 亚像素跳帧（移植 amap_remotion）：与上一帧相比相机位移 < 0.6px 且转角 < 0.06°
+      // 时直接复用上一帧画面——SDK 对无效移动去重会使 moveend 不触发、等待链悬挂，
+      // 且画面无可见差异。仅 fixed-center 判定相机状态；full 模式相机静止但标记
+      // 持续移动，不跳帧（仅靠 waitForIdle 的收敛判定）
+      const pos = currentPosition.value
+      const cam = cameraAtCurrentTime()
+      if (cam && pos && animationStore.cameraMode === 'fixed-center') {
+        const zoom = getGlobalViewState().zoom
+        const bearing = cam.heading ?? pos.bearing
+        if (
+          lastSeekCamera &&
+          lastSeekCamera.zoom !== null &&
+          zoom !== null &&
+          lastSeekCamera.zoom === zoom
+        ) {
+          const cosLat = Math.max(
+            0.1,
+            Math.cos((((lastSeekCamera.lat + cam.lat) / 2) * Math.PI) / 180)
+          )
+          const mPerPx = (156543.03392 * cosLat) / Math.pow(2, lastSeekCamera.zoom)
+          const movedPx =
+            calculateDistance(lastSeekCamera.lat, lastSeekCamera.lng, cam.lat, cam.lng) / mPerPx
+          const dBearing = Math.abs(calculateShortestRotation(lastSeekCamera.bearing, bearing))
+          if (movedPx < 0.6 && dBearing < 0.06) return
+        }
+        lastSeekCamera = { lat: cam.lat, lng: cam.lng, bearing, zoom }
+      }
       updateAnimation(true)
       await waitForMapIdle()
     }
@@ -457,6 +548,8 @@ watch(() => animationStore.isPlaying, (isPlaying) => {
   lastTimestamp.value = 0
   // 通知地图组件更新动画播放状态，避免双色轨迹闪烁
   setAnimationPlaying(isPlaying)
+  // 播放态切换会清空/重建双色轨迹线，索引缓存随之失效
+  lastPassedIndex = -1
   // 确保标记在状态变化时立即更新
   updateAnimation()
 })
@@ -487,6 +580,8 @@ watch(() => animationStore.cameraMode, (newMode) => {
 watch(() => [animationStore.cameraMode, animationStore.orientationMode] as const, () => {
   // 重置缩放记忆，进入固定中心时重新应用自适应缩放
   lastFixedCenterZoom = null
+  // 相机模式切换会经 setAnimationPlaying 清空重建双色轨迹，索引缓存失效
+  lastPassedIndex = -1
   updateAnimation(true)
   if (animationStore.cameraMode === 'full') {
     fitTrackWithPadding(0)

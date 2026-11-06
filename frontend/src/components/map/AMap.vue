@@ -13,6 +13,7 @@ import { gcj02ToWgs84, wgs84ToGcj02 } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import { waitForRenderIdle } from '@/utils/animation/renderIdle'
 import type { MarkerPosition } from '@/types/animation'
 
 // 类型定义
@@ -529,9 +530,12 @@ const animationAdapter: AnimationMapAdapter = {
     if (!AMapInstance) return
     const AMap = (window as any).AMap
     const lngLat = new AMap.LngLat(position.lng, position.lat)
-    AMapInstance.setCenter(lngLat)
-    if (targetZoom != null && AMapInstance.getZoom() !== targetZoom) {
-      AMapInstance.setZoom(targetZoom)
+    if (targetZoom != null) {
+      // setZoomAndCenter(..., true) 立即生效；分离的 setCenter+setZoom 在逐帧驱动下
+      // 会互相打断（实测 setCenter 未提交时 setZoom 按旧中心缩放，产生漂移）
+      AMapInstance.setZoomAndCenter(targetZoom, lngLat, true)
+    } else {
+      AMapInstance.setCenter(lngLat)
     }
   },
 
@@ -634,6 +638,30 @@ const animationAdapter: AnimationMapAdapter = {
     const padX = Math.round((size.width || 800) * 0.1)
     const padY = Math.round((size.height || 600) * 0.1)
     AMapInstance.setFitView(null, true, [padY, padX, padY + bottomPaddingPx, padX])
+  },
+
+  // 等待地图渲染就绪（逐帧导出用）：moveend（相机处理完成）→ 画布收敛轮询。
+  // JSAPI 没有「渲染完成」事件且亚像素移动会被去重（moveend 不触发），
+  // 事件等待由 300ms 超时兜底，实际放行由 waitForRenderIdle 的收敛判定决定
+  async waitForIdle() {
+    if (!AMapInstance) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const done = () => {
+        if (!settled) {
+          settled = true
+          resolve()
+        }
+      }
+      try {
+        AMapInstance.once('moveend', done)
+      } catch {
+        // once 不可用（1.4 老版本）：直接走画布收敛轮询
+      }
+      setTimeout(done, 300)
+    })
+    const container = (AMapInstance.getContainer?.() as HTMLElement | undefined) ?? mapContainer.value ?? null
+    await waitForRenderIdle(container)
   },
 }
 
@@ -895,12 +923,29 @@ async function initMap() {
 
     const AMap = (window as any).AMap
 
-    // 创建地图实例
+    // 创建地图实例。
+    // 导出模式（body.export-mode，后端 Playwright 录制页）专用参数（隔离实验实测结论）：
+    // - viewMode 3D：真机 GPU 走 WebGL 矢量渲染（setRotation 生效）；headless/无 GPU 环境
+    //   自动降级 DomRender 栅格（瓦片照常渲染，rotation 无效），两种环境都能出图；
+    // - animateEnable false：逐帧直设相机，禁用 SDK 平滑过渡避免帧间互相打断；
+    // - WebGLParams preserveDrawingBuffer：waitForIdle 的画布收敛轮询需要读回 WebGL 画布
+    //   （DomRender 降级时无影响）。
+    // 注意：不可设 zoomEnable:false——JSAPI 2.0 会连同程序化 setZoom 一起禁用（实测
+    // setZoom 被 no-op、fixed-center 永远停在最初缩放），它只应约束用户手势
+    const isExportMode = document.body.classList.contains('export-mode')
     AMapInstance = new AMap.Map(mapContainer.value, {
       zoom: 10,
       center: [116.397428, 39.90923],
-      viewMode: '2D',
+      viewMode: isExportMode ? '3D' : '2D',
       showLabel: true,
+      ...(isExportMode
+        ? {
+            animateEnable: false,
+            dragEnable: false,
+            rotateEnable: true,
+            WebGLParams: { preserveDrawingBuffer: true },
+          }
+        : {}),
     })
 
     // 高德地图标准样式（矢量渲染）

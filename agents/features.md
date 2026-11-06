@@ -100,7 +100,22 @@
   - **逐帧截图**（输出 ≤30s / 900 帧）：每帧调用页面 `__seekExportFrame(t)`（seek → `updateAnimation(true)` 强制刷新 → 等待地图空闲）后截 JPEG q92，质量最优、瓦片确定性加载
   - **CDP screencast 流式录制**（输出 >30s，支持数小时）：页面实时播放（`__startExportPlayback`），screencast JPEG q90 帧直通 ffmpeg stdin（`-use_wallclock_as_timestamps` 挂钟时间戳，不落盘中间帧），**耗时 ≈ 输出时长**
   - **录制前预热页**：同一浏览器上下文中开启另一份同轨迹页面（30 倍速循环回放，或跟随主录制页前方 45s），持续把前方瓦片刷进共享浏览器缓存。**禁止用快速飞掠式预热**（高倍速扫掠会被 Leaflet 大量中止在途请求，缓存填不上还抢占带宽）；跟随式预热页异常不阻断导出（门控兜底）
-- 适配器可选 `waitForIdle()`：Leaflet 轮询无加载中瓦片 + 瓦片淡入走完（约 320ms）+ 双 rAF 渲染 flush（等待上限 8s）；未实现的引擎退化为固定 250ms 延时
+- 适配器可选 `waitForIdle()`（逐帧导出的渲染收敛等待，2026-11-06 起五引擎全覆盖）：
+  - **Leaflet**：轮询无加载中瓦片 + 瓦片淡入走完（约 320ms）+ 双 rAF 渲染 flush（等待上限 8s）
+  - **四家 SDK**（`utils/animation/renderIdle.ts` 的 `waitForRenderIdle`，移植自 amap_remotion 实测方案）：先 race 引擎事件（AMap/BMap `moveend`、Google `idle`，300ms 超时；腾讯无可靠 idle 事件直接进轮询）→ 双 rAF → 轮询主画布 64×64 缩略图 toDataURL **连续 2 次采样不变**（≥350ms 起判，2.5s 兜底强制放行）且**无加载中瓦片 img**（DomRender 栅格瓦片走 `<img>`，画布轮询看不到它们）。SDK 没有「渲染完成」事件（AMap 的 tilesloaded/tileloaded/renderComplete 探针全不触发），这是唯一通用收敛信号
+  - `__seekExportFrame` 首帧前有**实例就绪门**：连续 3 次读到非空视图状态（150ms 间隔）才放行——`exportState=ready` 可能早于 SDK 异步初始化完成，且配置异步加载期间 UniversalMap 会先挂 Leaflet 兜底再切 SDK 引擎（实例经历 null 窗口，单次非空可能来自即将被换掉的实例，实测首帧调用会整体落空）
+- **亚像素跳帧**（`__seekExportFrame`，移植 amap_remotion）：fixed-center 下与上次 seek 相比相机位移 <0.6px（按当前 zoom m/px 换算）且转角 <0.06° 且 zoom 未变 → 直接复用上一帧画面（不更新不等 idle）。SDK 对无效移动去重会使 moveend 不触发（等待链悬挂），且画面无可见差异，静止段大幅提速（实测重 seek 0-1ms vs 全路径 0.5-4s）。full 模式相机静止但标记持续移动，不跳帧
+- **相机/航向平滑**（`utils/animation/cameraSmoothing.ts`，数学移植 amap_remotion，交互与导出共用）：
+  - 相机位置 = 原始插值位置的 ±1.5s 滑动平均（7 采样），抑制 GPS 停车抖动；画线/信息面板/移动端 HUD 仍用原始位置
+  - 航向 = 窗口测向（±2.5/5/10/20s，位移 <6m 视为静止）→ ±1s 圆周平滑（circular mean，不可算术平均）；静止时向前/向后最多 4min 找运动方向（起步航向=即将行驶方向），找不到保持上次航向；点无有效时间数据回退旧行为
+  - fixed-center：相机中心与标记均用平滑位置（标记恒居中，急弯处可能偏离轨迹线几米，参照项目同款取舍）；track-up 旋转角与标记朝向用平滑航向；`getFixedCenterZoom` 仍按原始 speed/lat
+- **SDK 导出模式初始化与坑（隔离实验实测，勿回退）**：
+  - **AMap**（`AMap.vue` initMap，`body.export-mode` 时）：`viewMode:'3D'`（真机 GPU 走 WebGL 矢量、setRotation 生效；headless/无 GPU 自动降级 DomRender 栅格，瓦片照常但 **setRotation/getRotation 恒 0**——headless 下 track-up 不可用）、`animateEnable:false`、`dragEnable:false`、`WebGLParams:{preserveDrawingBuffer:true}`。**绝不可设 `zoomEnable:false`**——JSAPI 2.0 会连同程序化 setZoom 一起禁用（实测 fixed-center 永远停在最初缩放）
+  - **AMap 相机**：带 zoom 时用 `setZoomAndCenter(zoom, center, true)`——分离的 setCenter+setZoom 会互相打断（实测 setCenter 未提交时 setZoom 按旧中心缩放，中心漂移 ~30km）
+  - **腾讯/Google 标记**：`AnimationDOMOverlay` 类在模块作用域 `<script>` 块，拿不到 `<script setup>` 里的 `currentMapRotation`——引用必 ReferenceError（此前腾讯 SDK 回放一调 setBearing 就崩）。类上有自己的 `mapRotation` 字段与 `setMapRotation()` 方法，适配器经它同步
+  - **BMap**：`defineExpose` 必须含 `getMapInstance`——UniversalMap 的视图状态收集（导出 zoom 修正、切换引擎保持视角、亚像素跳帧的 zoom 比对）全依赖它，缺失时百度 zoom 恒为 null
+- **headless/软件 GL 已知限制**（本机 ARM SwiftShader 实测，用户 GPU 环境不受影响）：腾讯 GLJS 瓦片纹理在 SwiftShader 下静默不渲染（瓦片请求 200、GL 上下文健在、矢量轨迹正常，底图空白，应用层无解）；AMap track-up 旋转无效（DomRender）；百度 GL/Legacy 全功能正常（含 setHeading 旋转）
+- **厂商瓦片风控**（2026-11-06 实测复现，与「SDK 录制退化」同机理）：短时间高频请求高德瓦片（实验脚本连番拉 z17 瓦片）后，webrd0x.is.autonavi.com 对该会话返回 **179 字节素色占位 PNG**（img 照样 complete、naturalWidth=256，仅像素全空），截图全米色；Leaflet 与 SDK 同受影响，约数十分钟后自行恢复。录制类负载对厂商的持续压力是退化的直接诱因
 - **导出模式瓦片门控**：animationLoop 在导出模式播放中检测到加载中瓦片即暂停推进（超 **30s** 强制放行防失败瓦片卡死）；Leaflet 瓦片层全局 `keepBuffer: 8` 多保留周边瓦片
 - **画幅全覆盖**（防旋转四角空白）：`body.export-mode .map-content` 固定铺满视口（`position: fixed; inset: 0`，覆盖详情页布局的 max-width/边距）；LeafletMap 在导出模式把 `.map` 容器放大为 **√(视口宽²+高²)** 的正方形（1920×1080 → 2203×2203，任意旋转角的最小覆盖）居中于视口，`overflow: hidden` 裁掉画幅外部分。布局若未铺满视口（如 max-width 居中留白），放大容器会被裁剪回空白——两处缺一不可
 - **并发**：进度回调 ≥3s 节流写库（防 SQLite 写锁竞争）；结果文件名/帧目录编入 task_id 片段（同轨迹同秒并发不互相覆盖）；ffmpeg stdin 加 `-loglevel error -nostats` 防 stderr 缓冲死锁

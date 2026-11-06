@@ -127,14 +127,7 @@ export const useAnimationStore = defineStore('animation', () => {
     playbackState.value.cameraMode = mode
   }
 
-  // 切换朝向模式
-  function toggleOrientationMode() {
-    const modes: OrientationMode[] = ['north-up', 'track-up']
-    const currentIndex = modes.indexOf(playbackState.value.orientationMode)
-    playbackState.value.orientationMode = modes[(currentIndex + 1) % modes.length]
-  }
-
-  // 设置朝向模式
+  // 设置朝向模式（朝向不设独立切换按钮：toggleCameraMode 三态循环已联动）
   function setOrientationMode(mode: OrientationMode) {
     playbackState.value.orientationMode = mode
   }
@@ -208,7 +201,6 @@ export const useAnimationStore = defineStore('animation', () => {
     setSpeed,
     toggleCameraMode,
     setCameraMode,
-    toggleOrientationMode,
     setOrientationMode,
     toggleInfoPanel,
     cycleMarkerStyle,

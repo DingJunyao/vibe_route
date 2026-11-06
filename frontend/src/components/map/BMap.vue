@@ -14,6 +14,7 @@ import { wgs84ToBd09, gcj02ToBd09, bd09ToWgs84 } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import { waitForRenderIdle } from '@/utils/animation/renderIdle'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
 // 类型定义
@@ -393,6 +394,30 @@ const animationAdapter: AnimationMapAdapter = {
       ? (bottomPaddingPx / containerHeight) * 100
       : 0
     fitBounds(10 + extraPercent)
+  },
+
+  // 等待地图渲染就绪（逐帧导出用）：moveend（相机处理完成）→ 渲染收敛轮询。
+  // GL 与 Legacy 的事件 API 相同（addEventListener，无 once，用包装函数模拟）；
+  // Legacy 为 DOM 渲染（无画布可读回），waitForRenderIdle 内部退化为固定延时
+  async waitForIdle() {
+    if (!BMapInstance) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const done = () => {
+        if (!settled) {
+          settled = true
+          resolve()
+          try { BMapInstance.removeEventListener('moveend', done) } catch { /* 忽略 */ }
+        }
+      }
+      try {
+        BMapInstance.addEventListener('moveend', done)
+      } catch {
+        // 事件不可用：直接走渲染收敛轮询/固定延时
+      }
+      setTimeout(done, 300)
+    })
+    await waitForRenderIdle(mapContainer.value ?? null)
   },
 
   // 设置动画播放状态（避免双色轨迹闪烁）
@@ -2809,6 +2834,7 @@ defineExpose({
   resize,
   fitBounds,
   fitToBounds,
+  getMapInstance: () => BMapInstance,
   getMapElement: () => mapContainer.value || null,
   async captureMap(): Promise<string | null> {
     if (!BMapInstance || !mapContainer.value) return null

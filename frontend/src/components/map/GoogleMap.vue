@@ -14,6 +14,7 @@ class AnimationDOMOverlay {
   private position: { lat: number; lng: number } | null = null
   private style: 'arrow' | 'car' | 'person' = 'arrow'
   private bearing: number = 0
+  private mapRotation: number = 0  // 地图旋转角（适配器经 setMapRotation 同步）
   private element: HTMLElement
   private innerElement: HTMLElement
   private onBoundsChangedHandler: (() => void) | null = null
@@ -79,14 +80,26 @@ class AnimationDOMOverlay {
 
   setBearing(bearing: number) {
     this.bearing = bearing
-    // 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
-    // person 图标无方向性，始终保持直立
-    const rotation = this.style === 'person' ? 0 : bearing - currentMapRotation
-    this.innerElement.style.transform = `rotate(${rotation}deg)`
+    this.applyRotation()
   }
 
   getBearing() {
     return this.bearing
+  }
+
+  // 地图旋转角更新（适配器 setMapRotation 时同步），重套用标记屏幕旋转。
+  // 注：本类在模块作用域，拿不到 <script setup> 里的 currentMapRotation，
+  // 必须由适配器显式同步（否则 setBearing 引用未定义变量直接 ReferenceError）
+  setMapRotation(mapRotation: number) {
+    this.mapRotation = mapRotation
+    this.applyRotation()
+  }
+
+  private applyRotation() {
+    // 图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
+    // person 图标无方向性，始终保持直立
+    const rotation = this.style === 'person' ? 0 : this.bearing - this.mapRotation
+    this.innerElement.style.transform = `rotate(${rotation}deg)`
   }
 
   destroy() {
@@ -165,6 +178,7 @@ import { useConfigStore } from '@/stores/config'
 import { formatTooltipRoadSigns, loadTooltipRoadSigns, type TooltipSignLoad } from '@/utils/tooltipRoadSign'
 import { formatDistance, formatDuration } from '@/utils/format'
 import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animation/useAnimationMap'
+import { waitForRenderIdle } from '@/utils/animation/renderIdle'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
 import { renderHeatCanvas } from '@/utils/heatmapCanvas'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
@@ -427,9 +441,9 @@ const animationAdapter: AnimationMapAdapter = {
       // 忽略不支持的情况
     }
     currentMapRotation = bearing
-    // 地图旋转后补偿标记图标方向
+    // 地图旋转后同步覆盖物并补偿标记图标方向
     if (animationMarker) {
-      animationMarker.setBearing(animationMarker.getBearing())
+      animationMarker.setMapRotation(bearing)
     }
   },
 
@@ -499,6 +513,28 @@ const animationAdapter: AnimationMapAdapter = {
 
     // 调用现有的 fitBounds 方法
     fitBounds(10 + extraPercent)
+  },
+
+  // 等待地图渲染就绪（逐帧导出用）：Google 有官方 idle 事件（瓦片加载完、动画结束
+  // 后触发），等待后做渲染收敛轮询兜底（矢量渲染下 idle 后仍可能有绘制尾巴）
+  async waitForIdle() {
+    if (!googleMapInstance) return
+    await new Promise<void>((resolve) => {
+      let settled = false
+      const done = () => {
+        if (!settled) {
+          settled = true
+          resolve()
+        }
+      }
+      try {
+        google.maps.event.addListenerOnce(googleMapInstance, 'idle', done)
+      } catch {
+        // 事件不可用：直接走渲染收敛轮询
+      }
+      setTimeout(done, 300)
+    })
+    await waitForRenderIdle(mapContainer.value ?? null)
   },
 }
 

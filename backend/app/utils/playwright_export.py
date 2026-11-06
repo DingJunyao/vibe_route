@@ -271,7 +271,10 @@ async def _capture_frame_mode(
     if not await page.evaluate("typeof window.__seekExportFrame === 'function'"):
         raise RuntimeError("导出页面未暴露 __seekExportFrame（回放播放器未挂载）")
 
-    frame_deadline = time.time() + frame_count * 2.5 + 120
+    # 每帧预算 5s：SDK 引擎 waitForIdle 的画布收敛轮询上限 2.5s（超时兜底），加上
+    # seek/双色线更新/截图开销；软件渲染（SwiftShader）下单帧可达 3-4s，真机 GPU
+    # 通常 <1s。预算只兜卡死，不限制快帧
+    frame_deadline = time.time() + frame_count * 5.0 + 120
     for i in range(frame_count):
         if cancel_check is not None and cancel_check():
             raise RuntimeError("任务已取消")

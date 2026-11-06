@@ -141,10 +141,11 @@ export function interpolatePosition(
   const lat = lat1 + (lat2 - lat1) * progress
   const lng = lng1 + (lng2 - lng1) * progress
 
-  // 方位角插值（处理 350° -> 10° 的情况）
+  // 方位角插值：按最短路径角差插值（处理 350° -> 10° 应经 360° 环绕，
+  // 裸线性插值会绕经 180° 的反向长弧，回放时标记会突然反转甩头）
   const bearing1 = point1.bearing ?? 0
   const bearing2 = point2.bearing ?? bearing1
-  let bearing = bearing1 + (bearing2 - bearing1) * progress
+  let bearing = bearing1 + calculateShortestRotation(bearing1, bearing2) * progress
 
   // 归一化到 [0, 360)
   if (bearing < 0) bearing += 360

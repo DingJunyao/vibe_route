@@ -531,7 +531,6 @@
                 @seek="handleAnimationSeek"
                 @set-speed="animationStore.setSpeed"
                 @toggle-camera-mode="animationStore.toggleCameraMode"
-                @toggle-orientation-mode="animationStore.toggleOrientationMode"
                 @toggle-info-panel="animationStore.toggleInfoPanel"
                 @cycle-marker-style="animationStore.cycleMarkerStyle"
                 @export="showExportDialog = true"

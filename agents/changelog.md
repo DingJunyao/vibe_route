@@ -4,6 +4,23 @@
 
 ## 2026-11
 
+- 回放 HUD 移除正北/轨迹朝向独立按钮（2026-11-06 第二笔）：
+  - **原因**：相机模式按钮的三态循环（全轨迹 → 固定中心-正北朝上 → 固定中心-轨迹朝上）已完整覆盖朝向切换，独立按钮冗余
+  - **改动**：`AnimationHUD.vue` 删按钮与 `toggle-orientation-mode` emit 及 tooltip computed、清理 Compass/Position 图标导入；`TrackAnimationPlayer.vue` 与 `TrackDetail.vue`（移动端共用 HUD）删对应事件接线；`stores/animation.ts` 删死函数 `toggleOrientationMode`（`setOrientationMode` 保留，导出流程设置朝向仍用）
+  - **验证**：vite build 过；headless Playwright 实测 HUD 剩 5 按钮、连点相机按钮三态循环 store 状态正确（full/north-up → fixed-center/north-up → fixed-center/track-up）
+- SDK 回放导出完善（2026-11-06，参照 `~/code/amap_remotion` 方案）：
+  - **渲染收敛等待**：新增 `frontend/src/utils/animation/renderIdle.ts`（`waitForRenderIdle`：双 rAF → 主画布 64×64 缩略图连续 2 次采样不变 + 无加载中瓦片 img，350ms 起判 / 2.5s 兜底；移植 amap_remotion 实测方案），`AMap/BMap/TencentMap/GoogleMap` 四个 SDK 适配器全部实现 `waitForIdle()`（此前仅 Leaflet 有，SDK 逐帧导出退化为固定 250ms）；事件 race：AMap/BMap `moveend`、Google `idle`（300ms 超时），腾讯无可靠 idle 事件直接轮询
+  - **亚像素跳帧**：`TrackAnimationPlayer.vue` `__seekExportFrame` 在 fixed-center 下相机位移 <0.6px 且转角 <0.06° 且 zoom 未变时直接复用上一帧（SDK 对无效移动去重致 moveend 不触发、等待链悬挂；实测重 seek 0-1ms）
+  - **首帧实例就绪门**：`__seekExportFrame` 首帧前等视图状态连续 3 次非空（150ms 间隔）——`exportState=ready` 早于 SDK 异步初始化、且配置加载期间 UniversalMap 先挂 Leaflet 兜底再切 SDK，实测首帧调用会整体落空
+  - **相机/航向平滑**：新增 `frontend/src/utils/animation/cameraSmoothing.ts`（相机位置 ±1.5s 滑动平均 7 采样；航向窗口测向 ±2.5/5/10/20s + ±1s 圆周平滑 + 静止向前/向后 4min 找方向；无时间数据回退），`updateAnimation` 接线：fixed-center 相机与标记用平滑位置（标记恒居中）、track-up 旋转与标记朝向用平滑航向、full 模式标记仍压原始线；HUD/移动端 emit 保持原始值。修 `interpolatePosition` bearing 裸线性插值 bug（350°→10° 绕反向长弧，改 `calculateShortestRotation` 最短路径）
+  - **AMap 导出参数修正（隔离实验实测）**：导出模式 init 改 `viewMode:'3D'`+`animateEnable:false`+`dragEnable:false`+`rotateEnable:true`+`WebGLParams:{preserveDrawingBuffer:true}`；**删掉 `zoomEnable:false`**——JSAPI 2.0 下它连程序化 setZoom 一起禁用（实测 fixed-center 永停初始缩放）；`setCameraToMarker` 带 zoom 时改 `setZoomAndCenter(z, c, true)`（分离 setCenter+setZoom 实测互相打断、中心漂移 ~30km）。headless DomRender 下 setRotation/getRotation 恒 0（track-up 仅真机 GPU 可用），非导出交互模式维持 2D 不变
+  - **既有 bug 修复**：腾讯/Google `AnimationDOMOverlay`（模块作用域类）引用 `<script setup>` 的 `currentMapRotation` 必 ReferenceError——类内自持 `mapRotation` 字段 + `setMapRotation()` 方法，适配器同步（此前腾讯 SDK 回放调 setBearing 即崩，一帧都出不来）；`BMap.vue` `defineExpose` 补 `getMapInstance`（缺失时百度视图状态 zoom 恒 null，导出 zoom 修正/跳帧全失效）
+  - **后端**：逐帧总预算每帧 2.5s→5.0s（SDK 单帧 idle 上限 2.5s + seek/截图开销；软件渲染 SwiftShader 下单帧实测 3-4s，预算只兜卡死不限制快帧）
+  - **每帧减负**：`updateAnimation` 对双色轨迹按索引缓存跳过重建（`lastPassedIndex`，索引未变不调 `setPassedSegment`——它每次全量重建两条 Polyline，是逐帧导出/静止回放的主要开销）；播放态/相机模式切换与轨迹数据变化时重置缓存
+  - **验证**：`npx vite build` 过；数值先验（航向序列平滑、wraparound 插值 350→10@0.5=0°）；headless 四引擎截图对比（百度 GL/Legacy 底图+轨迹+track-up 全对、高德固定中心缩放/居中/标记朝向全对、亚像素跳帧命中）；**端到端冒烟通过**：track 90 逐帧模式（start_time=2860000、speed=8、218 帧、fixed-center+track-up+arrow）engine=sdk&layer=baidu 经任务队列产出 7.27s mp4（百度 GL 3.3s/帧，本机 SwiftShader），抽帧确认底图/双色轨迹/标记居中/HUD 进度正确。**本机 SwiftShader 限制**（非代码问题）：腾讯 GLJS 瓦片纹理不渲染（请求 200/GL 健在/轨迹正常，底图空白，真机 GPU 不受影响）、AMap track-up 旋转无效（DomRender）
+  - **运维注意**：导出任务运行期间改前端代码会经 HMR 打挂运行中的录制页（本次冒烟首跑即因此失败，与「导出运行中勿改后端代码」同类坑）
+  - **厂商风控复现**：实验脚本短时高频拉高德 z17 瓦片后，webrd0x 对本机会话返回 179 字节素色占位 PNG（Leaflet/SDK 同受影响，数十分钟后自愈）——与用户报告的「SDK 长录制退化」同机理的微型复现
+
 - 顶部进度条空闲页周期性闪现修复（2026-11-05 第五笔）：
   - **问题**：页面静置时顶部加载进度条仍每隔约 2 秒出现一次——`request.ts` 请求拦截器对所有请求默认触发 `nProgressStore.start()`（仅 `skipProgress: true` 跳过），而轨迹列表页 `TrackList.vue` onMounted 无条件启动 2 秒轮询 `trackApi.getAllFillProgress()`；另有多个定时轮询 API 未带该标记（`track.getFillProgress`、`liveRecording.getStatus`、`admin.getTask`、`admin.getImportProgress`、`task.getTask`）
   - **修复**：六个轮询用途 API 统一补 `{ skipProgress: true }`（`api/track.ts` getFillProgress/getAllFillProgress、`api/liveRecording.ts` getStatus、`api/admin.ts` getImportProgress/getTask、`api/task.ts` getTask）；新增 `src/types/axios.d.ts` 模块扩展补声明 `skipProgress`/`skipAuth`（此前无类型声明，`animationTask.ts` 等既有调用靠 esbuild 不做类型检查才未暴露）
