@@ -485,7 +485,9 @@ onMounted(() => {
   // 输出视频不受实时录制下瓦片加载滞后与压缩质量问题影响
   if (props.exportMode) {
     let exportInstanceReady = false
-    ;(window as any).__seekExportFrame = async (t: number) => {
+    // 返回值：true = 亚像素跳帧（画面与上一帧完全相同，后端可直接复用上一帧截图，
+    // 省掉一次截图）；false/undefined = 已真实重定位并等待空闲，需要重新截图
+    ;(window as any).__seekExportFrame = async (t: number): Promise<boolean> => {
       animationStore.setPlaybackState('isPlaying', false)
       animationStore.setPlaybackState('currentTime', t)
       // 首帧等待地图实例就绪：exportState=ready 可能早于 SDK 异步初始化完成
@@ -524,12 +526,13 @@ onMounted(() => {
           const movedPx =
             calculateDistance(lastSeekCamera.lat, lastSeekCamera.lng, cam.lat, cam.lng) / mPerPx
           const dBearing = Math.abs(calculateShortestRotation(lastSeekCamera.bearing, bearing))
-          if (movedPx < 0.6 && dBearing < 0.06) return
+          if (movedPx < 0.6 && dBearing < 0.06) return true
         }
         lastSeekCamera = { lat: cam.lat, lng: cam.lng, bearing, zoom }
       }
       updateAnimation(true)
       await waitForMapIdle()
+      return false
     }
     // 预热页专用：仅定位不等待（快速扫掠/跟随主录制页前方位置，把瓦片请求排入浏览器缓存）
     ;(window as any).__seekExportPosition = (t: number) => {

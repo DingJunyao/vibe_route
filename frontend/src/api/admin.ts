@@ -198,6 +198,11 @@ export const adminApi = {
     return http.put('/admin/config', data)
   },
 
+  // 发送测试邮件（验证 SMTP 配置；传 email_config 可在保存前用表单当前值测试）
+  testEmailConfig(data: { email_config?: EmailConfig; to_email?: string }): Promise<{ message: string }> {
+    return http.post('/admin/config/test-email', data)
+  },
+
   // 获取用户列表（支持分页、搜索、排序、筛选）
   getUsers(params?: {
     page?: number

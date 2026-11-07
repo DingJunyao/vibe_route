@@ -181,7 +181,7 @@ import { useAnimationMap, type AnimationMapAdapter } from '@/composables/animati
 import { waitForRenderIdle } from '@/utils/animation/renderIdle'
 import { wgs84ToGcj02, gcj02ToWgs84 } from '@/utils/coordTransform'
 import { HEATMAP_GRADIENT, HEATMAP_OPACITY } from '@/utils/heatmapStyle'
-import { renderHeatCanvas } from '@/utils/heatmapCanvas'
+import { renderHeatCanvas, createHeatFollow, applyHeatFollow, clearHeatTransform, type HeatFollowState } from '@/utils/heatmapCanvas'
 import type { MarkerPosition, MarkerStyle } from '@/types/animation'
 
 // 类型定义
@@ -319,7 +319,10 @@ const customTooltip = ref<HTMLElement>()
 let googleMapInstance: any = null
 let projectionHelper: any = null  // OverlayView 投影助手（坐标↔像素转换）
 let polylineLayers: any[] = []  // 轨迹折线图层（每条轨迹一个 Polyline）
-let heatLayer: any = null  // 足迹热力图叠加层（OverlayView + canvas）
+let heatCanvas: HTMLCanvasElement | null = null  // 足迹热力图画布（挂在地图容器上）
+let heatFollow: HeatFollowState | null = null
+let heatZooming = false  // 缩放动画期间不做平移跟随（位移与缩放叠加会错位）
+let heatRedrawTimer: number | null = null  // rAF 合并重绘
 let coloredPolylineLayers: any[] = []  // 多段彩色高亮图层
 let highlightPolylineLayer: any = null  // 路径段高亮图层
 let customOverlayMarkers: any[] = []  // 自定义覆盖层标记
@@ -1140,6 +1143,26 @@ async function initMap() {
       })
     )
 
+    // 热力叠层：拖动中用 transform 平移跟随，松手/缩放结束后重绘校准
+    // （idle 同时兜底 fitBounds 动画结束与窗口尺寸变化后的重绘）
+    mapListeners.push(googleMapInstance.addListener('drag', updateHeatFollow))
+    mapListeners.push(googleMapInstance.addListener('dragend', () => {
+      endHeatFollow()
+      redrawHeatmap()
+    }))
+    mapListeners.push(googleMapInstance.addListener('idle', () => {
+      endHeatFollow()
+      redrawHeatmap()
+    }))
+    mapListeners.push(googleMapInstance.addListener('zoomstart', () => {
+      heatZooming = true
+      endHeatFollow()
+    }))
+    mapListeners.push(googleMapInstance.addListener('zoomend', () => {
+      heatZooming = false
+      redrawHeatmap()
+    }))
+
     // 点击地图显示轨迹信息（同时支持桌面端和移动端）
     if (mapContainer.value) {
       // 监听鼠标按下事件（记录位置，用于区分点击和拖动）
@@ -1624,21 +1647,101 @@ function updateTracks() {
   drawCustomOverlays()
 }
 
-// 移除热力图图层
+// 移除热力图图层（自绘 canvas）
 function removeHeatmap() {
-  if (heatLayer) {
-    try {
-      heatLayer.setMap(null)
-    } catch (e) {
-      // ignore
-    }
+  heatCanvas?.remove()
+  heatCanvas = null
+  heatFollow = null
+  if (heatRedrawTimer !== null) {
+    cancelAnimationFrame(heatRedrawTimer)
+    heatRedrawTimer = null
   }
-  heatLayer = null
+}
+
+// 把热力点投影到屏幕并绘制（统一 canvas 渲染器，渐变与其它引擎一致）
+// 画布挂在地图容器上（与 AMap/BMap/Tencent 同模式），像素用
+// projectionHelper 的容器坐标——此前挂在 overlayLayer pane 却用容器像素投影，
+// 两个坐标空间错位导致热力图整体漂移（偏到太平洋）且拖动时随 pane 位移游移
+function paintHeatmap() {
+  const container = mapContainer.value
+  if (!container || !googleMapInstance || props.displayMode !== 'heatmap') return
+  const points = props.heatmapPoints || []
+  if (points.length === 0) return
+  const google = (window as any).google
+  if (!google || !projectionHelper) return
+
+  const width = container.clientWidth
+  const height = container.clientHeight
+  if (width === 0 || height === 0) return
+  clearHeatTransform(heatCanvas)
+  if (!heatCanvas) {
+    heatCanvas = document.createElement('canvas')
+    heatCanvas.style.position = 'absolute'
+    heatCanvas.style.left = '0'
+    heatCanvas.style.top = '0'
+    heatCanvas.style.pointerEvents = 'none'
+    heatCanvas.style.zIndex = '150'
+    container.appendChild(heatCanvas)
+  }
+  if (heatCanvas.width !== width) heatCanvas.width = width
+  if (heatCanvas.height !== height) heatCanvas.height = height
+
+  const rendered: Array<{ x: number; y: number; weight: number }> = []
+  for (const [lng, lat] of points) {
+    // heatmapPoints 是 WGS84；地图空间是 GCJ-02（境外守卫原样返回）
+    const [gLng, gLat] = wgs84ToGcj02(lng, lat)
+    const px = projectionHelper.toContainerPixel(new google.maps.LatLng(gLat, gLng))
+    if (!px) continue
+    rendered.push({ x: px.x, y: px.y, weight: 1 })
+  }
+
+  renderHeatCanvas(heatCanvas, rendered, {
+    radius: 22,
+    blur: 16,
+    opacity: HEATMAP_OPACITY,
+    gradient: HEATMAP_GRADIENT,
+  })
+}
+
+// 重绘热力（视野/尺寸变化时调用，rAF 合并多次事件）
+function redrawHeatmap() {
+  if (heatRedrawTimer !== null) return
+  heatRedrawTimer = requestAnimationFrame(() => {
+    heatRedrawTimer = null
+    paintHeatmap()
+  })
+}
+
+// 拖动跟随：Google 拖动期间中心始终在视口中心，不能拿中心做锚点；
+// 以拖动起始的中心经纬度为锚，随锚点容器像素偏移平移画布
+function updateHeatFollow() {
+  if (heatZooming || props.displayMode !== 'heatmap' || !heatCanvas || !googleMapInstance) return
+  const google = (window as any).google
+  if (!google || !projectionHelper) return
+
+  if (!heatFollow) {
+    const center = googleMapInstance.getCenter()
+    if (!center) return
+    const startPx = projectionHelper.toContainerPixel(center)
+    if (!startPx) return
+    heatFollow = createHeatFollow(center.lng(), center.lat(), startPx.x, startPx.y)
+    return
+  }
+  const anchorPx = projectionHelper.toContainerPixel(
+    new google.maps.LatLng(heatFollow.lat, heatFollow.lng)
+  )
+  if (!anchorPx) return
+  applyHeatFollow(heatFollow, heatCanvas, anchorPx.x, anchorPx.y)
+}
+
+function endHeatFollow() {
+  heatFollow = null
+  clearHeatTransform(heatCanvas)
 }
 
 // 绘制足迹热力图
 // Google Maps JS API ≥3.65 已移除 visualization.HeatmapLayer（v=weekly 已是更高版本），
-// 改用 OverlayView + canvas 自绘（坐标 WGS84 无需转换）
+// 改用容器 canvas 自绘（与 AMap/BMap/Tencent 共用 heatmapCanvas 渲染器）
 function drawHeatmap() {
   if (!googleMapInstance) return
 
@@ -1661,60 +1764,17 @@ function drawHeatmap() {
   if (points.length === 0) return
 
   try {
-    const google = (window as any).google
-    const canvas = document.createElement('canvas')
-    canvas.style.position = 'absolute'
-    canvas.style.left = '0'
-    canvas.style.top = '0'
-    canvas.style.pointerEvents = 'none'
-
-    const overlay = new google.maps.OverlayView()
-    overlay.onAdd = function () {
-      const panes = this.getPanes?.()
-      const pane = panes?.overlayLayer || panes?.overlayMouseTarget
-      pane?.appendChild(canvas)
-    }
-    overlay.draw = function () {
-      const projection = this.getProjection?.()
-      const div = googleMapInstance?.getDiv?.()
-      if (!projection || !div) return
-      const w = div.clientWidth
-      const h = div.clientHeight
-      if (w === 0 || h === 0) return
-      canvas.width = w
-      canvas.height = h
-
-      const rendered: Array<{ x: number; y: number; weight: number }> = []
-      for (const [lng, lat] of points) {
-        // heatmapPoints 是 WGS84；地图空间是 GCJ-02（境外守卫原样返回）
-        const [gLng, gLat] = wgs84ToGcj02(lng, lat)
-        const px = projection.fromLatLngToContainerPixel(new google.maps.LatLng(gLat, gLng))
-        if (!px) continue
-        // 视口外一定范围的点不参与绘制（画布外不可见）
-        if (px.x < -60 || px.x > w + 60 || px.y < -60 || px.y > h + 60) continue
-        rendered.push({ x: px.x, y: px.y, weight: 1 })
-      }
-      renderHeatCanvas(canvas, rendered, {
-        radius: 22,
-        blur: 16,
-        opacity: HEATMAP_OPACITY,
-        gradient: HEATMAP_GRADIENT,
-      })
-    }
-    overlay.onRemove = function () {
-      canvas.remove()
-    }
-    overlay.setMap(googleMapInstance)
-    heatLayer = overlay
-
     let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity
     for (const [lng, lat] of points) {
-      if (lat < minLat) minLat = lat
-      if (lat > maxLat) maxLat = lat
-      if (lng < minLon) minLon = lng
-      if (lng > maxLon) maxLon = lng
+      // fit 与画布同口径：先转地图坐标（GCJ-02，境外原样）再算范围
+      const [gLng, gLat] = wgs84ToGcj02(lng, lat)
+      if (gLat < minLat) minLat = gLat
+      if (gLat > maxLat) maxLat = gLat
+      if (gLng < minLon) minLon = gLng
+      if (gLng > maxLon) maxLon = gLng
     }
     fitToBounds({ minLat, maxLat, minLon, maxLon }, 10)
+    paintHeatmap()
   } catch (e) {
     console.warn('[GoogleMap] 热力图绘制失败:', e)
   }

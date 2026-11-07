@@ -220,7 +220,9 @@ async def _open_export_page(
     url = _build_export_url(track_id, request, width, height)
 
     browser = await p.chromium.launch(
-        headless=True,
+        # PLAYWRIGHT_HEADED 开启时有头模式：可在屏幕上实时观看回放录制过程（调试用）。
+        # 截图/CDP screencast 仍按视口分辨率渲染，输出视频不受窗口大小影响
+        headless=not settings.PLAYWRIGHT_HEADED,
         args=['--enable-webgl', '--ignore-gpu-blocklist'],
     )
     context = await browser.new_context(
@@ -314,14 +316,21 @@ async def _capture_frame_mode(
         # 截图开销；预算只是卡死哨兵，尽量宽松（本机 SwiftShader + ffmpeg 并发编码时
         # 单帧实测 ~5s，真机 GPU 通常 <1s、amap_remotion 实测矢量 ~9fps）
         frame_deadline = time.time() + frame_count * 8.0 + 120
+        last_jpeg: Optional[bytes] = None
         for i in range(frame_count):
             if cancel_check is not None and cancel_check():
                 raise RuntimeError("任务已取消")
             if time.time() > frame_deadline:
                 raise RuntimeError(f"逐帧导出超时（{frame_count} 帧未在限时内完成）")
             t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
-            await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
-            jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY)
+            # 页面亚像素跳帧（相机位移 <0.6px）时返回 True：画面与上一帧完全相同，
+            # 直接复用上一帧 JPEG，省掉一次 seek 等待与整页截图（静止段收益最大）
+            skipped = await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
+            if skipped and last_jpeg is not None:
+                jpeg = last_jpeg
+            else:
+                jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY)
+                last_jpeg = jpeg
             proc.stdin.write(jpeg)
             # drain 提供背压：ffmpeg 编码慢时暂停截图，不会堆积内存
             await proc.stdin.drain()

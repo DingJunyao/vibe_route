@@ -78,6 +78,9 @@ class Settings(BaseSettings):
 
     # 前端地址（动画导出等场景由后端打开页面）
     FRONTEND_URL: str = "http://localhost:5173"
+    # Playwright 有头模式调试：true 时动画导出录制以有头浏览器打开，
+    # 可实时观看轨迹回放录制是否符合预期（仅本地开发调试用）
+    PLAYWRIGHT_HEADED: bool = False
     ROAD_SIGN_DIR: str = "data/road_signs"
 
     # 日志目录

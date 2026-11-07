@@ -4,6 +4,22 @@
 
 ## 2026-11
 
+- Docker 空白视频根治 + 防火墙根因（2026-11-07 第三笔，承接第二笔的部署修复，用户确认后已执行）：
+  - **真正根因：群晖 DSM 防火墙**（控制面板→安全性→防火墙，custom profile：①允许 192.168.100.0/24 ②允许国家=CN ③其余全部拒绝，作用于 `INPUT_FIREWALL`+`FORWARD_FIREWALL`）。容器源 IP（172.29.x 等 docker 网段）不在 LAN 网段、不匹配 CN geoip → 出站（FORWARD，实测 DROP 计数 103 包）与到 NAS 本机（INPUT）全被丢弃；宿主机自身流量走 OUTPUT 不受影响——完美解释所有症状（其他容器 livecalc 同样被断网）。iptables 里 `INPUT`/`FORWARD_FIREWALL` 链之前"看不见"是因为 ContainerManager 重启前后防火墙链状态不一致；重启 `pkgctl-ContainerManager.service`（DSM 7.2 的 docker 服务名）后链可见
+  - **已执行**：① compose `FRONTEND_URL` 改 `http://127.0.0.1`（原文件备份 `docker-compose.yml.bak_20261107`）②运行时 `iptables -I FORWARD_FIREWALL 3 -s 172.16.0.0/12 -j RETURN` + INPUT_FIREWALL 同款（覆盖 172.17-31 全部 docker 桥）③ContainerManager 重启 + 容器重建。**验证：NAS 上真实 SDK 导出 70s 完成**，视频含完整 POI/轨迹/车标、帧间有运动（795kbps vs 空白期 20kbps）；容器内 DNS/出站 TCP/到 NAS 本机全部恢复
+  - **待用户持久化**（运行时 iptables 规则重启会丢）：DSM 控制面板→安全性→防火墙→编辑规则→新增两条"允许"来源：`172.16.0.0/255.240.0.0` 与 `192.168.0.0/255.255.0.0`（覆盖 Docker 默认地址池，放在拒绝规则之前）；或直接用我准备好的 JSON（结构克隆自现有规则，含备份 2.json.bak_20261107）——因安全护栏不代写防火墙配置文件，留给用户在 DSM UI 操作最稳
+  - **其他影响**：该修复同时救活了同机其他被断网的容器（livecalc/searxng 等）；skip-reuse 优化与热力图修复需下次构建镜像带上（当前 NAS 镜像只含 abd722b）；google 引擎在 NAS 上还需容器能访问 Google CDN（境内需 `api_base_url` 反代）
+- Docker 空白视频排查 + 逐帧跳帧复用 + 测试邮件 + Google 热力图修复（2026-11-07 第二笔）：
+  - **Docker 空白视频根因**（连 ding@192.168.100.3 群晖实测）：容器**出站网络完全阻断**（到网关/NAS 自身/公网 TCP/UDP 全部超时，宿主机同目标正常，iptables FORWARD 无显式 DROP）→ 高德等地图 SDK 在导出浏览器里永远加载不了（`window.AMap` 不存在、无任何 console 报错）→ 而 `exportState` 门控不依赖地图，任务照常"完成"，产出的 mp4 全程空白页（实测 11-06 两个"成功"视频：78 分钟 20kbps，逐帧全白）。叠加 `FRONTEND_URL=https://viberoute.home.a4ding.com` 依赖 DNS：11-06 深夜 4 个任务 `ERR_NAME_NOT_RESOLVED` 失败（compose 的 `dns: [223.5.5.5]` 当前也不通）。**修复（用户侧待操作）**：compose 改 `FRONTEND_URL: http://127.0.0.1`（同容器 nginx，代码报错提示本就建议），并恢复容器出站网络（先重启 Docker 服务/重建网络试，再查 DSM 防火墙对 172.29.0.0/16 的放行）；注意容器内 WebGL 正常（SwiftShader），google 引擎另需容器可访问 Google CDN（境内需反代 `api_base_url`）。**容器日志在哪查**：`/volume1/server/vibe_route/logs`（卷挂载持久化，11-06.zip 里有 4 次 ERR_NAME_NOT_RESOLVED 全记录）
+  - **本机有头模式"停在起点"为假性卡死**：track 109（78min）以 speed=1.0 导出 = **14 万帧**逐帧（~0.35s/帧）→ 预计 13h+；起点静止段每帧位移 <0.6px 触发亚像素跳帧，视觉几乎不动（进度实际在推进 2.8 帧/s）。长轨迹 1x 导出请用高倍速（耗时只取决于输出时长）
+  - **逐帧跳帧复用优化**（playwright_export.py + TrackAnimationPlayer.vue）：`__seekExportFrame` 亚像素跳帧时 `return true`，后端直接复用上一帧 JPEG（省 seek 等待+整页截图），静止段收益最大；实测 track 109 末段 8s 导出 82s→58s（约 40% 帧跳过），输出语义不变（重复帧压缩后文件更小）
+  - **测试邮件功能**（问题 2）：`POST /api/admin/config/test-email`（admin.py）——`email_config` 可选传入：传了用表单当前值（保存前即可验证），不传用已保存配置；`to_email` 缺省当前管理员邮箱；未配 SMTP 400、发送失败 502。前端 Admin.vue 系统配置 SMTP 表单尾加"收件邮箱 + 发送测试邮件"（`sendConfigTest`，loading 状态复用模板 tab 模式）。实测：空 host 400 / 已保存配置 200（真发一封）/ 无 token 401。注意邮件模板 tab 原有按模板的测试按钮，本功能是 SMTP 连通性测试
+  - **Google SDK 热力图漂移修复**（问题 3，GoogleMap.vue）：旧实现 canvas 挂 `overlayLayer` **pane**（随 mapPane 平移）却用 `fromLatLngToContainerPixel` **容器像素**投影——两坐标空间错位 → 中国范围热力图整体甩到太平洋、拖动时随 pane 位移游移。重构为与 AMap/BMap/Tencent 同模式：canvas 挂地图容器（zIndex 400，150 会被 Google 地图内容层压住）、`projectionHelper.toContainerPixel` 投影、`drag`（以拖动起始中心为锚平移跟随）/`dragend`/`idle`/`zoomstart`/`zoomend` 重绘校准（rAF 合并）；fit bbox 先转 GCJ（与其他引擎一致）。实测 headless：西安曲江 zoom13 热力压路网、拖动中跟随、松手重绘对齐
+  - **验证**：vite build 过；admin.py/playwright_export.py py 过；本地 8s 逐帧导出回归 + 热力图截图验证如上
+- 动画导出 Playwright 有头模式调试开关（2026-11-07）：
+  - **需求**：录制轨迹回放时可在屏幕上实时看到浏览器画面，直观确认回放录制是否正确
+  - **改动**：`config.py` 新增 `PLAYWRIGHT_HEADED: bool = False`；`playwright_export.py` `_open_export_page` 启动参数改为 `headless=not settings.PLAYWRIGHT_HEADED`；`backend/.env` 与 `.env.example` 补充该参数及说明。截图/CDP screencast 仍按导出分辨率视口渲染，输出视频不受窗口影响；仅本地开发调试用（Docker/服务器部署保持 false）
+  - **验证**：venv Python 实测 `settings.PLAYWRIGHT_HEADED` 从 .env 正确加载（False），`playwright_export.py` 语法通过
 - SDK 录制 POI 退化根因修复：SDK 引擎一律逐帧导出（2026-11-06 第六笔）：
   - **问题**：用户以高德 SDK 导出崤函大道轨迹，成片中后段 POI 全部消失（只剩路网与建筑方块）——即长期未解的「SDK 长录制退化」问题，所有 SDK 地图类似
   - **根因**：导出管线此前按输出时长分路（≤30s 逐帧 / >30s CDP screencast 流式），崤函大道这类长输出全走**流式**——页面实时连续播放、地图永不停止。SDK 矢量渲染的 POI 标注管线只在相机停稳（moveend/idle）时重排，连续运动下 POI 持续退化不再恢复。**amap_remotion 之所以解决了：它根本没有流式模式，两版合成（栅格 1x、矢量 16x）全部逐帧渲染，每帧等 moveend→双 rAF→画布收敛后再截图，帧间地图空闲、标注恢复**。此前补的 waitForIdle/亚像素跳帧都在逐帧路径上，而长输出从未走那条路

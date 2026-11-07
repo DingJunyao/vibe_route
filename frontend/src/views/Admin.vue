@@ -147,6 +147,16 @@
                         <el-switch v-model="config.email_config.starttls" />
                         <span class="form-tip">在普通连接上升级 STARTTLS（通常 587 端口使用）</span>
                       </el-form-item>
+                      <el-form-item label="测试邮件">
+                        <div class="test-email-row">
+                          <el-input v-model="testEmailRecipient" placeholder="收件邮箱，留空发当前账号邮箱"
+                            clearable class="config-input" />
+                          <el-button type="primary" plain :loading="sendingConfigTest" @click="sendConfigTest">
+                            发送测试邮件
+                          </el-button>
+                        </div>
+                        <span class="form-tip">用上方表单当前值发送（无需先保存），验证 SMTP 连通性</span>
+                      </el-form-item>
                     </template>
                   </div>
 
@@ -2604,6 +2614,24 @@ async function sendTemplateTest(template: EmailTemplate) {
   }
 }
 
+// 发送 SMTP 配置测试邮件（用表单当前值，无需先保存；收件邮箱留空发当前账号）
+const testEmailRecipient = ref('')
+const sendingConfigTest = ref(false)
+async function sendConfigTest() {
+  sendingConfigTest.value = true
+  try {
+    const response = await adminApi.testEmailConfig({
+      email_config: { ...config.email_config },
+      to_email: testEmailRecipient.value.trim() || undefined,
+    })
+    ElMessage.success(response.message || '测试邮件已发送')
+  } catch (error) {
+    // 错误已在拦截器中处理
+  } finally {
+    sendingConfigTest.value = false
+  }
+}
+
 // 加载邀请码列表
 async function loadInviteCodes() {
   loadingInviteCodes.value = true
@@ -3654,6 +3682,14 @@ onUnmounted(() => {
 .config-input {
   flex: 1;
   min-width: 200px;
+}
+
+/* 测试邮件：输入框 + 按钮一行排布 */
+.test-email-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
 /* 拖拽手柄 */

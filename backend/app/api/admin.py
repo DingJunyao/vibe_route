@@ -415,6 +415,68 @@ async def update_config(
     )
 
 
+class TestEmailRequest(BaseModel):
+    """测试邮件请求（SMTP 配置可选传入：传了用表单当前值验证，不传用已保存配置）"""
+    email_config: EmailConfig | None = None
+    to_email: str | None = None
+
+
+@router.post("/config/test-email")
+async def send_config_test_email(
+    data: TestEmailRequest,
+    current_admin: User = Depends(get_current_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    发送测试邮件（管理员）：验证 SMTP 配置连通性，不检查通知开关
+
+    email_config 传入时用表单当前值（尚未保存也可测试）；否则用已保存配置。
+    收件邮箱缺省用当前管理员账号邮箱，也可显式指定。
+    """
+    from app.services.email_service import email_service
+
+    if data.email_config is not None:
+        email_config = data.email_config.model_dump()
+    else:
+        configs = await config_service.get_all_configs(db)
+        email_config = configs.get("email_config") or {}
+    if not email_service.is_smtp_configured(email_config):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="SMTP 未配置，请先填写邮件服务器地址",
+        )
+
+    recipient = (data.to_email or "").strip() or (current_admin.email or "").strip()
+    if not recipient:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="当前管理员账号未设置邮箱，请填写收件邮箱后再测试",
+        )
+
+    from datetime import datetime
+
+    body = (
+        "这是一封测试邮件，用于验证 Vibe Route 的 SMTP 发件配置。\n\n"
+        f"应用：{settings.APP_NAME}\n"
+        f"发起人：{current_admin.username}\n"
+        f"发送时间：{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+        "收到此邮件说明 SMTP 服务器、端口与认证信息均正确。"
+    )
+    try:
+        await email_service.send_email(
+            email_config=email_config,
+            to_email=recipient,
+            subject=f"【{settings.APP_NAME}】SMTP 配置测试邮件",
+            body=body,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"测试邮件发送失败：{e}",
+        )
+    return {"message": f"测试邮件已发送至 {recipient}"}
+
+
 @router.get("/database-info")
 async def get_database_info(
     current_admin: User = Depends(get_current_admin_user),
