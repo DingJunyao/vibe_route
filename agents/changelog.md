@@ -492,3 +492,15 @@
   - [`docker-compose.example.yml`](../docker-compose.example.yml)：FRONTEND_URL 默认值改为 `http://127.0.0.1`（同容器 nginx 回环，无 DNS/TLS 依赖，127.0.0.1 为浏览器安全上下文），注释保留对外域名替代方案（需容器 DNS 可解析，附 dns/extra_hosts 兜底）
 - **部署侧修复**（服务器 compose，改后 `docker compose up -d` 重建）：选定 `FRONTEND_URL: http://127.0.0.1`；若地图 key 按域名做白名单导致地图加载失败，回退对外域名方案（`dns: [223.5.5.5, 119.29.29.29]` 或 `extra_hosts` 固定当前 IP）
 - **切换影响面核实**：前端主 API 客户端为相对路径 `baseURL: '/api'`（`api/request.ts`，经同容器 nginx 反代，无 CORS）；`utils/origin.ts` 对 `127.0.0.1` 的本地特判（`ws://127.0.0.1:8000`）仅影响用户侧任务下载链接与实时 WS，不影响导出页就绪流程；127.0.0.1 为浏览器安全上下文，https-only API 不受影响
+- **部署落地（群晖 NAS ding-dsm）**：实际生效的 compose 为 `/volume1/server/vibe_route/docker-compose.yml`，用户当日修改未落盘（文件 mtime 停留在 11-03），已远程修正为 `http://127.0.0.1`（备份 .bak-fix127）并重建；容器内 `http://127.0.0.1/tracks/97` 返回 200。DNS 失败链路：宿主机 DNS 为路由器 192.168.100.1，域名解析到 28.0.0.0/8 保留段疑被路由器 DNS rebind 保护拦截（容器内解析持续失败），loopback 方案彻底绕开
+
+## 2026-11-14
+
+### 录屏下载改走浏览器原生下载；邮件下载直链支持令牌与对外域名
+- **现象**：FRONTEND_URL 改为 127.0.0.1 后邮件里的下载链接也变成 `http://127.0.0.1/...`；网页点击下载长时间无响应（实测该任务是一个 2.36 GB 的 mp4：容器内 22.6s 全量读出，后端/nginx 均正常）
+- **根因**：`FRONTEND_URL` 被邮件模板复用为对外地址（一个配置承担「容器内 Playwright 打开地址」与「用户侧链接地址」两个职责）；前端 fetch→Blob 下载把数 GB 响应整包压内存且传输完成前一直 pending、无进度反馈；邮件直链无携带凭证的手段（邮件客户端加不了 Bearer 头，必 401）
+- **改动**：
+  - 新增 `PUBLIC_BASE_URL` 配置（留空回退 FRONTEND_URL）与 `public_base_url` 属性，邮件/模板测试直链改用之
+  - 后端新增 `POST /animation/export/{id}/download-token`（任务作用域 7 天令牌，claims 含 sub+task+purpose）；`GET .../download` 支持 `?download_token=` 查询参数鉴权
+  - 前端 `downloadFile` 改为先换令牌再 `<a download>` 触发浏览器原生下载：流式落盘、原生进度、可暂停续传，不再整包压内存
+  - compose 模板与服务器环境补充 `PUBLIC_BASE_URL`

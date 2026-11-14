@@ -1,5 +1,6 @@
 # backend/app/api/animation.py
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -9,7 +10,8 @@ from sqlalchemy import select, func
 
 from ..core.config import settings
 from ..core.database import get_db
-from ..core.deps import get_current_admin_user, get_current_user
+from ..core.deps import get_current_admin_user, get_current_user, get_current_user_optional
+from ..core.security import create_access_token, decode_access_token
 from ..models.animation_task import AnimationExportTask
 from ..models.track import Track
 from ..models.user import User
@@ -253,13 +255,13 @@ async def get_export_progress(
     return _task_to_schema(task, track_title=track_title, queue_position=queue_position)
 
 
-@router.get("/animation/export/{task_id}/download")
-async def download_export(
+@router.post("/animation/export/{task_id}/download-token")
+async def create_download_token(
     task_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """下载任务结果文件，并校验任务所有权。"""
+    """签发任务作用域的下载令牌（邮件直链 / 浏览器原生下载场景）。"""
     result = await db.execute(
         select(AnimationExportTask).where(AnimationExportTask.id == task_id)
     )
@@ -268,6 +270,56 @@ async def download_export(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="无权访问此任务")
+    if task.status != 'completed' or not task.download_url:
+        raise HTTPException(status_code=400, detail="任务未完成或无结果文件")
+
+    token = create_access_token(
+        {"sub": str(current_user.id), "task": task_id, "purpose": 'export-download'},
+        expires_delta=timedelta(days=7),
+    )
+    return {"download_token": token, "expires_in": 7 * 24 * 3600}
+
+
+@router.get("/animation/export/{task_id}/download")
+async def download_export(
+    task_id: str,
+    download_token: Optional[str] = Query(None, description="下载令牌（邮件直链/浏览器原生下载，无 Bearer 头时使用）"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+):
+    """下载任务结果文件，并校验任务所有权。
+
+    鉴权二选一：常规 Bearer 头，或任务作用域的 download_token 查询参数。
+    """
+    user = current_user
+    if user is None:
+        if not download_token:
+            raise HTTPException(status_code=401, detail="未认证")
+        payload = decode_access_token(download_token)
+        if (
+            not payload
+            or payload.get("purpose") != 'export-download'
+            or payload.get("task") != task_id
+        ):
+            raise HTTPException(status_code=401, detail="下载链接已失效，请在应用内重新下载")
+        try:
+            token_user_id = int(payload.get("sub"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="下载链接已失效，请在应用内重新下载")
+        user_result = await db.execute(select(User).where(User.id == token_user_id))
+        user = user_result.scalar_one_or_none()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=401, detail="下载链接已失效，请在应用内重新下载")
+
+    result = await db.execute(
+        select(AnimationExportTask).where(AnimationExportTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.user_id != user.id and not user.is_admin:
         raise HTTPException(status_code=403, detail="无权访问此任务")
     if task.status != 'completed' or not task.download_url:
         raise HTTPException(status_code=400, detail="任务未完成或无结果文件")

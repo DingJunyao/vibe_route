@@ -167,7 +167,7 @@ async def send_test_email(
         "track_name": "测试轨迹（示例）",
         "finished_at": "2026-01-01 12:00:00 UTC",
         "error": "测试失败原因（示例）",
-        "download_url": f"{settings.FRONTEND_URL.rstrip('/')}/api/animation/export/test/download",
+        "download_url": f"{settings.public_base_url}/api/animation/export/test/download",
     }
     subject = render_template(template.subject, context)
     body = render_template(template.body, context)

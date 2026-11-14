@@ -19,6 +19,8 @@ services:
       #   dns: [223.5.5.5, 119.29.29.29]
       #   # 或 extra_hosts: ["viberoute.home.a4ding.com:28.0.8.217"]（IP 变化需同步更新）
       FRONTEND_URL: http://127.0.0.1
+      # 对外访问地址（邮件里的下载直链等用户侧链接）；留空回退 FRONTEND_URL
+      PUBLIC_BASE_URL: https://viberoute.home.a4ding.com
     env_file:
       - .env          # 不存在则 compose 报错：先 cp backend/.env.example backend/.env
     volumes:

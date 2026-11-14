@@ -209,7 +209,22 @@ class EmailService:
             return
 
         # 5. 渲染并发送
-        download_url = f"{settings.FRONTEND_URL.rstrip('/')}/api/animation/export/{task_id}/download"
+        # 邮件客户端无法携带 Bearer 头：成功任务签发任务作用域的下载令牌拼进直链；
+        # 链接基地址用对外域名（PUBLIC_BASE_URL，留空回退 FRONTEND_URL）
+        if success and task is not None and task.status == 'completed':
+            from datetime import timedelta
+            from ..core.security import create_access_token
+
+            download_token = create_access_token(
+                {"sub": str(user_id), "task": task_id, "purpose": 'export-download'},
+                expires_delta=timedelta(days=7),
+            )
+            download_url = (
+                f"{settings.public_base_url}/api/animation/export/{task_id}/download"
+                f"?download_token={download_token}"
+            )
+        else:
+            download_url = f"{settings.public_base_url}/api/animation/export/{task_id}/download"
         context = {
             "app_name": settings.APP_NAME,
             "username": user.username,

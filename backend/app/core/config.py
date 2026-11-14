@@ -78,6 +78,8 @@ class Settings(BaseSettings):
 
     # 前端地址（动画导出等场景由后端打开页面）
     FRONTEND_URL: str = "http://localhost:5173"
+    # 对外访问基地址（邮件下载直链等用户侧链接使用）；留空回退 FRONTEND_URL
+    PUBLIC_BASE_URL: str = ""
     # Playwright 有头模式调试：true 时动画导出录制以有头浏览器打开，
     # 可实时观看轨迹回放录制是否符合预期（仅本地开发调试用）
     PLAYWRIGHT_HEADED: bool = False
@@ -99,6 +101,11 @@ class Settings(BaseSettings):
     OVERLAY_ALLOW_USER_FONTS: bool = False  # 是否允许用户上传自定义字体
     OVERLAY_MAX_USER_FONTS: int = 10  # 每个用户最多上传字体数量
     OVERLAY_MAX_USER_FONTS_SIZE_MB: int = 100  # 每个用户字体总大小限制(MB)
+
+    @property
+    def public_base_url(self) -> str:
+        """对外基地址（邮件直链等用户侧链接）；未配置时回退 FRONTEND_URL。"""
+        return (self.PUBLIC_BASE_URL or self.FRONTEND_URL).rstrip('/')
 
     @property
     def overlay_allow_user_fonts(self) -> bool:
