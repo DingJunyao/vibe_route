@@ -222,8 +222,17 @@ async def _open_export_page(
     browser = await p.chromium.launch(
         # PLAYWRIGHT_HEADED 开启时有头模式：可在屏幕上实时观看回放录制过程（调试用）。
         # 截图/CDP screencast 仍按视口分辨率渲染，输出视频不受窗口大小影响
+        # SwiftShader 软件 WebGL：headless 无 GPU 环境下让高德 JSAPI 走 WebGL 矢量
+        # 渲染而非 DomRender 降级（DomRender 下 setRotation 无效，track-up 导出失效，
+        # 地图恒正北朝上）。Chromium 129+ 软件渲染需显式 --enable-unsafe-swiftshader
         headless=not settings.PLAYWRIGHT_HEADED,
-        args=['--enable-webgl', '--ignore-gpu-blocklist'],
+        args=[
+            '--enable-webgl',
+            '--ignore-gpu-blocklist',
+            '--enable-unsafe-swiftshader',
+            '--use-gl=angle',
+            '--use-angle=swiftshader',
+        ],
     )
     context = await browser.new_context(
         viewport={'width': width, 'height': height},

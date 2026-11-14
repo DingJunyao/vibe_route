@@ -177,6 +177,11 @@ let currentAnimationMarkerStyle: 'arrow' | 'car' | 'person' = 'arrow'
 let currentMapRotation = 0
 // 最近一次标记方位角（地图旋转后补偿图标方向用）
 let lastMarkerBearing = 0
+// DomRender 降级（headless/软件渲染，JSAPI 2.0 setRotation 静默无效）时的
+// CSS 容器旋转模拟状态：cssRotationDeg 为容器 CSS 旋转角（负值 = 内容逆时针），
+// cssCoverScale 为旋转后遮住视口四角的放大系数（按容器宽高比取最坏情况）
+let cssRotationDeg = 0
+let cssCoverScale = 1
 let isAnimationPlaying = false  // 跟踪动画播放状态，避免双色轨迹闪烁
 
 // 存储轨迹点数据用于查询
@@ -514,13 +519,19 @@ const animationAdapter: AnimationMapAdapter = {
         currentAnimationMarkerStyle = style
       }
 
-      // 旋转标记：图标屏幕旋转角 = 方位角 - 地图旋转角（轨迹朝上时指向画面上方）；
-      // person 图标无方向性，保持直立
+      // 旋转标记：图标屏幕旋转角 = 方位角 - 地图旋转角 - CSS 降级旋转角
+      //（轨迹朝上时指向画面上方）；person 图标无方向性，仅需抵消 CSS 降级旋转
       const content = animationMarker.getContent() as HTMLElement
-      if (content && style !== 'person') {
+      if (content) {
         const wrapperDiv = content.querySelector('div') as HTMLDivElement
         if (wrapperDiv) {
-          wrapperDiv.style.transform = `rotate(${position.bearing - currentMapRotation}deg)`
+          if (style === 'person') {
+            if (cssRotationDeg !== 0) {
+              wrapperDiv.style.transform = `rotate(${-cssRotationDeg}deg)`
+            }
+          } else {
+            wrapperDiv.style.transform = `rotate(${position.bearing - currentMapRotation - cssRotationDeg}deg)`
+          }
         }
       }
     }
@@ -533,7 +544,12 @@ const animationAdapter: AnimationMapAdapter = {
     if (targetZoom != null) {
       // setZoomAndCenter(..., true) 立即生效；分离的 setCenter+setZoom 在逐帧驱动下
       // 会互相打断（实测 setCenter 未提交时 setZoom 按旧中心缩放，产生漂移）
-      AMapInstance.setZoomAndCenter(targetZoom, lngLat, true)
+      // CSS 降级旋转时容器放大了 cssCoverScale 倍，zoom 同步减 log2(系数)，
+      // 保证屏幕上的有效地图比例与预期一致（瓦片取低一级细节，避免二次模糊叠加）
+      const effZoom = cssRotationDeg !== 0 && cssCoverScale > 1
+        ? targetZoom - Math.log2(cssCoverScale)
+        : targetZoom
+      AMapInstance.setZoomAndCenter(effZoom, lngLat, true)
     } else {
       AMapInstance.setCenter(lngLat)
     }
@@ -550,13 +566,43 @@ const animationAdapter: AnimationMapAdapter = {
     currentMapRotation = bearing
     AMapInstance.setRotation(-bearing)
 
-    // 地图旋转后补偿标记图标方向（person 图标保持直立）
-    if (animationMarker && currentAnimationMarkerStyle !== 'person') {
+    // 检测 SDK 是否真正接受旋转：headless/软件渲染环境 JSAPI 2.0 降级 DomRender
+    //（纯 DOM 瓦片、无 canvas），setRotation 静默无效——getRotation 恒 0，
+    // track-up 回放/导出的地图旋转全部落空（实测 2026-11-14，见 changelog）。
+    // 降级时改用 CSS 变换旋转地图容器模拟：
+    // - rotate(-bearing)：与 SDK 语义一致（内容逆时针 = 轨迹指向画面上方）
+    // - scale(cssCoverScale)：旋转后遮住视口四角（按容器宽高比取最坏情况，帧间稳定）
+    // 标记位于容器中心不受位移影响；图标补偿按 cssRotationDeg 反向处理（见下方与
+    // setMarkerPosition）
+    const applied = typeof AMapInstance.getRotation === 'function' ? AMapInstance.getRotation() : -bearing
+    const sdkRotated = Math.abs(applied + bearing) < 0.5
+    const el = mapContainer.value
+    if (!sdkRotated && el) {
+      if (cssCoverScale <= 1) {
+        const w = el.clientWidth || 1
+        const h = el.clientHeight || 1
+        cssCoverScale = Math.max(1, 0.7072 * (w / h + 1))
+      }
+      cssRotationDeg = -bearing
+      el.style.transformOrigin = 'center center'
+      el.style.transform = `rotate(${cssRotationDeg}deg) scale(${cssCoverScale})`
+    } else if (el && (el.style.transform || cssRotationDeg !== 0)) {
+      cssRotationDeg = 0
+      el.style.transform = ''
+    }
+
+    // 地图旋转后补偿标记图标方向（person 图标保持直立）；
+    // CSS 降级旋转时容器已带 -bearing 倾斜，图标需额外反向补偿保持屏幕朝向
+    if (animationMarker) {
       const content = animationMarker.getContent() as HTMLElement
       if (content) {
         const wrapperDiv = content.querySelector('div') as HTMLDivElement
         if (wrapperDiv) {
-          wrapperDiv.style.transform = `rotate(${lastMarkerBearing - bearing}deg)`
+          const iconScreenRotation =
+            currentAnimationMarkerStyle === 'person'
+              ? -cssRotationDeg
+              : lastMarkerBearing - bearing - cssRotationDeg
+          wrapperDiv.style.transform = `rotate(${iconScreenRotation}deg)`
         }
       }
     }
