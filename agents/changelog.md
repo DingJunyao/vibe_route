@@ -509,9 +509,9 @@
 ### 高德 SDK 录屏 track-up 旋转失效修复（CSS 降级旋转兜底 + SwiftShader 参数）
 - **现象**：导出选「车头朝上」（track-up）+ 高德 SDK 引擎时，录制视频地图恒正北朝上、车标恒竖直（也不随路径转向），双向旋转全部失效；交互页正常
 - **根因**（容器内 Playwright 实测）：headless 无 GPU 环境下高德 JSAPI 2.0 自动降级 DomRender 渲染（地图容器无 canvas、纯 DOM 瓦片；实例 baseRender='d'），此时 setRotation 静默无效（getRotation 恒 0）——新建 viewMode:'3D' 地图同样复现；SwiftShader WebGL2 上下文本身创建成功（含 JSAPI 风格属性集），降级与上下文能力无关。而播放器按「SDK 已旋转」语义固定车标屏幕角为 0，双重失效叠加成「地图正北 + 车标恒上」
-- **改动**（frontend/src/components/map/AMap.vue）：
-  - setMapRotation 检测 SDK 未生效（getRotation 与设定值偏差超 0.5 度）时，CSS 变换旋转地图容器模拟：rotate(-bearing) scale(cssCoverScale)，语义与 SDK 一致（内容逆时针 = 轨迹指向画面上方）；cssCoverScale 按容器宽高比取最坏角部遮盖系数（16:9 约 1.81），帧间稳定
-  - setCameraToMarker 相机 zoom 减 log2(cssCoverScale)，补偿 CSS 放大后的有效比例
-  - 标记图标补偿加入 CSS 旋转角（车标保持画面上方；person 图标反向补偿保持直立）
-  - backend/app/utils/playwright_export.py：chromium 启动参数追加 --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader（Chromium 129+ 软件 WebGL 需显式开启），为高德走 WebGL 矢量渲染创造条件；即便 JSAPI 仍降级，CSS 兜底也能正确旋转
-- **已知取舍**：CSS 降级路径下栅格瓦片被放大约 1.8 倍（细节略糊）、地图控件（比例尺等）随地图旋转、轨迹线宽视觉加粗；真机 GPU 环境 SDK 旋转正常时完全不受影响
+- **改动**（frontend/src/components/map/AMap.vue + backend/app/utils/playwright_export.py）：
+  - setMapRotation 检测 SDK 未生效（getRotation 与设定值偏差超 0.5 度）时回退正北渲染：currentMapRotation 置 0（车标随路径转向），并把当前朝向写入 body.dataset.exportMapRotation
+  - playwright_export 逐帧截图后读取 exportMapRotation，Pillow 按方位角逆时针旋转并居中裁剪回原尺寸，再直通 ffmpeg——无死角、无缩放损失，截图速度不受 CSS 变换影响
+  - chromium 启动参数追加 --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader（Chromium 129+ 软件 WebGL 需显式开启），尽量让高德走 WebGL 矢量渲染（实测该环境仍降级 DomRender，由上述兜底生效）
+  - 历史说明：中间版本曾用 CSS 容器旋转模拟（7ea1827），headless 下大角度变换使逐帧截图超时（30s 限制）而被本方案替代（58e4241）
+- **已知取舍**：降级路径下「正北渲染 + 后端旋转」，帧内容与真机 track-up 一致；真机 GPU 环境 SDK 旋转正常时 dataset 恒 0，后端不旋转，行为不变
