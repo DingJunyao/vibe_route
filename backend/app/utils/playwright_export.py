@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import io
 import json
 import math
 import subprocess
@@ -12,6 +13,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlencode, urlparse
 
+from PIL import Image
 from playwright.async_api import async_playwright
 
 from ..core.config import settings
@@ -280,6 +282,24 @@ async def _wait_export_ready(page, track_id: int) -> None:
         raise RuntimeError(f"导出页面未就绪（state={state or 'unknown'}）")
 
 
+def _rotate_frame_jpeg(jpeg: bytes, rotation_deg: int) -> bytes:
+    """正北帧按方位角逆时针旋转并居中裁剪回原尺寸。
+
+    高德 JSAPI 2.0 在 headless/软件渲染环境降级 DomRender 后 setRotation 无效，
+    页面按正北渲染并在 body.dataset.exportMapRotation 上报当前朝向；
+    track-up 语义 = 方位角方向指向画面上方，故整帧逆时针旋转方位角度数，
+    旋转扩边后取中心原图尺寸区域（无死角、无缩放损失）。"""
+    img = Image.open(io.BytesIO(jpeg))
+    w, h = img.size
+    rotated = img.rotate(rotation_deg, expand=True, resample=Image.Resampling.BICUBIC)
+    left = (rotated.width - w) // 2
+    top = (rotated.height - h) // 2
+    rotated = rotated.crop((left, top, left + w, top + h))
+    buf = io.BytesIO()
+    rotated.save(buf, "JPEG", quality=FRAME_JPEG_QUALITY)
+    return buf.getvalue()
+
+
 async def _capture_frame_mode(
     page,
     track_id: int,
@@ -339,6 +359,14 @@ async def _capture_frame_mode(
                 jpeg = last_jpeg
             else:
                 jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY)
+                # 高德 JSAPI 降级 DomRender（headless）时 track-up 旋转无效：页面按
+                # 正北渲染并把当前朝向写入 exportMapRotation——后端在此逐帧旋转画面
+                #（正北帧方位角 b → 画面逆时针旋转 b 度后轨迹指向画面上方）
+                rotation_deg = await page.evaluate(
+                    "() => parseInt(document.body?.dataset?.exportMapRotation || '0', 10) || 0"
+                )
+                if rotation_deg:
+                    jpeg = _rotate_frame_jpeg(jpeg, rotation_deg)
                 last_jpeg = jpeg
             proc.stdin.write(jpeg)
             # drain 提供背压：ffmpeg 编码慢时暂停截图，不会堆积内存
