@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import math
+import os
 import subprocess
 import sys
 import time
@@ -326,9 +327,15 @@ async def _capture_frame_mode(
     if not await page.evaluate("typeof window.__seekExportFrame === 'function'"):
         raise RuntimeError("导出页面未暴露 __seekExportFrame（回放播放器未挂载）")
 
+    # stderr 必须落盘而非 PIPE：即便 -loglevel error，长任务的逐帧告警也可能
+    # 积累塞满 64KB 管道缓冲，ffmpeg 阻塞后不再消费 stdin，逐帧 drain 永久挂起
+    #（2026-11-14 track 97 卡 13% 事故根因，见 changelog）。日志文件成功后删除、
+    # 失败保留供排查。
+    stderr_path = str(final_path) + ".ffmpeg-stderr.log"
+    stderr_file = open(stderr_path, "wb")
     proc = await asyncio.create_subprocess_exec(
         'ffmpeg', '-y',
-        '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
+        '-loglevel', 'error', '-nostats',
         # 逐帧 JPEG 管道输入，输出强制 CFR = EXPORT_FPS（与帧序号一一对应）
         '-f', 'image2pipe', '-framerate', str(EXPORT_FPS), '-c:v', 'mjpeg',
         '-i', 'pipe:0',
@@ -337,7 +344,7 @@ async def _capture_frame_mode(
         str(final_path),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
+        stderr=stderr_file,
     )
 
     try:
@@ -346,6 +353,7 @@ async def _capture_frame_mode(
         # 单帧实测 ~5s，真机 GPU 通常 <1s、amap_remotion 实测矢量 ~9fps）
         frame_deadline = time.time() + frame_count * 8.0 + 120
         last_jpeg: Optional[bytes] = None
+        consecutive_seek_timeouts = 0
         for i in range(frame_count):
             if cancel_check is not None and cancel_check():
                 raise RuntimeError("任务已取消")
@@ -354,11 +362,23 @@ async def _capture_frame_mode(
             t_ms = min(start_ms + i / EXPORT_FPS * speed * 1000, duration_ms)
             # 页面亚像素跳帧（相机位移 <0.6px）时返回 True：画面与上一帧完全相同，
             # 直接复用上一帧 JPEG，省掉一次 seek 等待与整页截图（静止段收益最大）
-            skipped = await page.evaluate("(t) => window.__seekExportFrame(t)", t_ms)
+            # seek 有界等待：页面等待链意外卡死时不再无限挂起——复用上一帧继续，
+            # 连续多次超时判定页面挂死，直接失败（避免任务永久卡在某帧）
+            try:
+                skipped = await asyncio.wait_for(
+                    page.evaluate("(t) => window.__seekExportFrame(t)", t_ms),
+                    timeout=60,
+                )
+                consecutive_seek_timeouts = 0
+            except asyncio.TimeoutError:
+                consecutive_seek_timeouts += 1
+                if consecutive_seek_timeouts >= 5:
+                    raise RuntimeError("导出页面连续 5 帧无响应（seek 超时），疑似页面挂死")
+                skipped = True
             if skipped and last_jpeg is not None:
                 jpeg = last_jpeg
             else:
-                jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY)
+                jpeg = await page.screenshot(type='jpeg', quality=FRAME_JPEG_QUALITY, timeout=60000)
                 # 高德 JSAPI 降级 DomRender（headless）时 track-up 旋转无效：页面按
                 # 正北渲染并把当前朝向写入 exportMapRotation——后端在此逐帧旋转画面
                 #（正北帧方位角 b → 画面逆时针旋转 b 度后轨迹指向画面上方）
@@ -386,11 +406,17 @@ async def _capture_frame_mode(
             proc.kill()
             raise RuntimeError("ffmpeg 逐帧合成超时")
         if ffmpeg_returncode != 0 or not final_path.exists():
-            stderr_tail = await proc.stderr.read()
-            raise RuntimeError(f"ffmpeg 逐帧合成失败: {stderr_tail.decode(errors='ignore')[-400:]}")
+            stderr_tail = open(stderr_path, "rb").read()[-400:].decode(errors="ignore")
+            raise RuntimeError(f"ffmpeg 逐帧合成失败: {stderr_tail}")
 
         if progress_callback:
             await progress_callback(100.0)
+
+        # 成功：stderr 日志已无排查价值，删除
+        try:
+            os.remove(stderr_path)
+        except OSError:
+            pass
     except BaseException:
         # 取消/异常/超时：终止 ffmpeg 并清理管道与残缺输出，防止残留进程
         try:
@@ -403,6 +429,11 @@ async def _capture_frame_mode(
         except Exception:
             pass
         raise
+    finally:
+        try:
+            stderr_file.close()
+        except Exception:
+            pass
 
 
 async def _capture_screencast_mode(
@@ -449,11 +480,14 @@ async def _capture_screencast_mode(
 
     ffmpeg_proc = None
     stop_frame_pump = None
+    # stderr 落盘（与逐帧模式同理：PIPE 长任务不消费会塞满缓冲导致死锁）
+    stderr_path = str(final_path) + ".ffmpeg-stderr.log"
+    stderr_file = open(stderr_path, "wb")
     try:
         ffmpeg_proc = subprocess.Popen(
             [
                 'ffmpeg', '-y',
-                '-loglevel', 'error', '-nostats',  # stderr 进度输出会塞满管道缓冲导致死锁，仅保留错误
+                '-loglevel', 'error', '-nostats',
                 '-f', 'mjpeg', '-use_wallclock_as_timestamps', '1',
                 '-i', 'pipe:0',
                 '-c:v', 'libx264', '-crf', FFMPEG_CRF, '-preset', 'superfast',
@@ -462,7 +496,7 @@ async def _capture_screencast_mode(
             ],
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_file,
         )
 
         cdp = await context.new_cdp_session(page)
@@ -552,11 +586,17 @@ async def _capture_screencast_mode(
         # 阻塞 wait 会冻结事件循环（最长 300s），放到线程里等
         ffmpeg_returncode = await asyncio.to_thread(ffmpeg_proc.wait, timeout=300)
         if ffmpeg_returncode != 0 or not final_path.exists():
-            stderr_tail = ffmpeg_proc.stderr.read().decode(errors='ignore')[-400:]
+            stderr_tail = open(stderr_path, "rb").read()[-400:].decode(errors="ignore")
             raise RuntimeError(f"ffmpeg 流式合成失败: {stderr_tail}")
 
         if progress_callback:
             await progress_callback(100.0)
+
+        # 成功：stderr 日志删除
+        try:
+            os.remove(stderr_path)
+        except OSError:
+            pass
     except BaseException:
         # 取消/异常/超时：终止 ffmpeg 并清理管道，防止残留进程
         try:
@@ -574,6 +614,10 @@ async def _capture_screencast_mode(
                 ffmpeg_proc.kill()
             except Exception:
                 pass
+        try:
+            stderr_file.close()
+        except Exception:
+            pass
         raise
 
 

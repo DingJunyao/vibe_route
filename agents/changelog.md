@@ -515,3 +515,13 @@
   - chromium 启动参数追加 --enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader（Chromium 129+ 软件 WebGL 需显式开启），尽量让高德走 WebGL 矢量渲染（实测该环境仍降级 DomRender，由上述兜底生效）
   - 历史说明：中间版本曾用 CSS 容器旋转模拟（7ea1827），headless 下大角度变换使逐帧截图超时（30s 限制）而被本方案替代（58e4241）
 - **已知取舍**：降级路径下「正北渲染 + 后端旋转」，帧内容与真机 track-up 一致；真机 GPU 环境 SDK 旋转正常时 dataset 恒 0，后端不旋转，行为不变
+
+## 2026-11-15
+
+### 动画导出卡 13% 修复（ffmpeg stderr PIPE 死锁）
+- **现象**：统一部署（58e4241）逐帧导出任务卡在 13% 近 30 小时：进度不动、无失败、无日志（track 97，任务 c13deac4）
+- **根因**：逐帧/流式两种模式的 ffmpeg 均为 stderr=PIPE 但循环期间无人消费——即便 -loglevel error，长任务的逐帧告警也会积累塞满 64KB 管道缓冲；一旦塞满，ffmpeg 阻塞在 stderr 写入、不再消费 stdin，逐帧 drain() 永久挂起。卡 13% ≈ 513 帧 × 每帧告警字节数 ≈ 64KB，完全吻合；代码注释里「stderr 会塞满管道导致死锁」的担忧即此，此前仅以 -loglevel error 缓解，未根治
+- **修复**（backend/app/utils/playwright_export.py）：
+  - 逐帧/流式模式的 ffmpeg stderr 改为落盘到输出旁的 .ffmpeg-stderr.log（成功删除、失败保留排查）——彻底消除管道死锁
+  - 逐帧 seek 改为 60s 有界等待：超时复用上一帧继续，连续 5 次判定页面挂死直接失败，不再无限挂起
+  - 帧截图显式 timeout=60s
