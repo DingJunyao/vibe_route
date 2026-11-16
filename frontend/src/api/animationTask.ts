@@ -71,6 +71,11 @@ export const animationTaskApi = {
     return http.delete(`/animation/export/${taskId}`, { skipProgress: true })
   },
 
+  // 任务作用域令牌：completed 用于原生下载，processing 用于缩略图（img 无法携带 Bearer 头）
+  createDownloadToken(taskId: string): Promise<{ download_token: string; expires_in: number }> {
+    return http.post(`/animation/export/${taskId}/download-token`, {}, { skipProgress: true })
+  },
+
   // 全部用户任务列表（管理员）
   adminList(query: AnimationTaskQuery = {}): Promise<AnimationExportTaskList> {
     return http.get('/animation/export/admin/tasks', {

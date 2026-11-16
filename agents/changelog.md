@@ -535,3 +535,4 @@
   - API：任务状态 schema 增加 runtime（列表/详情均填充）；新增 GET /animation/export/{id}/thumbnail（本人/管理员，Cache-Control no-store）
   - 录屏任务页：PC 表格新增展开行（缩略图 + 录制位置帧/点/轨迹进度 + 已用/预计剩余），移动端卡片内联同样信息；缩略图按轮询计数穿透缓存
 - **已知边界**：流式模式（Leaflet 长导出）暂无缩略图与帧号；.thumb.jpg 文件不参与保留期清理（单文件约 20KB，量级可忽略）
+- **2026-11-16 修复两处可用性问题**：① 轮询每 3s 整体替换 tasks 数组导致展开行自动闭合——el-table 改受控展开（row-key=task_id + expand-row-keys）；② 缩略图 img 标签无法携带 Bearer 头恒 401——download-token 端点放宽到 processing 任务签发、缩略图端点支持 download_token 查询参数鉴权（与下载端点同构），前端为录制中任务换取令牌后拼进 URL

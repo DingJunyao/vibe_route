@@ -290,17 +290,41 @@ async def get_export_progress(
 @router.get("/animation/export/{task_id}/thumbnail")
 async def get_export_thumbnail(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    download_token: Optional[str] = Query(None, description="预览令牌（img 标签无法携带 Bearer 头时使用）"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
     db: AsyncSession = Depends(get_db),
 ):
-    """录制实时缩略图（最近一帧的降采样 JPEG，本人或管理员；未生成时 404）"""
+    """录制实时缩略图（最近一帧的降采样 JPEG；未生成时 404）。
+
+    鉴权二选一：常规 Bearer 头，或任务作用域 download_token 查询参数。
+    """
     result = await db.execute(
         select(AnimationExportTask).where(AnimationExportTask.id == task_id)
     )
     task = result.scalar_one_or_none()
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if task.user_id != current_user.id and not current_user.is_admin:
+
+    user = current_user
+    if user is None:
+        if not download_token:
+            raise HTTPException(status_code=401, detail="未认证")
+        payload = decode_access_token(download_token)
+        if (
+            not payload
+            or payload.get("purpose") != 'export-download'
+            or payload.get("task") != task_id
+        ):
+            raise HTTPException(status_code=401, detail="预览链接已失效")
+        try:
+            token_user_id = int(payload.get("sub"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=401, detail="预览链接已失效")
+        user_result = await db.execute(select(User).where(User.id == token_user_id))
+        user = user_result.scalar_one_or_none()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=401, detail="预览链接已失效")
+    if task.user_id != user.id and not user.is_admin:
         raise HTTPException(status_code=403, detail="无权访问此任务")
 
     thumb_path = Path(settings.EXPORT_DIR) / 'animation' / f'{task_id}.thumb.jpg'
@@ -325,8 +349,11 @@ async def create_download_token(
         raise HTTPException(status_code=404, detail="任务不存在")
     if task.user_id != current_user.id and not current_user.is_admin:
         raise HTTPException(status_code=403, detail="无权访问此任务")
-    if task.status != 'completed' or not task.download_url:
+    # completed：下载令牌；processing：录制缩略图预览令牌（img 标签无法带 Bearer 头）
+    if task.status == 'completed' and not task.download_url:
         raise HTTPException(status_code=400, detail="任务未完成或无结果文件")
+    if task.status not in ('completed', 'processing'):
+        raise HTTPException(status_code=400, detail="任务不在可签发状态")
 
     token = create_access_token(
         {"sub": str(current_user.id), "task": task_id, "purpose": 'export-download'},

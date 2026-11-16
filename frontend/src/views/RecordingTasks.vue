@@ -59,7 +59,14 @@
 
           <template v-else>
             <!-- PC 端表格 -->
-            <el-table :data="tasks" style="width: 100%" class="pc-table">
+            <el-table
+              :data="tasks"
+              style="width: 100%"
+              class="pc-table"
+              row-key="task_id"
+              :expand-row-keys="expandedRowKeys"
+              @expand-change="handleExpandChange"
+            >
               <el-table-column type="expand" width="36">
                 <template #default="{ row }">
                   <div v-if="row.status === 'processing' && row.runtime" class="runtime-block">
@@ -276,7 +283,35 @@ const pollTick = ref(0)
 function thumbnailSrc(task: AnimationExportTask): string {
   const url = task.runtime?.thumbnail_url
   if (!url) return ''
-  return url.includes('?') ? url + '&t=' + pollTick.value : url + '?t=' + pollTick.value
+  const tok = previewTokens.value.get(task.task_id)
+  if (!tok) return ''
+  return url + '&download_token=' + encodeURIComponent(tok) + '&t=' + pollTick.value
+}
+
+// 展开行受控：轮询整体替换 tasks 数组会重建行对象，非受控时展开状态每 3s 被重置
+const expandedRowKeys = ref<string[]>([])
+function handleExpandChange(row: AnimationExportTask, expandedRows: AnimationExportTask[]) {
+  expandedRowKeys.value = expandedRows.map(r => r.task_id)
+}
+
+// <img> 无法携带 Authorization 头：为录制中任务换取任务作用域令牌后拼进缩略图 URL
+const previewTokens = ref<Map<string, string>>(new Map())
+
+async function ensurePreviewTokens() {
+  const need = tasks.value.filter(
+    t => t.status === 'processing' && t.runtime?.thumbnail_url && !previewTokens.value.has(t.task_id)
+  )
+  if (need.length === 0) return
+  const updated = new Map(previewTokens.value)
+  await Promise.all(need.map(async t => {
+    try {
+      const res = await animationTaskApi.createDownloadToken(t.task_id)
+      updated.set(t.task_id, res.download_token)
+    } catch {
+      // 换取失败：本轮不显示缩略图，下轮轮询重试
+    }
+  }))
+  previewTokens.value = updated
 }
 
 // 毫秒 → mm:ss / h:mm:ss（轨迹时间进度）
@@ -322,6 +357,7 @@ async function loadTasks() {
     total.value = result.total
     tasks.value = result.items
     pollTick.value++
+    void ensurePreviewTokens()
   } catch {
     // 错误已在拦截器中处理
   } finally {
