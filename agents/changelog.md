@@ -525,3 +525,13 @@
   - 逐帧/流式模式的 ffmpeg stderr 改为落盘到输出旁的 .ffmpeg-stderr.log（成功删除、失败保留排查）——彻底消除管道死锁
   - 逐帧 seek 改为 60s 有界等待：超时复用上一帧继续，连续 5 次判定页面挂死直接失败，不再无限挂起
   - 帧截图显式 timeout=60s
+
+### 录屏任务实时状态（位置/缩略图/时长）2026-11-16
+- **需求**：录制中用户应能看到「录到哪个点」、实时缩略图，进度按录制位置呈现，并显示已用/预计剩余时长
+- **实现**（无 DB 迁移：实时状态走进程内注册表，终态任务字段为 null）
+  - 前端 TrackAnimationPlayer 导出 seek 时把当前轨迹点序号/总数写入 body.dataset.exportPointIndex / exportTotalPoints（复用 findPointIndexByTime）
+  - playwright_export.capture_animation_video 新增 runtime_state 参数：录制协程就地更新运行时 dict——帧号/轨迹时间/已用/预计剩余（按帧均速外推）、每 10 帧读点序号；每 ~5% 帧且间隔 ≥8s 用 Pillow 把当前帧落成 320px 缩略图（animation/{task_id}.thumb.jpg）；流式模式按页面进度换算位置与剩余（无帧粒度/缩略图）
+  - AnimationExportService._runtime 注册表 + get_runtime_state；任务结束即清除
+  - API：任务状态 schema 增加 runtime（列表/详情均填充）；新增 GET /animation/export/{id}/thumbnail（本人/管理员，Cache-Control no-store）
+  - 录屏任务页：PC 表格新增展开行（缩略图 + 录制位置帧/点/轨迹进度 + 已用/预计剩余），移动端卡片内联同样信息；缩略图按轮询计数穿透缓存
+- **已知边界**：流式模式（Leaflet 长导出）暂无缩略图与帧号；.thumb.jpg 文件不参与保留期清理（单文件约 20KB，量级可忽略）

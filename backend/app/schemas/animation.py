@@ -25,6 +25,20 @@ class AnimationExportRequest(BaseModel):
 
 AnimationExportTaskStatus = Literal['pending', 'processing', 'completed', 'failed', 'cancelled', 'expired']
 
+class AnimationExportRuntime(BaseModel):
+    """录制实时状态（仅 processing 且调度进程内有效，终态任务恒为 null）"""
+    stage: str = 'recording'                    # recording / encoding
+    current_time_ms: Optional[int] = None       # 已录制到的轨迹时间点（毫秒）
+    total_time_ms: Optional[int] = None         # 轨迹区间总时长（毫秒）
+    current_frame: Optional[int] = None         # 已录制帧号（逐帧模式，流式为 null）
+    total_frames: Optional[int] = None          # 总帧数（逐帧模式）
+    point_index: Optional[int] = None           # 当前轨迹点序号（0 基）
+    total_points: Optional[int] = None          # 轨迹点总数
+    elapsed_seconds: Optional[float] = None     # 录制已用时长（秒，不含排队/开页）
+    eta_seconds: Optional[float] = None         # 预计剩余时长（秒）
+    thumbnail_url: Optional[str] = None         # 实时缩略图地址（带版本参数）
+
+
 class AnimationExportTask(BaseModel):
     """动画导出任务"""
     task_id: str
@@ -36,6 +50,7 @@ class AnimationExportTask(BaseModel):
     track_title: Optional[str] = None
     username: Optional[str] = None          # 仅管理员任务列表填充
     queue_position: Optional[int] = None    # 排队位次（仅 pending 且查询详情时填充）
+    runtime: Optional[AnimationExportRuntime] = None  # 录制实时状态（processing 时填充）
     created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None

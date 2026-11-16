@@ -530,6 +530,17 @@ onMounted(() => {
         }
         lastSeekCamera = { lat: cam.lat, lng: cam.lng, bearing, zoom }
       }
+      // 上报当前轨迹点序号（后端录制实时状态展示「录制到哪个点」用）
+      try {
+        const pts = points.value
+        if (pts.length > 0) {
+          const { index } = findPointIndexByTime(absoluteCurrentTime.value, pts, props.config.startTime)
+          document.body.dataset.exportPointIndex = String(index)
+          document.body.dataset.exportTotalPoints = String(pts.length)
+        }
+      } catch {
+        // 上报失败不影响录制
+      }
       updateAnimation(true)
       await waitForMapIdle()
       return false

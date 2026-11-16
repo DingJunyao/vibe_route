@@ -34,6 +34,14 @@ class AnimationExportService:
         self._running: dict[str, asyncio.Task] = {}
         # 已请求取消的 task_id（协作式取消信号，兼容 Windows 线程循环路径）
         self._cancel_requested: set[str] = set()
+        # task_id -> 录制实时状态 dict（当前位置/帧号/已用/剩余/缩略图路径，
+        # 由录制协程就地更新；仅本进程内有效，任务结束即清除）
+        self._runtime: dict[str, dict] = {}
+
+    def get_runtime_state(self, task_id: str) -> Optional[dict]:
+        """录制实时状态快照（仅 processing 且本进程内有效）"""
+        state = self._runtime.get(task_id)
+        return dict(state) if state else None
 
     # ---------- 配置 ----------
 
@@ -197,6 +205,7 @@ class AnimationExportService:
                         task.progress = p
                         await db.commit()
 
+            self._runtime[task_id] = {}
             download_url = await capture_animation_video(
                 track_id=track_id,
                 duration_ms=duration_ms,
@@ -205,6 +214,7 @@ class AnimationExportService:
                 progress_callback=progress_callback,
                 task_id=task_id,
                 cancel_check=lambda: task_id in self._cancel_requested,
+                runtime_state=self._runtime[task_id],
             )
 
             async with async_session_maker() as db:
@@ -258,6 +268,7 @@ class AnimationExportService:
 
         finally:
             self._running.pop(task_id, None)
+            self._runtime.pop(task_id, None)
             self._cancel_requested.discard(task_id)
             # 释放并发槽位后立即排上下一个任务；关闭阶段循环可能已停，忽略报错
             try:

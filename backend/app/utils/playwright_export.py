@@ -100,6 +100,7 @@ def _capture_in_proactor_loop(
     progress_callback: Optional[Callable[[float], None]],
     task_id: str = '',
     cancel_check: Optional[Callable[[], bool]] = None,
+    runtime_state: Optional[dict] = None,
 ) -> str:
     """
     在独立线程的 Proactor 事件循环中执行录制
@@ -114,7 +115,7 @@ def _capture_in_proactor_loop(
     asyncio.set_event_loop(loop)
     try:
         return loop.run_until_complete(
-            _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check)
+            _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check, runtime_state)
         )
     finally:
         loop.close()
@@ -129,6 +130,7 @@ async def capture_animation_video(
     progress_callback: Optional[Callable[[float], None]] = None,
     task_id: str = '',
     cancel_check: Optional[Callable[[], bool]] = None,
+    runtime_state: Optional[dict] = None,
 ) -> str:
     """
     使用 Playwright 录制动画视频，合成为 H.264 MP4
@@ -167,8 +169,9 @@ async def capture_animation_video(
             progress_callback,
             task_id,
             cancel_check,
+            runtime_state,
         )
-    return await _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check)
+    return await _capture_impl(track_id, duration_ms, token, request, progress_callback, task_id, cancel_check, runtime_state)
 
 
 def _build_export_url(track_id: int, request: AnimationExportRequest, width: int, height: int) -> str:
@@ -301,6 +304,13 @@ def _rotate_frame_jpeg(jpeg: bytes, rotation_deg: int) -> bytes:
     return buf.getvalue()
 
 
+def _save_frame_thumbnail(jpeg: bytes, thumb_path: str) -> None:
+    """帧 JPEG → 最长边 320px 缩略图落盘（录制实时预览用；失败由调用方忽略）"""
+    img = Image.open(io.BytesIO(jpeg))
+    img.thumbnail((320, 320))
+    img.convert("RGB").save(thumb_path, "JPEG", quality=70)
+
+
 async def _capture_frame_mode(
     page,
     track_id: int,
@@ -309,6 +319,7 @@ async def _capture_frame_mode(
     final_path: Path,
     progress_callback: Callable[[float], None],
     cancel_check: Optional[Callable[[], bool]] = None,
+    runtime_state: Optional[dict] = None,
 ) -> None:
     """
     逐帧截图：每帧 seek → waitForIdle（moveend → 双 rAF → 画布收敛）→ 截图，
@@ -354,6 +365,11 @@ async def _capture_frame_mode(
         frame_deadline = time.time() + frame_count * 8.0 + 120
         last_jpeg: Optional[bytes] = None
         consecutive_seek_timeouts = 0
+        recording_started = time.monotonic()
+        thumb_path = (runtime_state or {}).get('thumbnail_path')
+        thumb_interval_frames = max(1, frame_count // 20)  # 每 ~5% 帧更新一次缩略图
+        thumb_min_interval = 8.0  # 且至少间隔 8s，避免短视频缩略图刷屏
+        last_thumb_time = 0.0
         for i in range(frame_count):
             if cancel_check is not None and cancel_check():
                 raise RuntimeError("任务已取消")
@@ -388,6 +404,39 @@ async def _capture_frame_mode(
                 if rotation_deg:
                     jpeg = _rotate_frame_jpeg(jpeg, rotation_deg)
                 last_jpeg = jpeg
+
+            # 录制实时状态：位置/帧号/轨迹时间/已用/预计剩余（任务页轮询展示）；
+            # 点序号每 10 帧读一次页面 dataset；缩略图按帧数+时间双节流落盘
+            now_mono = time.monotonic()
+            if runtime_state is not None:
+                elapsed = now_mono - recording_started
+                runtime_state.update({
+                    'stage': 'recording',
+                    'current_frame': i + 1,
+                    'total_frames': frame_count,
+                    'current_time_ms': int(t_ms),
+                    'total_time_ms': int(duration_ms),
+                    'elapsed_seconds': round(elapsed, 1),
+                    'eta_seconds': round(elapsed / (i + 1) * (frame_count - i - 1), 1),
+                })
+                if i % 10 == 0:
+                    try:
+                        pt = await page.evaluate(
+                            "() => ({ i: parseInt(document.body?.dataset?.exportPointIndex || '-1', 10),"
+                            " n: parseInt(document.body?.dataset?.exportTotalPoints || '0', 10) })"
+                        )
+                        if pt and pt.get('n', 0) > 0:
+                            runtime_state['point_index'] = pt.get('i') if pt.get('i', -1) >= 0 else None
+                            runtime_state['total_points'] = pt.get('n')
+                    except Exception:
+                        pass
+                if thumb_path and (i == 0 or (i % thumb_interval_frames == 0 and now_mono - last_thumb_time >= thumb_min_interval)):
+                    try:
+                        _save_frame_thumbnail(jpeg, thumb_path)
+                        last_thumb_time = now_mono
+                        runtime_state['thumbnail_updated_at'] = round(time.time(), 1)
+                    except Exception:
+                        pass
             proc.stdin.write(jpeg)
             # drain 提供背压：ffmpeg 编码慢时暂停截图，不会堆积内存
             await proc.stdin.drain()
@@ -447,6 +496,7 @@ async def _capture_screencast_mode(
     height: int,
     progress_callback: Callable[[float], None],
     cancel_check: Optional[Callable[[], bool]] = None,
+    runtime_state: Optional[dict] = None,
 ) -> None:
     """
     流式录制：页面实时播放，CDP screencast JPEG 帧直通 ffmpeg stdin
@@ -520,6 +570,7 @@ async def _capture_screencast_mode(
         out_duration_s = (duration_ms - start_ms) / 1000.0 / speed
         timeout_s = out_duration_s * 3 + 300
         deadline = time.time() + timeout_s
+        sc_started = time.monotonic()
         state = None
         poll_i = 0
         while time.time() < deadline:
@@ -562,6 +613,17 @@ async def _capture_screencast_mode(
                     )
                 except Exception:
                     pass  # 预热页异常不影响录制（门控兜底）
+
+            # 录制实时状态：流式模式按页面进度换算（无帧粒度与缩略图，仅位置+时长）
+            if runtime_state is not None:
+                elapsed = time.monotonic() - sc_started
+                runtime_state.update({
+                    'stage': 'recording',
+                    'current_time_ms': int(start_ms + pct / 100.0 * (duration_ms - start_ms)),
+                    'total_time_ms': int(duration_ms),
+                    'elapsed_seconds': round(elapsed, 1),
+                    'eta_seconds': round(elapsed / pct * (100.0 - pct), 1) if pct >= 2 else None,
+                })
 
             poll_i += 1
             await asyncio.sleep(1)
@@ -629,6 +691,7 @@ async def _capture_impl(
     progress_callback: Optional[Callable[[float], None]] = None,
     task_id: str = '',
     cancel_check: Optional[Callable[[], bool]] = None,
+    runtime_state: Optional[dict] = None,
 ) -> str:
     """
     导出实现（必须在支持子进程的事件循环中运行）：
@@ -640,6 +703,11 @@ async def _capture_impl(
 
     export_dir = Path(settings.EXPORT_DIR) / 'animation'
     export_dir.mkdir(parents=True, exist_ok=True)
+
+    # 录制实时状态（任务页进度/缩略图/位置展示）：由任务服务传入的 dict，
+    # 本模块就地更新，API 层读取快照；thumbnail_path 确定命名供缩略图端点直接取用
+    if runtime_state is not None:
+        runtime_state['thumbnail_path'] = str(export_dir / f'{task_id}.thumb.jpg')
 
     width, height = RESOLUTION_DIMENSIONS.get(request.resolution, (1920, 1080))
 
@@ -673,16 +741,22 @@ async def _capture_impl(
                     await _capture_frame_mode(
                         page, track_id, duration_ms, request,
                         final_path, progress_callback, cancel_check,
+                        runtime_state=runtime_state,
                     )
                 else:
                     # Leaflet 长输出（数小时）：CDP screencast 流式录制，耗时 ≈ 输出时长
                     await _capture_screencast_mode(
                         context, page, track_id, duration_ms, request,
                         final_path, width, height, progress_callback, cancel_check,
+                        runtime_state=runtime_state,
                     )
             except BaseException as e:
                 # 失败/取消不留下残缺的输出文件
                 final_path.unlink(missing_ok=True)
+                if runtime_state is not None:
+                    thumb = runtime_state.get('thumbnail_path')
+                    if thumb:
+                        Path(thumb).unlink(missing_ok=True)
                 raise
         finally:
             # 关闭动作不能被打断（取消/关闭风暴下保证浏览器退出）

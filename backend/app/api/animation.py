@@ -17,6 +17,7 @@ from ..models.track import Track
 from ..models.user import User
 from ..schemas.animation import (
     AnimationExportRequest,
+    AnimationExportRuntime,
     AnimationExportTask as AnimationExportTaskSchema,
     AnimationExportTaskList,
 )
@@ -32,12 +33,31 @@ def _task_to_schema(
     track_title: Optional[str] = None,
     username: Optional[str] = None,
     queue_position: Optional[int] = None,
+    runtime: Optional[dict] = None,
 ) -> AnimationExportTaskSchema:
     download_url = (
         f"/api/animation/export/{task.id}/download"
         if task.status == 'completed' and task.download_url
         else None
     )
+    runtime_schema = None
+    if runtime:
+        thumb_updated = runtime.get('thumbnail_updated_at')
+        runtime_schema = AnimationExportRuntime(
+            stage=runtime.get('stage') or 'recording',
+            current_time_ms=runtime.get('current_time_ms'),
+            total_time_ms=runtime.get('total_time_ms'),
+            current_frame=runtime.get('current_frame'),
+            total_frames=runtime.get('total_frames'),
+            point_index=runtime.get('point_index'),
+            total_points=runtime.get('total_points'),
+            elapsed_seconds=runtime.get('elapsed_seconds'),
+            eta_seconds=runtime.get('eta_seconds'),
+            thumbnail_url=(
+                f"/api/animation/export/{task.id}/thumbnail?v={thumb_updated}"
+                if thumb_updated else None
+            ),
+        )
     return AnimationExportTaskSchema(
         task_id=task.id,
         status=task.status,
@@ -48,6 +68,7 @@ def _task_to_schema(
         track_title=track_title,
         username=username,
         queue_position=queue_position,
+        runtime=runtime_schema,
         created_at=task.created_at,
         started_at=task.started_at,
         finished_at=task.finished_at,
@@ -166,7 +187,12 @@ async def list_my_exports(
     rows = result.all()
     positions = await _attach_queue_positions(db, [task for task, _ in rows])
     items = [
-        _task_to_schema(task, track_title=track_name, queue_position=positions.get(task.id))
+        _task_to_schema(
+            task,
+            track_title=track_name,
+            queue_position=positions.get(task.id),
+            runtime=export_service.get_runtime_state(task.id) if task.status == 'processing' else None,
+        )
         for task, track_name in rows
     ]
     return AnimationExportTaskList(total=total, items=items)
@@ -213,6 +239,7 @@ async def list_all_exports(
             track_title=track_name,
             username=username_,
             queue_position=positions.get(task.id),
+            runtime=export_service.get_runtime_state(task.id) if task.status == 'processing' else None,
         )
         for task, track_name, username_ in rows
     ]
@@ -252,7 +279,34 @@ async def get_export_progress(
         raise HTTPException(status_code=403, detail="无权访问此任务")
 
     queue_position = await _get_queue_position(db, task)
-    return _task_to_schema(task, track_title=track_title, queue_position=queue_position)
+    return _task_to_schema(
+        task,
+        track_title=track_title,
+        queue_position=queue_position,
+        runtime=export_service.get_runtime_state(task.id) if task.status == 'processing' else None,
+    )
+
+
+@router.get("/animation/export/{task_id}/thumbnail")
+async def get_export_thumbnail(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """录制实时缩略图（最近一帧的降采样 JPEG，本人或管理员；未生成时 404）"""
+    result = await db.execute(
+        select(AnimationExportTask).where(AnimationExportTask.id == task_id)
+    )
+    task = result.scalar_one_or_none()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task.user_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(status_code=403, detail="无权访问此任务")
+
+    thumb_path = Path(settings.EXPORT_DIR) / 'animation' / f'{task_id}.thumb.jpg'
+    if not thumb_path.exists():
+        raise HTTPException(status_code=404, detail="缩略图尚未生成")
+    return FileResponse(thumb_path, media_type='image/jpeg', headers={'Cache-Control': 'no-store'})
 
 
 @router.post("/animation/export/{task_id}/download-token")

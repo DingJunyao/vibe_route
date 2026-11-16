@@ -11,6 +11,19 @@ export type AnimationTaskStatus =
   | 'cancelled'
   | 'expired'
 
+export interface AnimationExportRuntime {
+  stage: string
+  current_time_ms?: number | null      // 已录制到的轨迹时间点（毫秒）
+  total_time_ms?: number | null        // 轨迹区间总时长（毫秒）
+  current_frame?: number | null        // 已录制帧号（逐帧模式）
+  total_frames?: number | null         // 总帧数（逐帧模式）
+  point_index?: number | null          // 当前轨迹点序号（0 基）
+  total_points?: number | null         // 轨迹点总数
+  elapsed_seconds?: number | null      // 录制已用时长（秒）
+  eta_seconds?: number | null          // 预计剩余时长（秒）
+  thumbnail_url?: string | null        // 实时缩略图地址（带版本参数）
+}
+
 export interface AnimationExportTask {
   task_id: string
   status: AnimationTaskStatus
@@ -21,6 +34,7 @@ export interface AnimationExportTask {
   track_title?: string | null
   username?: string | null
   queue_position?: number | null
+  runtime?: AnimationExportRuntime | null
   created_at?: string | null
   started_at?: string | null
   finished_at?: string | null

@@ -60,6 +60,39 @@
           <template v-else>
             <!-- PC 端表格 -->
             <el-table :data="tasks" style="width: 100%" class="pc-table">
+              <el-table-column type="expand" width="36">
+                <template #default="{ row }">
+                  <div v-if="row.status === 'processing' && row.runtime" class="runtime-block">
+                    <img
+                      v-if="row.runtime.thumbnail_url"
+                      :src="thumbnailSrc(row)"
+                      class="runtime-thumb"
+                      alt="录制画面"
+                    />
+                    <div class="runtime-info">
+                      <div v-if="row.runtime.current_frame != null" class="runtime-line">
+                        录制位置：第 <b>{{ row.runtime.current_frame }}</b> / {{ row.runtime.total_frames }} 帧
+                      </div>
+                      <div v-if="row.runtime.point_index != null" class="runtime-line">
+                        轨迹点：第 <b>{{ row.runtime.point_index + 1 }}</b> / {{ row.runtime.total_points }} 个
+                      </div>
+                      <div v-if="row.runtime.total_time_ms" class="runtime-line">
+                        轨迹进度：{{ formatClock(row.runtime.current_time_ms) }} / {{ formatClock(row.runtime.total_time_ms) }}（{{ trackPercent(row.runtime) }}%）
+                      </div>
+                      <div class="runtime-line">
+                        已用时长：{{ formatElapsed(row.runtime.elapsed_seconds) }}
+                        <template v-if="row.runtime.eta_seconds != null">
+                          · 预计剩余 <b>{{ formatElapsed(row.runtime.eta_seconds) }}</b>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else-if="row.status === 'processing'" class="runtime-line muted">
+                    录制准备中，稍后显示实时画面与位置…
+                  </div>
+                  <div v-else class="runtime-line muted">任务不在录制中</div>
+                </template>
+              </el-table-column>
               <el-table-column prop="track_title" label="轨迹" min-width="180" show-overflow-tooltip />
               <el-table-column label="状态" width="180">
                 <template #default="{ row }">
@@ -125,6 +158,34 @@
                   :percentage="Math.round(task.progress)"
                   :stroke-width="6"
                 />
+                <div v-if="task.status === 'processing' && task.runtime" class="mobile-runtime">
+                  <img
+                    v-if="task.runtime.thumbnail_url"
+                    :src="thumbnailSrc(task)"
+                    class="runtime-thumb"
+                    alt="录制画面"
+                  />
+                  <div class="runtime-info">
+                    <div v-if="task.runtime.current_frame != null" class="runtime-line">
+                      第 {{ task.runtime.current_frame }} / {{ task.runtime.total_frames }} 帧
+                    </div>
+                    <div v-if="task.runtime.point_index != null" class="runtime-line">
+                      轨迹点 {{ task.runtime.point_index + 1 }} / {{ task.runtime.total_points }}
+                    </div>
+                    <div v-if="task.runtime.total_time_ms" class="runtime-line">
+                      {{ formatClock(task.runtime.current_time_ms) }} / {{ formatClock(task.runtime.total_time_ms) }}（{{ trackPercent(task.runtime) }}%）
+                    </div>
+                    <div class="runtime-line">
+                      已用 {{ formatElapsed(task.runtime.elapsed_seconds) }}
+                      <template v-if="task.runtime.eta_seconds != null">
+                        · 剩余约 {{ formatElapsed(task.runtime.eta_seconds) }}
+                      </template>
+                    </div>
+                  </div>
+                </div>
+                <div v-else-if="task.status === 'processing'" class="runtime-line muted mobile-runtime">
+                  录制准备中…
+                </div>
                 <div class="mobile-card-meta">
                   <span>{{ formatTime(task.created_at) }}</span>
                   <span v-if="formatDuration(task)">耗时 {{ formatDuration(task) }}</span>
@@ -208,6 +269,45 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 
+// ---------- 录制实时状态展示辅助 ----------
+// 轮询计数：作为缩略图 URL 的缓存穿透参数
+const pollTick = ref(0)
+
+function thumbnailSrc(task: AnimationExportTask): string {
+  const url = task.runtime?.thumbnail_url
+  if (!url) return ''
+  return url.includes('?') ? url + '&t=' + pollTick.value : url + '?t=' + pollTick.value
+}
+
+// 毫秒 → mm:ss / h:mm:ss（轨迹时间进度）
+function formatClock(ms?: number | null): string {
+  if (ms == null || ms < 0) return '--:--'
+  const total = Math.floor(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return h > 0 ? h + ':' + pad(m) + ':' + pad(s) : pad(m) + ':' + pad(s)
+}
+
+// 秒 → 中文时长（已用/预计剩余）
+function formatElapsed(seconds?: number | null): string {
+  if (seconds == null || seconds < 0) return '--'
+  const total = Math.round(seconds)
+  if (total < 60) return total + ' 秒'
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (m < 60) return s ? m + ' 分 ' + s + ' 秒' : m + ' 分钟'
+  return Math.floor(m / 60) + ' 小时 ' + (m % 60) + ' 分'
+}
+
+// 轨迹时间进度百分比
+function trackPercent(rt: NonNullable<AnimationExportTask['runtime']>): string {
+  if (!rt.total_time_ms) return '--'
+  const pct = Math.round(((rt.current_time_ms ?? 0) / rt.total_time_ms) * 100)
+  return String(Math.min(100, Math.max(0, pct)))
+}
+
 // 存在进行中的任务时轮询刷新
 const POLL_INTERVAL = 3000
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -221,6 +321,7 @@ async function loadTasks() {
     const result = await animationTaskApi.listMine(page.value, pageSize.value)
     total.value = result.total
     tasks.value = result.items
+    pollTick.value++
   } catch {
     // 错误已在拦截器中处理
   } finally {
@@ -465,6 +566,56 @@ onBeforeUnmount(() => {
   overflow: hidden;
   width: 100%;
   box-sizing: border-box;
+}
+
+/* 录制实时状态（PC 展开行 + 移动端卡片共用） */
+.runtime-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 8px 12px;
+}
+
+.runtime-thumb {
+  width: 160px;
+  height: 90px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #f0f2f5;
+  flex-shrink: 0;
+}
+
+.runtime-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.runtime-line {
+  font-size: 13px;
+  color: #606266;
+  line-height: 1.5;
+}
+
+.runtime-line b {
+  color: #303133;
+}
+
+.runtime-line.muted {
+  color: #c0c4cc;
+}
+
+.mobile-runtime {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.mobile-runtime .runtime-thumb {
+  width: 120px;
+  height: 68px;
 }
 
 .list-card > :deep(.el-card__body) {
